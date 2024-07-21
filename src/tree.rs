@@ -9,8 +9,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use glob::glob;
 use hayagriva::Library;
 use hypertext::Renderable;
+use serde::Serialize;
 
-use crate::{BuildContext, Link, LinkDate, Linkable};
+use crate::{Artifacts, BuildContext, Link, LinkDate, Linkable};
 
 pub struct Outline(pub Vec<(String, String)>);
 
@@ -194,7 +195,7 @@ pub struct Sack<'a> {
 	/// Original file location for this page
 	pub file: Option<&'a Utf8PathBuf>,
 	/// Hashed optimized images
-	pub hash: Option<HashMap<Utf8PathBuf, Utf8PathBuf>>,
+	pub artifacts: Artifacts,
 }
 
 impl<'a> Sack<'a> {
@@ -255,6 +256,24 @@ impl<'a> Sack<'a> {
 	pub fn get_file(&self) -> Option<&'a Utf8Path> {
 		self.file.map(Utf8PathBuf::as_ref)
 	}
+
+	pub fn get_import_map(&self) -> String {
+		let map = ImportMap {
+			imports: &self.artifacts.javascript,
+		};
+
+		serde_json::to_string(&map).unwrap()
+
+	}
+
+	pub fn get_js(&self, alias: &str) -> Option<&Utf8PathBuf> {
+		self.artifacts.javascript.get(alias)
+	}
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImportMap<'a> {
+	imports: &'a HashMap<String, Utf8PathBuf>,
 }
 
 #[derive(Debug)]

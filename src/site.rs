@@ -1,19 +1,25 @@
+use std::collections::HashMap;
 use std::{collections::HashSet, rc::Rc};
 
 use camino::{Utf8Path, Utf8PathBuf};
 
+use crate::gen::build;
 use crate::tree::{Output, PipelineItem, Sack, Virtual};
+use crate::watch::watch;
 use crate::{BuildContext, Mode};
 
 #[derive(Debug)]
 pub struct Website {
-	sources: Vec<Source>,
-	special: Vec<Rc<Output>>,
+	pub(crate) dist: Utf8PathBuf,
+	pub(crate) dist_js: Utf8PathBuf,
+	pub(crate) sources: Vec<Source>,
+	pub(crate) special: Vec<Rc<Output>>,
+	pub(crate) js: HashMap<&'static str, &'static str>,
 }
 
 impl Website {
-	pub fn new() -> WebsiteBuilder {
-		WebsiteBuilder::default()
+	pub fn design() -> WebsiteDesigner {
+		WebsiteDesigner::default()
 	}
 
 	pub fn build(&self) {
@@ -21,7 +27,7 @@ impl Website {
 			mode: Mode::Build,
 			..Default::default()
 		};
-		let _ = crate::build::build(&ctx, &self.sources, &self.special.clone());
+		let _ = build(&ctx, self);
 	}
 
 	pub fn watch(&self) {
@@ -29,18 +35,19 @@ impl Website {
 			mode: Mode::Watch,
 			..Default::default()
 		};
-		let state = crate::build::build(&ctx, &self.sources, &self.special.clone());
-		crate::watch::watch(&ctx, &self.sources, state).unwrap()
+		let (state, artifacts) = crate::gen::build(&ctx, self);
+		watch(&ctx, &self.sources, state, &artifacts).unwrap()
 	}
 }
 
 #[derive(Debug, Default)]
-pub struct WebsiteBuilder {
+pub struct WebsiteDesigner {
 	sources: Vec<Source>,
 	special: Vec<Rc<Output>>,
+	js: HashMap<&'static str, &'static str>,
 }
 
-impl WebsiteBuilder {
+impl WebsiteDesigner {
 	pub fn add_source(
 		mut self,
 		path: &'static str,
@@ -64,10 +71,18 @@ impl WebsiteBuilder {
 		self
 	}
 
+	pub fn js(mut self, alias: &'static str, path: &'static str) -> Self {
+		self.js.insert(alias, path);
+		self
+	}
+
 	pub fn finish(self) -> Website {
 		Website {
+			dist: "dist".into(),
+			dist_js: "js".into(),
 			sources: self.sources,
 			special: self.special,
+			js: self.js,
 		}
 	}
 }

@@ -1,9 +1,9 @@
-mod hash;
 mod tree;
 mod site;
-mod build;
 mod watch;
+mod gen;
 
+use std::collections::{HashMap, HashSet};
 use std::{fs, process::Command};
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -109,10 +109,7 @@ where
 							parsed.clone(),
 							lib,
 							dir.clone(),
-							sack.hash
-								.as_ref()
-								.map(ToOwned::to_owned)
-								.unwrap_or_default(),
+							sack.artifacts.images.clone()
 						);
 						T::render(matter.clone(), sack, Raw(parsed), outline, bib)
 							.render()
@@ -145,3 +142,9 @@ where
 	)
 }
 
+#[derive(Debug, Clone)]
+pub struct Artifacts {
+	pub images: HashMap<Utf8PathBuf, Utf8PathBuf>,
+	pub styles: HashSet<Utf8PathBuf>,
+	pub javascript: HashMap<String, Utf8PathBuf>,
+}

@@ -14,12 +14,18 @@ use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 use tungstenite::WebSocket;
 
-use crate::build::{build_content, build_styles};
+use crate::gen::content::build_content;
+use crate::gen::styles::build_css;
 use crate::site::Source;
 use crate::tree::Output;
-use crate::BuildContext;
+use crate::{Artifacts, BuildContext};
 
-pub(crate) fn watch(ctx: &BuildContext, sources: &[Source], mut state: Vec<Rc<Output>>) -> Result<()> {
+pub(crate) fn watch(
+	ctx: &BuildContext,
+	sources: &[Source],
+	mut state: Vec<Rc<Output>>,
+	artifacts: &Artifacts,
+) -> Result<()> {
 	let root = env::current_dir().unwrap();
 	let server = TcpListener::bind("127.0.0.1:1337")?;
 	let client = Arc::new(Mutex::new(vec![]));
@@ -64,14 +70,14 @@ pub(crate) fn watch(ctx: &BuildContext, sources: &[Source], mut state: Vec<Rc<Ou
 				let state_next = update_stream(&state, &items);
 				let abc: Vec<&Output> = items.iter().map(AsRef::as_ref).collect();
 				let xyz: Vec<&Output> = state_next.iter().map(AsRef::as_ref).collect();
-				build_content(ctx, &abc, &xyz, None);
+				build_content(ctx, &abc, &xyz, artifacts);
 				state = state_next;
 				dirty = true;
 			}
 		}
 
 		if paths.iter().any(|path| path.starts_with("styles")) {
-			build_styles();
+			build_css();
 			dirty = true;
 		}
 

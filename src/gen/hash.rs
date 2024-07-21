@@ -1,14 +1,53 @@
-use std::{collections::HashMap, fs};
+//! This module provides functionality to build a hash map of optimized images from the provided
+//! content. It filters out the images from the content, optimizes them, and stores them in a
+//! cache. The resulting hash map contains the original paths of the images and their corresponding
+//! paths in the cache.
+
+use std::collections::HashMap;
+use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
+use crate::gen::copy_recursively;
 use crate::tree::{AssetKind, Output, OutputKind};
 
-pub(crate) fn hash_assets(
+/// Builds a hash map of optimized images from the provided content.
+///
+/// This function filters out image assets from the given content, optimizes them, and stores them
+/// in the specified cache directory. The resulting hash map contains the original paths of the images
+/// and their corresponding paths in the cache.
+///
+/// # Arguments
+///
+/// * `content` - A slice of `Output` objects representing the content.
+/// * `cache` - A reference to a `Utf8Path` representing the cache directory.
+///
+/// # Returns
+///
+/// A `HashMap` where the keys are the original paths of the images and the values are the paths to the optimized images in the cache.
+pub(crate) fn build_hash(
+	content: &[Output],
 	cache: &Utf8Path,
-	items: &[&Output],
 ) -> HashMap<Utf8PathBuf, Utf8PathBuf> {
+	println!("Optimizing images. Cache in {}", cache);
+	let now = std::time::Instant::now();
+
+	let images: Vec<&Output> = content
+		.iter()
+		.filter(|&e| match e.kind {
+			OutputKind::Asset(ref a) => matches!(a.kind, AssetKind::Image),
+			_ => false,
+		})
+		.collect();
+
+	let hashes = hash_assets(cache, &images);
+	copy_recursively(cache, "dist/hash").unwrap();
+	println!("Finished optimizing. Elapsed: {:.2?}", now.elapsed());
+	hashes
+}
+
+fn hash_assets(cache: &Utf8Path, items: &[&Output]) -> HashMap<Utf8PathBuf, Utf8PathBuf> {
 	fs::create_dir_all(cache).unwrap();
 
 	items
