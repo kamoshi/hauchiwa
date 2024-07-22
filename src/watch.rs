@@ -15,8 +15,8 @@ use notify_debouncer_mini::new_debouncer;
 use tungstenite::WebSocket;
 
 use crate::gen::content::build_content;
-use crate::gen::styles::build_css;
-use crate::site::Source;
+use crate::gen::styles::build_styles;
+use crate::website::Source;
 use crate::tree::Output;
 use crate::{Artifacts, BuildContext};
 
@@ -70,14 +70,14 @@ pub(crate) fn watch(
 				let state_next = update_stream(&state, &items);
 				let abc: Vec<&Output> = items.iter().map(AsRef::as_ref).collect();
 				let xyz: Vec<&Output> = state_next.iter().map(AsRef::as_ref).collect();
-				build_content(ctx, &abc, &xyz, artifacts);
+				build_content(ctx, artifacts, &abc, &xyz);
 				state = state_next;
 				dirty = true;
 			}
 		}
 
 		if paths.iter().any(|path| path.starts_with("styles")) {
-			build_css();
+			build_styles();
 			dirty = true;
 		}
 

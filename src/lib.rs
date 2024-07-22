@@ -1,21 +1,18 @@
-mod tree;
-mod site;
-mod watch;
+mod content;
 mod gen;
+mod tree;
+mod watch;
+mod website;
 
 use std::collections::{HashMap, HashSet};
-use std::{fs, process::Command};
+use std::process::Command;
 
-use camino::{Utf8Path, Utf8PathBuf};
-use chrono::{DateTime, Datelike, Utc};
-use gray_matter::Matter;
-use gray_matter::engine::YAML;
-use hypertext::{Raw, Renderable};
-use serde::Deserialize;
-use tree::{Asset, FileItemKind, Output, PipelineItem};
+use camino::Utf8PathBuf;
+use chrono::Datelike;
 
-pub use crate::tree::{Content, Outline, Sack, TreePage};
-pub use crate::site::Website;
+pub use crate::content::{Bibliography, Content, Link, LinkDate, Linkable, Outline};
+pub use crate::tree::{Sack, TreePage};
+pub use crate::website::Website;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Mode {
@@ -58,88 +55,6 @@ impl Default for BuildContext {
 	fn default() -> Self {
 		Self::new()
 	}
-}
-
-#[derive(Debug, Clone)]
-pub struct Link {
-	pub path: Utf8PathBuf,
-	pub name: String,
-	pub desc: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct LinkDate {
-	pub link: Link,
-	pub date: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-pub enum Linkable {
-	Link(Link),
-	Date(LinkDate),
-}
-
-pub fn process_content<T>(item: PipelineItem) -> PipelineItem
-where
-	T: for<'de> Deserialize<'de> + Content + Clone + Send + Sync + 'static,
-{
-	let meta = match item {
-		PipelineItem::Skip(e) if matches!(e.kind, FileItemKind::Index) => e,
-		_ => return item,
-	};
-
-	let dir = meta.path.parent().unwrap().strip_prefix("content").unwrap();
-	let dir = match meta.path.file_stem().unwrap() {
-		"index" => dir.to_owned(),
-		name => dir.join(name),
-	};
-	let path = dir.join("index.html");
-
-	match meta.path.extension() {
-		Some("md" | "mdx" | "lhs") => {
-			let raw = fs::read_to_string(&meta.path).unwrap();
-			let (matter, parsed) = parse_frontmatter::<T>(&raw);
-			let link = T::as_link(&matter, Utf8Path::new("/").join(&dir));
-
-			Output {
-				kind: Asset {
-					kind: crate::tree::AssetKind::html(move |sack| {
-						let lib = sack.get_library();
-						let (outline, parsed, bib) = T::parse(
-							parsed.clone(),
-							lib,
-							dir.clone(),
-							sack.artifacts.images.clone()
-						);
-						T::render(matter.clone(), sack, Raw(parsed), outline, bib)
-							.render()
-							.into()
-					}),
-					meta,
-				}
-				.into(),
-				path,
-				link,
-			}
-			.into()
-		}
-		_ => meta.into(),
-	}
-}
-
-fn parse_frontmatter<D>(raw: &str) -> (D, String)
-where
-	D: for<'de> Deserialize<'de>,
-{
-	let parser = Matter::<YAML>::new();
-	let result = parser.parse_with_struct::<D>(raw).unwrap();
-
-	(
-		// Just the front matter
-		result.data,
-		// The rest of the content
-		result.content,
-	)
 }
 
 #[derive(Debug, Clone)]

@@ -13,11 +13,10 @@ use crate::gen::content::build_content;
 use crate::gen::hash::build_hash;
 use crate::gen::js::build_js;
 use crate::gen::pagefind::build_pagefind;
-use crate::gen::styles::build_css;
-use crate::site::Source;
+use crate::gen::styles::build_styles;
 use crate::tree::{Asset, AssetKind, FileItemKind, Output, PipelineItem};
-use crate::Artifacts;
-use crate::{BuildContext, Website};
+use crate::website::Source;
+use crate::{Artifacts, BuildContext, Website};
 
 pub(crate) fn clean_dist() {
 	println!("Cleaning dist");
@@ -63,11 +62,11 @@ pub(crate) fn build(ctx: &BuildContext, site: &Website) -> (Vec<Rc<Output>>, Art
 
 	let artifacts = Artifacts {
 		images: build_hash(&content, ".cache".into()),
-		styles: build_css(),
+		styles: build_styles(),
 		javascript: build_js(&site.js, &site.dist, &site.dist_js),
 	};
 
-	build_content(ctx, &assets, &assets, &artifacts);
+	build_content(ctx, &artifacts, &assets, &assets);
 	build_static();
 	build_pagefind(&site.dist);
 

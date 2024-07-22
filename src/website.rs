@@ -2,11 +2,13 @@ use std::collections::HashMap;
 use std::{collections::HashSet, rc::Rc};
 
 use camino::{Utf8Path, Utf8PathBuf};
+use serde::Deserialize;
 
+use crate::content::process_content;
 use crate::gen::build;
 use crate::tree::{Output, PipelineItem, Sack, Virtual};
 use crate::watch::watch;
-use crate::{BuildContext, Mode};
+use crate::{BuildContext, Content, Mode};
 
 #[derive(Debug)]
 pub struct Website {
@@ -48,26 +50,28 @@ pub struct WebsiteDesigner {
 }
 
 impl WebsiteDesigner {
-	pub fn add_source(
-		mut self,
-		path: &'static str,
-		exts: HashSet<&'static str>,
-		func: fn(PipelineItem) -> PipelineItem,
-	) -> Self {
-		self.sources.push(Source { path, exts, func });
+	pub fn content<T>(mut self, path: &'static str, exts: HashSet<&'static str>) -> Self
+	where
+		T: for<'de> Deserialize<'de> + Content + Clone + Send + Sync + 'static,
+	{
+		let source = Source {
+			path,
+			exts,
+			func: process_content::<T>,
+		};
+		self.sources.push(source);
 		self
 	}
 
-	pub fn add_virtual(
-		mut self,
-		func: fn(&Sack) -> String,
-		path: Utf8PathBuf,
-	) -> Self {
-		self.special.push(Output {
-			kind: Virtual::new(func).into(),
-			path,
-			link: None,
-		}.into());
+	pub fn add_virtual(mut self, func: fn(&Sack) -> String, path: Utf8PathBuf) -> Self {
+		self.special.push(
+			Output {
+				kind: Virtual::new(func).into(),
+				path,
+				link: None,
+			}
+			.into(),
+		);
 		self
 	}
 

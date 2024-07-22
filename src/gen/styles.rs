@@ -7,7 +7,7 @@ use glob::GlobError;
 use grass::Options;
 use rayon::iter::{ParallelBridge, ParallelIterator};
 
-pub(crate) fn build_css() -> HashSet<Utf8PathBuf> {
+pub(crate) fn build_styles() -> HashSet<Utf8PathBuf> {
 	println!("Compiling styles...");
 	let now = Instant::now();
 	let styles = compile_all();

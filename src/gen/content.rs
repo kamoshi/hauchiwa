@@ -1,29 +1,23 @@
-use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
 
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8Path;
 
 use crate::tree::{AssetKind, Output, OutputKind, Virtual};
 use crate::{Artifacts, BuildContext, Sack};
 
 pub(crate) fn build_content(
 	ctx: &BuildContext,
+	artifacts: &Artifacts,
 	pending: &[&Output],
 	hole: &[&Output],
-	artifacts: &Artifacts,
 ) {
 	let now = std::time::Instant::now();
-	render_all(ctx, pending, hole, artifacts);
+	render_all(ctx, artifacts, pending, hole);
 	println!("Elapsed: {:.2?}", now.elapsed());
 }
 
-fn render_all(
-	ctx: &BuildContext,
-	pending: &[&Output],
-	hole: &[&Output],
-	artifacts: &Artifacts,
-) {
+fn render_all(ctx: &BuildContext, artifacts: &Artifacts, pending: &[&Output], hole: &[&Output]) {
 	pending
 		.iter()
 		.map(|item| {
@@ -36,10 +30,10 @@ fn render_all(
 				item,
 				Sack {
 					ctx,
+					artifacts,
 					hole,
 					path: &item.path,
 					file,
-					artifacts: artifacts.clone(),
 				},
 			)
 		})

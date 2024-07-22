@@ -8,42 +8,10 @@ use std::usize;
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::glob;
 use hayagriva::Library;
-use hypertext::Renderable;
 use serde::Serialize;
 
-use crate::{Artifacts, BuildContext, Link, LinkDate, Linkable};
-
-pub struct Outline(pub Vec<(String, String)>);
-
-/// Represents a piece of content that can be rendered as a page. This trait needs to be
-/// implemented for the front matter associated with some web page as that is what ultimately
-/// matters when rendering the page. Each front matter *definition* maps to exactly one kind of
-/// rendered page on the website.
-pub trait Content {
-	/// Parse the document. Pass an optional library for bibliography.
-	/// This generates the initial HTML markup from content.
-	fn parse(
-		document: String,
-		library: Option<&Library>,
-		path: Utf8PathBuf,
-		hash: HashMap<Utf8PathBuf, Utf8PathBuf>,
-	) -> (Outline, String, Option<Vec<String>>);
-
-	/// Render the full page from parsed content.
-	fn render<'s, 'p, 'html>(
-		self,
-		sack: &'s Sack,
-		parsed: impl Renderable + 'p,
-		outline: Outline,
-		bib: Option<Vec<String>>,
-	) -> impl Renderable + 'html
-	where
-		's: 'html,
-		'p: 'html;
-
-	/// Get link for this content
-	fn as_link(&self, path: Utf8PathBuf) -> Option<Linkable>;
-}
+use crate::content::{Link, LinkDate, Linkable};
+use crate::{Artifacts, BuildContext};
 
 /// Marks whether the item should be treated as a content page, converted into a standalone HTML
 /// page, or as a bundled asset.
@@ -156,7 +124,7 @@ pub(crate) struct Output {
 /// Items currently in the pipeline. In order for an item to be rendered, it needs to be marked as
 /// `Take`, which means it needs to have an output location assigned to itself.
 #[derive(Debug)]
-pub enum PipelineItem {
+pub(crate) enum PipelineItem {
 	/// Unclaimed file.
 	Skip(FileItem),
 	/// Data ready to be processed.
@@ -188,14 +156,14 @@ impl From<PipelineItem> for Option<Output> {
 /// page, so that it can easily access the website metadata.
 pub struct Sack<'a> {
 	pub ctx: &'a BuildContext,
+	/// Processed artifacts (styles, scripts, etc.)
+	pub artifacts: &'a Artifacts,
 	/// Literally all of the content
 	pub hole: &'a [&'a Output],
 	/// Current path for the page being rendered
 	pub path: &'a Utf8PathBuf,
 	/// Original file location for this page
 	pub file: Option<&'a Utf8PathBuf>,
-	/// Hashed optimized images
-	pub artifacts: Artifacts,
 }
 
 impl<'a> Sack<'a> {
@@ -263,7 +231,6 @@ impl<'a> Sack<'a> {
 		};
 
 		serde_json::to_string(&map).unwrap()
-
 	}
 
 	pub fn get_js(&self, alias: &str) -> Option<&Utf8PathBuf> {
