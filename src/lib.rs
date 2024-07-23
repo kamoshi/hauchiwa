@@ -1,3 +1,4 @@
+#![doc = include_str!("../README.md")]
 mod content;
 mod gen;
 mod tree;
@@ -12,7 +13,7 @@ use chrono::Datelike;
 
 pub use crate::content::{Bibliography, Content, Link, LinkDate, Linkable, Outline};
 pub use crate::tree::{Sack, TreePage};
-pub use crate::website::Website;
+pub use crate::website::{Website, WebsiteDesigner};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Mode {

@@ -10,13 +10,15 @@ use crate::tree::{Output, PipelineItem, Sack, Virtual};
 use crate::watch::watch;
 use crate::{BuildContext, Content, Mode};
 
+/// This struct represents the website which will be built by the generator. The infividual
+/// settings can be set by calling the `design` function.
 #[derive(Debug)]
 pub struct Website {
 	pub(crate) dist: Utf8PathBuf,
 	pub(crate) dist_js: Utf8PathBuf,
 	pub(crate) sources: Vec<Source>,
 	pub(crate) special: Vec<Rc<Output>>,
-	pub(crate) js: HashMap<&'static str, &'static str>,
+	pub(crate) javascript: HashMap<&'static str, &'static str>,
 }
 
 impl Website {
@@ -42,6 +44,7 @@ impl Website {
 	}
 }
 
+/// A builder struct for creating a `Website` with specified settings.
 #[derive(Debug, Default)]
 pub struct WebsiteDesigner {
 	sources: Vec<Source>,
@@ -86,7 +89,7 @@ impl WebsiteDesigner {
 			dist_js: "js".into(),
 			sources: self.sources,
 			special: self.special,
-			js: self.js,
+			javascript: self.js,
 		}
 	}
 }
