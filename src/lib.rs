@@ -2,16 +2,15 @@
 mod content;
 mod gen;
 mod tree;
+mod utils;
 mod watch;
 mod website;
 
-use std::collections::{HashMap, HashSet};
+use chrono::Datelike;
 use std::process::Command;
 
-use camino::Utf8PathBuf;
-use chrono::Datelike;
-
 pub use crate::content::{Bibliography, Content, Link, LinkDate, Linkable, Outline};
+pub use crate::gen::store::{HashedScript, HashedStyle, Store};
 pub use crate::tree::{Sack, TreePage};
 pub use crate::website::{Website, WebsiteDesigner};
 
@@ -56,11 +55,4 @@ impl Default for BuildContext {
 	fn default() -> Self {
 		Self::new()
 	}
-}
-
-#[derive(Debug, Clone)]
-pub struct Artifacts {
-	pub images: HashMap<Utf8PathBuf, Utf8PathBuf>,
-	pub styles: HashSet<Utf8PathBuf>,
-	pub javascript: HashMap<String, Utf8PathBuf>,
 }

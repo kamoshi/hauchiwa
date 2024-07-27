@@ -1,8 +1,6 @@
 pub(crate) mod content;
-pub(crate) mod hash;
-pub(crate) mod js;
 pub(crate) mod pagefind;
-pub(crate) mod styles;
+pub(crate) mod store;
 
 use std::fs;
 use std::io;
@@ -10,13 +8,11 @@ use std::path::Path;
 use std::rc::Rc;
 
 use crate::gen::content::build_content;
-use crate::gen::hash::build_hash;
-use crate::gen::js::build_js;
 use crate::gen::pagefind::build_pagefind;
-use crate::gen::styles::build_styles;
+use crate::gen::store::{build_store, Store};
 use crate::tree::{Asset, AssetKind, FileItemKind, Output, PipelineItem};
 use crate::website::Source;
-use crate::{Artifacts, BuildContext, Website};
+use crate::{BuildContext, Website};
 
 pub(crate) fn clean_dist() {
 	println!("Cleaning dist");
@@ -44,10 +40,10 @@ pub(crate) fn copy_recursively(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> 
 	Ok(())
 }
 
-pub(crate) fn build(ctx: &BuildContext, site: &Website) -> (Vec<Rc<Output>>, Artifacts) {
+pub(crate) fn build(ctx: &BuildContext, ws: &Website) -> (Vec<Rc<Output>>, Store) {
 	clean_dist();
 
-	let content: Vec<Output> = site
+	let content: Vec<Output> = ws
 		.sources
 		.iter()
 		.flat_map(Source::get)
@@ -57,26 +53,22 @@ pub(crate) fn build(ctx: &BuildContext, site: &Website) -> (Vec<Rc<Output>>, Art
 
 	let assets: Vec<_> = content
 		.iter()
-		.chain(site.special.iter().map(AsRef::as_ref))
+		.chain(ws.special.iter().map(AsRef::as_ref))
 		.collect();
 
-	let artifacts = Artifacts {
-		images: build_hash(&content, ".cache".into()),
-		styles: build_styles(),
-		javascript: build_js(&site.js, &site.dist, &site.dist_js),
-	};
+	let store = build_store(ws, &content);
 
-	build_content(ctx, &artifacts, &assets, &assets);
+	build_content(ctx, &store, &assets, &assets);
 	build_static();
-	build_pagefind(&site.dist);
+	build_pagefind(&ws.dist);
 
 	(
 		content
 			.into_iter()
 			.map(Rc::new)
-			.chain(site.special.iter().map(ToOwned::to_owned))
+			.chain(ws.special.iter().map(ToOwned::to_owned))
 			.collect(),
-		artifacts,
+		store,
 	)
 }
 

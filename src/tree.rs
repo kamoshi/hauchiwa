@@ -11,7 +11,8 @@ use hayagriva::Library;
 use serde::Serialize;
 
 use crate::content::{Link, LinkDate, Linkable};
-use crate::{Artifacts, BuildContext};
+use crate::gen::store::{HashedScript, HashedStyle, Store};
+use crate::BuildContext;
 
 /// Marks whether the item should be treated as a content page, converted into a standalone HTML
 /// page, or as a bundled asset.
@@ -157,7 +158,7 @@ impl From<PipelineItem> for Option<Output> {
 pub struct Sack<'a> {
 	pub ctx: &'a BuildContext,
 	/// Processed artifacts (styles, scripts, etc.)
-	pub artifacts: &'a Artifacts,
+	pub store: &'a Store,
 	/// Literally all of the content
 	pub hole: &'a [&'a Output],
 	/// Current path for the page being rendered
@@ -226,15 +227,29 @@ impl<'a> Sack<'a> {
 	}
 
 	pub fn get_import_map(&self) -> String {
-		let map = ImportMap {
-			imports: &self.artifacts.javascript,
-		};
+		let ok = self
+			.store
+			.javascript
+			.iter()
+			.map(|(k, v)| (k.clone(), v.path.clone()))
+			.collect();
+		let map = ImportMap { imports: &ok };
 
 		serde_json::to_string(&map).unwrap()
 	}
 
-	pub fn get_js(&self, alias: &str) -> Option<&Utf8PathBuf> {
-		self.artifacts.javascript.get(alias)
+	pub fn get_script(&self, alias: &str) -> Option<&HashedScript> {
+		self.store.javascript.get(alias)
+	}
+
+	/// Get compiled CSS style by alias.
+	pub fn get_style(&self, alias: &str) -> Option<&HashedStyle> {
+		self.store.styles.get(alias)
+	}
+
+	/// Get optimized image path by original path.
+	pub fn get_image(&self, alias: &Utf8Path) -> Option<&Utf8Path> {
+		self.store.images.get(alias).map(AsRef::as_ref)
 	}
 }
 

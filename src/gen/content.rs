@@ -3,21 +3,22 @@ use std::io::Write;
 
 use camino::Utf8Path;
 
+use crate::gen::store::Store;
 use crate::tree::{AssetKind, Output, OutputKind, Virtual};
-use crate::{Artifacts, BuildContext, Sack};
+use crate::{BuildContext, Sack};
 
 pub(crate) fn build_content(
 	ctx: &BuildContext,
-	artifacts: &Artifacts,
+	store: &Store,
 	pending: &[&Output],
 	hole: &[&Output],
 ) {
 	let now = std::time::Instant::now();
-	render_all(ctx, artifacts, pending, hole);
+	render_all(ctx, store, pending, hole);
 	println!("Elapsed: {:.2?}", now.elapsed());
 }
 
-fn render_all(ctx: &BuildContext, artifacts: &Artifacts, pending: &[&Output], hole: &[&Output]) {
+fn render_all(ctx: &BuildContext, store: &Store, pending: &[&Output], hole: &[&Output]) {
 	pending
 		.iter()
 		.map(|item| {
@@ -30,7 +31,7 @@ fn render_all(ctx: &BuildContext, artifacts: &Artifacts, pending: &[&Output], ho
 				item,
 				Sack {
 					ctx,
-					artifacts,
+					store,
 					hole,
 					path: &item.path,
 					file,

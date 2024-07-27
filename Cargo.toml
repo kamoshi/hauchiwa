@@ -9,6 +9,7 @@ description = "Fast SSG library"
 repository  = "https://github.com/kamoshi/hauchiwa"
 
 [dependencies]
+base64                 = "0.22.1"
 camino                 = { version = "1.1.7", default-features = false, features = ["serde1"] }
 gray_matter            = { version = "0.2.8", default-features = false, features = ["yaml"] }
 chrono                 = "0.4.38"
@@ -19,7 +20,7 @@ image                  = "0.24.0"
 rayon                  = "1.10.0"
 serde                  = { version = "1.0.203", features = ["derive"] }
 serde_json             = "1.0.120"
-sha256                 = { version = "1.5.0", default-features = false }
+sha2                   = "0.10.8"
 
 # Watch
 notify                 = "6.1.1"
