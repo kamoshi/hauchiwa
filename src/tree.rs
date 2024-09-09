@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::usize;
+use std::sync::Arc;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::glob;
@@ -15,12 +15,12 @@ use crate::gen::store::{HashedScript, HashedStyle, Store};
 use crate::BuildContext;
 
 /// Marks whether the item should be treated as a content page, converted into a standalone HTML
-/// page, or as a bundled asset.
+/// page, or as a bundled asset. Only items marked as `Index` can be rendered as a page.
 #[derive(Debug, Clone)]
 pub(crate) enum FileItemKind {
-	/// Marks items converted to `index.html`.
+	/// Marks items as converted to `index.html`.
 	Index,
-	/// Marks items from bundle.
+	/// Marks items as bundled.
 	Bundle,
 }
 
@@ -33,33 +33,32 @@ pub(crate) struct FileItem {
 	pub path: Utf8PathBuf,
 }
 
+#[derive(Clone)]
+pub(crate) struct DeferredHtml {
+    pub(crate) lazy: Arc<dyn Fn(&Sack) -> String + Send + Sync>,
+}
+
+impl Debug for DeferredHtml {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let ptr = &*self.lazy as *const dyn Fn(&Sack) -> String as *const () as usize;
+        f.debug_struct("DeferredHtml").field("lazy", &ptr).finish()
+    }
+}
+
+#[derive(Debug, Clone)]
 /// Marks how the asset should be processed by the SSG.
 pub(crate) enum AssetKind {
 	/// Data renderable to HTML. In order to process the data, a closure should be called.
-	Html(Box<dyn Fn(&Sack) -> String + Send + Sync>),
+	Html(DeferredHtml),
 	/// Bibliographical data.
 	Bibtex(Library),
 	/// Image. For now they are simply cloned to the `dist` director.
 	Image,
 }
 
-impl Debug for AssetKind {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			Self::Html(fun) => {
-				// rust mental gymnastics moment
-				let ptr = &**fun as *const dyn Fn(&Sack) -> String as *const () as usize;
-				f.debug_tuple("Html").field(&ptr).finish()
-			}
-			Self::Bibtex(b) => f.debug_tuple("Bibtex").field(b).finish(),
-			Self::Image => write!(f, "Image"),
-		}
-	}
-}
-
 impl AssetKind {
 	pub fn html(f: impl Fn(&Sack) -> String + Send + Sync + 'static) -> Self {
-		Self::Html(Box::new(f))
+		Self::Html(DeferredHtml { lazy: Arc::new(f) })
 	}
 }
 

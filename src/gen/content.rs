@@ -4,7 +4,7 @@ use std::io::Write;
 use camino::Utf8Path;
 
 use crate::gen::store::Store;
-use crate::tree::{AssetKind, Output, OutputKind, Virtual};
+use crate::tree::{AssetKind, DeferredHtml, Output, OutputKind, Virtual};
 use crate::{BuildContext, Sack};
 
 pub(crate) fn build_content(
@@ -51,9 +51,9 @@ fn render(item: &Output, sack: Sack) {
 			let i = &real.meta.path;
 
 			match &real.kind {
-				AssetKind::Html(closure) => {
+				AssetKind::Html(DeferredHtml { lazy }) => {
 					let mut file = File::create(&o).unwrap();
-					file.write_all(closure(&sack).as_bytes()).unwrap();
+					file.write_all(lazy(&sack).as_bytes()).unwrap();
 					println!("HTML: {} -> {}", i, o);
 				}
 				AssetKind::Bibtex(_) => (),

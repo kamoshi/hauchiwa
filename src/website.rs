@@ -40,7 +40,7 @@ impl Website {
 			..Default::default()
 		};
 		let (state, artifacts) = crate::gen::build(&ctx, self);
-		watch(&ctx, &self.sources, state, &artifacts).unwrap()
+		watch(&ctx, &self.sources, state, artifacts).unwrap()
 	}
 }
 

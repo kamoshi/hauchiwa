@@ -15,6 +15,7 @@ use notify_debouncer_mini::new_debouncer;
 use tungstenite::WebSocket;
 
 use crate::gen::content::build_content;
+use crate::gen::copy_recursively;
 use crate::gen::store::{build_store_styles, Store};
 use crate::tree::Output;
 use crate::website::Source;
@@ -24,7 +25,7 @@ pub(crate) fn watch(
 	ctx: &BuildContext,
 	sources: &[Source],
 	mut state: Vec<Rc<Output>>,
-	store: &Store,
+	mut store: Store,
 ) -> Result<()> {
 	let root = env::current_dir().unwrap();
 	let server = TcpListener::bind("127.0.0.1:1337")?;
@@ -58,6 +59,15 @@ pub(crate) fn watch(
 
 		let mut dirty = false;
 
+		if paths.iter().any(|path| path.starts_with("styles")) {
+		    let styles = build_store_styles();
+			store.styles.extend(styles);
+			copy_recursively(".cache", "dist/hash").unwrap();
+			let state = state.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+			build_content(ctx, &store, &state, &state);
+			dirty = true;
+		}
+
 		{
 			let items: Vec<Rc<Output>> = paths
 				.iter()
@@ -70,15 +80,10 @@ pub(crate) fn watch(
 				let state_next = update_stream(&state, &items);
 				let abc: Vec<&Output> = items.iter().map(AsRef::as_ref).collect();
 				let xyz: Vec<&Output> = state_next.iter().map(AsRef::as_ref).collect();
-				build_content(ctx, store, &abc, &xyz);
+				build_content(ctx, &store, &abc, &xyz);
 				state = state_next;
 				dirty = true;
 			}
-		}
-
-		if paths.iter().any(|path| path.starts_with("styles")) {
-			build_store_styles();
-			dirty = true;
 		}
 
 		if dirty {
