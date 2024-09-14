@@ -11,7 +11,7 @@ use crate::gen::content::build_content;
 use crate::gen::pagefind::build_pagefind;
 use crate::gen::store::{build_store, Store};
 use crate::tree::{Asset, AssetKind, FileItemKind, Output, PipelineItem};
-use crate::website::Source;
+use crate::Loader;
 use crate::{BuildContext, Website};
 
 pub(crate) fn clean_dist() {
@@ -44,9 +44,17 @@ pub(crate) fn build(ctx: &BuildContext, ws: &Website) -> (Vec<Rc<Output>>, Store
 	clean_dist();
 
 	let content: Vec<Output> = ws
-		.sources
+		.loaders
 		.iter()
-		.flat_map(Source::get)
+		.flat_map(Loader::load)
+		.map(|x| {
+			let func = match &x.kind {
+				FileItemKind::Index(ref func) => func.clone(),
+				FileItemKind::Bundle => return PipelineItem::Skip(x),
+			};
+
+			func(PipelineItem::Skip(x))
+		})
 		.map(to_bundle)
 		.filter_map(Option::from)
 		.collect();

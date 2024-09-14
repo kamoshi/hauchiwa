@@ -62,7 +62,7 @@ pub(crate) fn build_store_images(
 	let now = std::time::Instant::now();
 
 	let images: Vec<&Output> = content
-		.iter()
+		.par_iter()
 		.filter(|&e| match e.kind {
 			OutputKind::Asset(ref a) => matches!(a.kind, AssetKind::Image),
 			_ => false,
@@ -78,7 +78,7 @@ fn hash_assets(cache: &Utf8Path, items: &[&Output]) -> HashMap<Utf8PathBuf, Utf8
 	fs::create_dir_all(cache).unwrap();
 
 	items
-		.par_iter()
+		.iter()
 		.filter_map(|item| match item.kind {
 			OutputKind::Asset(ref asset) => match asset.kind {
 				AssetKind::Image => {

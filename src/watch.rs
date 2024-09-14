@@ -18,12 +18,11 @@ use crate::gen::content::build_content;
 use crate::gen::copy_recursively;
 use crate::gen::store::{build_store_styles, Store};
 use crate::tree::Output;
-use crate::website::Source;
-use crate::BuildContext;
+use crate::{BuildContext, Loader};
 
 pub(crate) fn watch(
 	ctx: &BuildContext,
-	sources: &[Source],
+	loaders: &[Loader],
 	mut state: Vec<Rc<Output>>,
 	mut store: Store,
 ) -> Result<()> {
@@ -60,7 +59,7 @@ pub(crate) fn watch(
 		let mut dirty = false;
 
 		if paths.iter().any(|path| path.starts_with("styles")) {
-		    let styles = build_store_styles();
+			let styles = build_store_styles();
 			store.styles.extend(styles);
 			copy_recursively(".cache", "dist/hash").unwrap();
 			let state = state.iter().map(AsRef::as_ref).collect::<Vec<_>>();
@@ -71,7 +70,7 @@ pub(crate) fn watch(
 		{
 			let items: Vec<Rc<Output>> = paths
 				.iter()
-				.filter_map(|path| sources.iter().find_map(|s| s.get_maybe(path)))
+				.filter_map(|path| loaders.iter().find_map(|item| item.get_maybe(path)))
 				.filter_map(Option::from)
 				.map(Rc::new)
 				.collect();

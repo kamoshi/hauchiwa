@@ -1,12 +1,11 @@
 //! The purpose of this module is to process the data loaded from content files, which involves
 //! loading the data from hard drive, and then processing it further depending on the file type.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use camino::{Utf8Path, Utf8PathBuf};
-use glob::glob;
 use hayagriva::Library;
 use serde::Serialize;
 
@@ -14,14 +13,30 @@ use crate::content::{Link, LinkDate, Linkable};
 use crate::gen::store::{HashedScript, HashedStyle, Store};
 use crate::BuildContext;
 
+/// Function objects of this type can be used to process content items.
+pub(crate) type ProcessorFn = Arc<dyn Fn(PipelineItem) -> PipelineItem + Send + Sync>;
+
 /// Marks whether the item should be treated as a content page, converted into a standalone HTML
 /// page, or as a bundled asset. Only items marked as `Index` can be rendered as a page.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) enum FileItemKind {
 	/// Marks items as converted to `index.html`.
-	Index,
+	Index(ProcessorFn),
 	/// Marks items as bundled.
 	Bundle,
+}
+
+impl Debug for FileItemKind {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			FileItemKind::Index(ptr) => {
+				todo!()
+			}
+			FileItemKind::Bundle => {
+				todo!()
+			}
+		}
+	}
 }
 
 /// Metadata for a single item consumed by SSG.
@@ -35,14 +50,14 @@ pub(crate) struct FileItem {
 
 #[derive(Clone)]
 pub(crate) struct DeferredHtml {
-    pub(crate) lazy: Arc<dyn Fn(&Sack) -> String + Send + Sync>,
+	pub(crate) lazy: Arc<dyn Fn(&Sack) -> String + Send + Sync>,
 }
 
 impl Debug for DeferredHtml {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		let ptr = &*self.lazy as *const dyn Fn(&Sack) -> String as *const () as usize;
-        f.debug_struct("DeferredHtml").field("lazy", &ptr).finish()
-    }
+		f.debug_struct("DeferredHtml").field("lazy", &ptr).finish()
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -278,31 +293,4 @@ impl TreePage {
 		}
 		ptr.link = Some(link.clone());
 	}
-}
-
-pub fn gather(pattern: &str, exts: &HashSet<&'static str>) -> Vec<PipelineItem> {
-	glob(pattern)
-		.expect("Invalid glob pattern")
-		.filter_map(|path| {
-			let path = path.unwrap();
-			let path = Utf8PathBuf::from_path_buf(path).expect("Filename is not valid UTF8");
-
-			match path.is_dir() {
-				true => None,
-				false => Some(to_source(path, exts)),
-			}
-		})
-		.map(Into::into)
-		.collect()
-}
-
-pub(crate) fn to_source(path: Utf8PathBuf, exts: &HashSet<&'static str>) -> FileItem {
-	let hit = path.extension().map_or(false, |ext| exts.contains(ext));
-
-	let kind = match hit {
-		true => FileItemKind::Index,
-		false => FileItemKind::Bundle,
-	};
-
-	FileItem { kind, path }
 }

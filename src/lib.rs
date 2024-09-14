@@ -1,4 +1,5 @@
 #![doc = include_str!("../README.md")]
+mod collection;
 mod content;
 mod gen;
 mod tree;
@@ -9,7 +10,8 @@ mod website;
 use chrono::Datelike;
 use std::process::Command;
 
-pub use crate::content::{Bibliography, Content, Link, LinkDate, Linkable, Outline};
+pub use crate::collection::{Loader, Processor};
+pub use crate::content::{Bibliography, Link, LinkDate, Linkable, Outline};
 pub use crate::gen::store::{HashedScript, HashedStyle, Store};
 pub use crate::tree::{Sack, TreePage};
 pub use crate::website::{Website, WebsiteDesigner};
