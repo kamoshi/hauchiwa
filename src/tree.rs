@@ -1,6 +1,7 @@
 //! The purpose of this module is to process the data loaded from content files, which involves
 //! loading the data from hard drive, and then processing it further depending on the file type.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -51,9 +52,9 @@ pub(crate) struct FileItemBundle {
 /// Metadata for a single item consumed by SSG.
 #[derive(Debug, Clone)]
 pub(crate) enum FileItem {
-	/// Marks items as converted to `index.html`.
+	/// Items marked as converted to `index.html`.
 	Index(FileItemIndex),
-	/// Marks items as bundled.
+	/// Items marked as bundled.
 	Bundle(FileItemBundle),
 }
 
@@ -69,6 +70,8 @@ impl FileItem {
 
 #[derive(Clone)]
 pub(crate) struct DeferredHtml {
+	/// Any front matter
+	pub(crate) meta: Arc<dyn Any + Send + Sync>,
 	pub(crate) lazy: Arc<dyn Fn(&Sack) -> String + Send + Sync>,
 }
 
@@ -91,8 +94,15 @@ pub(crate) enum AssetKind {
 }
 
 impl AssetKind {
-	pub fn html(f: impl Fn(&Sack) -> String + Send + Sync + 'static) -> Self {
-		Self::Html(DeferredHtml { lazy: Arc::new(f) })
+	pub fn html<M, F>(meta: Arc<M>, f: F) -> Self
+	where
+		M: Any + Send + Sync,
+		F: Fn(&Sack) -> String + Send + Sync + 'static,
+	{
+		Self::Html(DeferredHtml {
+			meta,
+			lazy: Arc::new(f),
+		})
 	}
 }
 
@@ -201,14 +211,23 @@ pub struct Sack<'a> {
 }
 
 impl<'a> Sack<'a> {
-	pub fn get_links(&self, path: &str) -> Vec<LinkDate> {
-		let pattern = glob::Pattern::new(path).expect("Bad glob pattern");
+	pub fn get_meta<M: 'static>(&self, pattern: &str) -> Vec<(&Utf8Path, &M)> {
+		let pattern = glob::Pattern::new(pattern).expect("Bad glob pattern");
+
 		self.hole
 			.iter()
 			.filter(|item| pattern.matches_path(item.path.as_ref()))
-			.filter_map(|item| match &item.link {
-				Some(Linkable::Date(link)) => Some(link.clone()),
-				_ => None,
+			.filter_map(|item| {
+				let path = item.path.as_ref();
+				let meta = match &item.kind {
+					OutputKind::Asset(Asset {
+						kind: AssetKind::Html(DeferredHtml { meta, .. }),
+						..
+					}) => meta.downcast_ref::<M>(),
+					_ => None,
+				};
+
+				meta.map(|meta| (path, meta))
 			})
 			.collect()
 	}

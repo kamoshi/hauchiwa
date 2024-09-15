@@ -51,7 +51,7 @@ fn render(item: &Output, sack: Sack) {
 			let fs_path = real.meta.get_path();
 
 			match &real.kind {
-				AssetKind::Html(DeferredHtml { lazy }) => {
+				AssetKind::Html(DeferredHtml { lazy, .. }) => {
 					let mut file = File::create(&o).unwrap();
 					file.write_all(lazy(&sack).as_bytes()).unwrap();
 					println!("HTML: {} -> {}", fs_path, o);

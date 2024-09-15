@@ -34,27 +34,34 @@ where
 			to_link,
 		} = self;
 
-		move |meta| {
-			let dir = meta.path.parent().unwrap().strip_prefix("content").unwrap();
-			let dir = match meta.path.file_stem().unwrap() {
+		move |index| {
+			let dir = index
+				.path
+				.parent()
+				.unwrap()
+				.strip_prefix("content")
+				.unwrap();
+			let dir = match index.path.file_stem().unwrap() {
 				"index" => dir.to_owned(),
 				name => dir.join(name),
 			};
 			let path = dir.join("index.html");
 
-			let data = fs::read_to_string(&meta.path).unwrap();
-			let (metadata, content) = parse_meta::<D>(&data);
-			let link = to_link(&metadata, Utf8Path::new("/").join(&dir));
+			let data = fs::read_to_string(&index.path).unwrap();
+			let (meta, content) = parse_meta::<D>(&data);
+			let meta = Arc::new(meta);
+
+			let link = to_link(&meta, Utf8Path::new("/").join(&dir));
 
 			Output {
 				kind: Asset {
-					kind: crate::tree::AssetKind::html(move |sack| {
+					kind: crate::tree::AssetKind::html(meta.clone(), move |sack| {
 						let library = sack.get_library();
 						let (parsed, outline, bibliography) =
 							read_content(&content, sack, &dir, library);
-						to_html(&metadata, &parsed, sack, outline, bibliography)
+						to_html(&meta, &parsed, sack, outline, bibliography)
 					}),
-					meta: FileItem::Index(meta),
+					meta: FileItem::Index(index),
 				}
 				.into(),
 				path,
@@ -95,6 +102,7 @@ enum Loader {
 pub struct Collection(Loader);
 
 impl Collection {
+	/// Collect file items from file system for further processing.
 	pub fn glob_with<D>(
 		base: &'static str,
 		glob: &'static str,
