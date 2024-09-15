@@ -14,38 +14,57 @@ use crate::gen::store::{HashedScript, HashedStyle, Store};
 use crate::BuildContext;
 
 /// Function objects of this type can be used to process content items.
-pub(crate) type ProcessorFn = Arc<dyn Fn(PipelineItem) -> PipelineItem + Send + Sync>;
+/// This type erases the front matter type, so that it's completely opaque.
+pub(crate) type ProcessorFn = Arc<dyn Fn(FileItemIndex) -> PipelineItem + Send + Sync>;
 
-/// Marks whether the item should be treated as a content page, converted into a standalone HTML
-/// page, or as a bundled asset. Only items marked as `Index` can be rendered as a page.
+/// Filesystem item renderable to a HTML page.
 #[derive(Clone)]
-pub(crate) enum FileItemKind {
-	/// Marks items as converted to `index.html`.
-	Index(ProcessorFn),
-	/// Marks items as bundled.
-	Bundle,
+pub(crate) struct FileItemIndex {
+	/// Original source file location.
+	pub(crate) path: Utf8PathBuf,
+	/// Processor function closure.
+	pub(crate) func: ProcessorFn,
 }
 
-impl Debug for FileItemKind {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			FileItemKind::Index(ptr) => {
-				todo!()
-			}
-			FileItemKind::Bundle => {
-				todo!()
-			}
-		}
+impl FileItemIndex {
+	pub(crate) fn process(self) -> PipelineItem {
+		(self.func.clone())(self)
 	}
+}
+
+impl Debug for FileItemIndex {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("FileItemIndex")
+			.field("path", &self.path)
+			.field("func", &"[closure]".to_string())
+			.finish()
+	}
+}
+
+/// Item bundled to some page
+#[derive(Debug, Clone)]
+pub(crate) struct FileItemBundle {
+	/// Original source file location.
+	pub path: Utf8PathBuf,
 }
 
 /// Metadata for a single item consumed by SSG.
 #[derive(Debug, Clone)]
-pub(crate) struct FileItem {
-	/// The kind of an item from disk.
-	pub kind: FileItemKind,
-	/// Original source file location.
-	pub path: Utf8PathBuf,
+pub(crate) enum FileItem {
+	/// Marks items as converted to `index.html`.
+	Index(FileItemIndex),
+	/// Marks items as bundled.
+	Bundle(FileItemBundle),
+}
+
+impl FileItem {
+	#[inline(always)]
+	pub(crate) fn get_path(&self) -> &Utf8Path {
+		match self {
+			FileItem::Index(index) => index.path.as_ref(),
+			FileItem::Bundle(bundle) => bundle.path.as_ref(),
+		}
+	}
 }
 
 #[derive(Clone)]
@@ -176,9 +195,9 @@ pub struct Sack<'a> {
 	/// Literally all of the content
 	pub hole: &'a [&'a Output],
 	/// Current path for the page being rendered
-	pub path: &'a Utf8PathBuf,
+	pub path: &'a Utf8Path,
 	/// Original file location for this page
-	pub file: Option<&'a Utf8PathBuf>,
+	pub file: Option<&'a Utf8Path>,
 }
 
 impl<'a> Sack<'a> {
@@ -237,7 +256,7 @@ impl<'a> Sack<'a> {
 
 	/// Get the path for original file location
 	pub fn get_file(&self) -> Option<&'a Utf8Path> {
-		self.file.map(Utf8PathBuf::as_ref)
+		self.file
 	}
 
 	pub fn get_import_map(&self) -> String {

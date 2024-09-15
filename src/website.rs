@@ -3,16 +3,17 @@ use std::rc::Rc;
 
 use camino::Utf8PathBuf;
 
+use crate::collection::Collection;
 use crate::gen::build;
 use crate::tree::{Output, Sack, Virtual};
 use crate::watch::watch;
-use crate::{BuildContext, Loader, Mode};
+use crate::{BuildContext, Mode};
 
 /// This struct represents the website which will be built by the generator. The infividual
 /// settings can be set by calling the `design` function.
 #[derive(Debug)]
 pub struct Website {
-	pub(crate) loaders: Vec<Loader>,
+	pub(crate) loaders: Vec<Collection>,
 	pub(crate) dist: Utf8PathBuf,
 	pub(crate) dist_js: Utf8PathBuf,
 	pub(crate) special: Vec<Rc<Output>>,
@@ -45,13 +46,13 @@ impl Website {
 /// A builder struct for creating a `Website` with specified settings.
 #[derive(Debug, Default)]
 pub struct WebsiteDesigner {
-	loaders: Vec<Loader>,
+	loaders: Vec<Collection>,
 	special: Vec<Rc<Output>>,
 	js: HashMap<&'static str, &'static str>,
 }
 
 impl WebsiteDesigner {
-	pub fn add_loaders(mut self, loaders: impl IntoIterator<Item = Loader>) -> Self {
+	pub fn add_loaders(mut self, loaders: impl IntoIterator<Item = Collection>) -> Self {
 		self.loaders.extend(loaders);
 		self
 	}

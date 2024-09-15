@@ -82,7 +82,7 @@ fn hash_assets(cache: &Utf8Path, items: &[&Output]) -> HashMap<Utf8PathBuf, Utf8
 		.filter_map(|item| match item.kind {
 			OutputKind::Asset(ref asset) => match asset.kind {
 				AssetKind::Image => {
-					let buffer = std::fs::read(&asset.meta.path).expect("Couldn't read file");
+					let buffer = std::fs::read(asset.meta.get_path()).expect("Couldn't read file");
 					let format = image::guess_format(&buffer).expect("Couldn't read format");
 
 					if matches!(format, image::ImageFormat::Gif) {
@@ -90,7 +90,7 @@ fn hash_assets(cache: &Utf8Path, items: &[&Output]) -> HashMap<Utf8PathBuf, Utf8
 					}
 
 					let path = item.path.to_owned();
-					let hash = hash_image(cache, &buffer, &asset.meta.path);
+					let hash = hash_image(cache, &buffer, asset.meta.get_path());
 					Some((path, hash))
 				}
 				_ => None,

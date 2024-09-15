@@ -7,11 +7,12 @@ use std::io;
 use std::path::Path;
 use std::rc::Rc;
 
+use crate::collection::Collection;
 use crate::gen::content::build_content;
 use crate::gen::pagefind::build_pagefind;
 use crate::gen::store::{build_store, Store};
-use crate::tree::{Asset, AssetKind, FileItemKind, Output, PipelineItem};
-use crate::Loader;
+use crate::tree::FileItem;
+use crate::tree::{Asset, AssetKind, Output, PipelineItem};
 use crate::{BuildContext, Website};
 
 pub(crate) fn clean_dist() {
@@ -46,14 +47,10 @@ pub(crate) fn build(ctx: &BuildContext, ws: &Website) -> (Vec<Rc<Output>>, Store
 	let content: Vec<Output> = ws
 		.loaders
 		.iter()
-		.flat_map(Loader::load)
-		.map(|x| {
-			let func = match &x.kind {
-				FileItemKind::Index(ref func) => func.clone(),
-				FileItemKind::Bundle => return PipelineItem::Skip(x),
-			};
-
-			func(PipelineItem::Skip(x))
+		.flat_map(Collection::load)
+		.map(|x| match &x {
+			FileItem::Index(index) => index.clone().process(),
+			FileItem::Bundle(_) => PipelineItem::Skip(x),
 		})
 		.map(to_bundle)
 		.filter_map(Option::from)
@@ -82,7 +79,7 @@ pub(crate) fn build(ctx: &BuildContext, ws: &Website) -> (Vec<Rc<Output>>, Store
 
 fn to_bundle(item: PipelineItem) -> PipelineItem {
 	let meta = match item {
-		PipelineItem::Skip(meta) if matches!(meta.kind, FileItemKind::Bundle) => meta,
+		PipelineItem::Skip(FileItem::Bundle(bundle)) => bundle,
 		_ => return item,
 	};
 
@@ -93,7 +90,7 @@ fn to_bundle(item: PipelineItem) -> PipelineItem {
 		Some("jpg" | "png" | "gif") => Output {
 			kind: Asset {
 				kind: AssetKind::Image,
-				meta,
+				meta: FileItem::Bundle(meta),
 			}
 			.into(),
 			path,
@@ -108,7 +105,7 @@ fn to_bundle(item: PipelineItem) -> PipelineItem {
 			Output {
 				kind: Asset {
 					kind: AssetKind::Bibtex(data),
-					meta,
+					meta: FileItem::Bundle(meta),
 				}
 				.into(),
 				path,
@@ -116,6 +113,6 @@ fn to_bundle(item: PipelineItem) -> PipelineItem {
 			}
 			.into()
 		}
-		_ => meta.into(),
+		_ => FileItem::Bundle(meta).into(),
 	}
 }

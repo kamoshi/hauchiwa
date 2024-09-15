@@ -7,15 +7,16 @@ use hayagriva::Library;
 use serde::Deserialize;
 
 use crate::{
-	tree::{Asset, FileItem, FileItemKind, Output, PipelineItem, ProcessorFn},
+	tree::{Asset, FileItem, FileItemBundle, FileItemIndex, Output, PipelineItem, ProcessorFn},
 	Bibliography, Linkable, Outline, Sack,
 };
+
+type ReaderFn = fn(&str, &Sack, &Utf8Path, Option<&Library>) -> (String, Outline, Bibliography);
 
 #[derive(Clone, Copy)]
 pub struct Processor<D> {
 	/// Convert a single document to HTML.
-	pub read_content:
-		fn(&str, &Sack, &Utf8Path, Option<&Library>) -> (String, Outline, Bibliography),
+	pub read_content: ReaderFn,
 	/// Render the website page for this document.
 	pub to_html: fn(&D, &str, &Sack, Outline, Bibliography) -> String,
 	/// Get link for this content
@@ -26,19 +27,14 @@ impl<D> Processor<D>
 where
 	D: for<'de> Deserialize<'de> + Send + Sync + 'static,
 {
-	fn init(self) -> impl Fn(PipelineItem) -> PipelineItem {
+	fn init(self) -> impl Fn(FileItemIndex) -> PipelineItem {
 		let Processor {
 			read_content,
 			to_html,
 			to_link,
 		} = self;
 
-		move |item| {
-			let meta = match item {
-				PipelineItem::Skip(e) if matches!(e.kind, FileItemKind::Index(..)) => e,
-				_ => return item,
-			};
-
+		move |meta| {
 			let dir = meta.path.parent().unwrap().strip_prefix("content").unwrap();
 			let dir = match meta.path.file_stem().unwrap() {
 				"index" => dir.to_owned(),
@@ -58,7 +54,7 @@ where
 							read_content(&content, sack, &dir, library);
 						to_html(&metadata, &parsed, sack, outline, bibliography)
 					}),
-					meta,
+					meta: FileItem::Index(meta),
 				}
 				.into(),
 				path,
@@ -85,16 +81,20 @@ where
 	)
 }
 
-pub enum Loader {
-	Glob {
-		base: &'static str,
-		glob: &'static str,
-		exts: HashSet<&'static str>,
-		func: ProcessorFn,
-	},
+struct LoaderGlob {
+	base: &'static str,
+	glob: &'static str,
+	exts: HashSet<&'static str>,
+	func: ProcessorFn,
 }
 
-impl Loader {
+enum Loader {
+	Glob(LoaderGlob),
+}
+
+pub struct Collection(Loader);
+
+impl Collection {
 	pub fn glob_with<D>(
 		base: &'static str,
 		glob: &'static str,
@@ -104,23 +104,19 @@ impl Loader {
 	where
 		D: for<'de> Deserialize<'de> + Send + Sync + 'static,
 	{
-		Self::Glob {
+		Self(Loader::Glob(LoaderGlob {
 			base,
 			glob,
 			exts,
 			func: Arc::new(processor.init()),
-		}
+		}))
 	}
 
 	pub(crate) fn get_maybe(&self, path: &Utf8Path) -> Option<PipelineItem> {
-		let (pattern, exts, func) = match self {
-			Loader::Glob {
-				base,
-				glob,
-				exts,
-				func,
-			} => (Utf8Path::new(base).join(glob), exts, func),
-		};
+		let Loader::Glob(loader) = &self.0;
+
+		let pattern = Utf8Path::new(loader.base).join(loader.glob);
+		let closure = loader.func.clone();
 
 		let pattern = glob::Pattern::new(pattern.as_str()).expect("Bad pattern");
 		if !pattern.matches_path(path.as_std_path()) {
@@ -128,46 +124,39 @@ impl Loader {
 		};
 
 		let item = match path.is_file() {
-			true => to_source(path.to_owned(), exts, func.clone()),
+			true => to_source(path.to_owned(), &loader.exts, closure.clone()),
 			false => return None,
 		};
 
-		let converted = func(PipelineItem::Skip(item));
-		Some(converted)
+		match item {
+			FileItem::Index(index) => Some(closure(index)),
+			FileItem::Bundle(_) => None,
+		}
 	}
 
 	pub(crate) fn load(&self) -> Vec<FileItem> {
-		match self {
-			Loader::Glob {
-				base,
-				glob,
-				exts,
-				func,
-			} => {
-				let glob = Utf8Path::new(base).join(glob);
-				let srcs = load_glob(glob.as_str(), exts, func);
+		match &self.0 {
+			Loader::Glob(loader) => {
+				let glob = Utf8Path::new(loader.base).join(loader.glob);
+				let srcs = load_glob(glob.as_str(), &loader.exts, &loader.func);
 				srcs
 			}
 		}
 	}
 }
 
-impl Debug for Loader {
+impl Debug for Collection {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		todo!()
+		f.debug_struct("Collection").finish()
 	}
 }
 
 fn to_source(path: Utf8PathBuf, exts: &HashSet<&'static str>, func: ProcessorFn) -> FileItem {
 	let has_ext = path.extension().map_or(false, |ext| exts.contains(ext));
 
-	FileItem {
-		kind: if has_ext {
-			FileItemKind::Index(func)
-		} else {
-			FileItemKind::Bundle
-		},
-		path,
+	match has_ext {
+		true => FileItem::Index(FileItemIndex { path, func }),
+		false => FileItem::Bundle(FileItemBundle { path }),
 	}
 }
 

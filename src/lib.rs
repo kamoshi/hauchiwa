@@ -10,7 +10,7 @@ mod website;
 use chrono::Datelike;
 use std::process::Command;
 
-pub use crate::collection::{Loader, Processor};
+pub use crate::collection::{Collection, Processor};
 pub use crate::content::{Bibliography, Link, LinkDate, Linkable, Outline};
 pub use crate::gen::store::{HashedScript, HashedStyle, Store};
 pub use crate::tree::{Sack, TreePage};

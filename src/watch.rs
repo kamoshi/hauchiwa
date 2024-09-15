@@ -14,15 +14,16 @@ use notify::{RecursiveMode, Watcher};
 use notify_debouncer_full::new_debouncer;
 use tungstenite::WebSocket;
 
+use crate::collection::Collection;
 use crate::gen::content::build_content;
 use crate::gen::copy_recursively;
 use crate::gen::store::{build_store_styles, Store};
 use crate::tree::Output;
-use crate::{BuildContext, Loader};
+use crate::BuildContext;
 
 pub(crate) fn watch(
 	ctx: &BuildContext,
-	loaders: &[Loader],
+	loaders: &[Collection],
 	mut state: Vec<Rc<Output>>,
 	mut store: Store,
 ) -> Result<()> {

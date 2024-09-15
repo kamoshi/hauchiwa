@@ -21,9 +21,9 @@ pub(crate) fn build_content(
 fn render_all(ctx: &BuildContext, store: &Store, pending: &[&Output], hole: &[&Output]) {
 	pending
 		.iter()
-		.map(|item| {
+		.map(|&item| {
 			let file = match &item.kind {
-				OutputKind::Asset(a) => Some(&a.meta.path),
+				OutputKind::Asset(a) => Some(a.meta.get_path()),
 				OutputKind::Virtual(_) => None,
 			};
 
@@ -48,19 +48,19 @@ fn render(item: &Output, sack: Sack) {
 
 	match item.kind {
 		OutputKind::Asset(ref real) => {
-			let i = &real.meta.path;
+			let fs_path = real.meta.get_path();
 
 			match &real.kind {
 				AssetKind::Html(DeferredHtml { lazy }) => {
 					let mut file = File::create(&o).unwrap();
 					file.write_all(lazy(&sack).as_bytes()).unwrap();
-					println!("HTML: {} -> {}", i, o);
+					println!("HTML: {} -> {}", fs_path, o);
 				}
 				AssetKind::Bibtex(_) => (),
 				AssetKind::Image => {
 					fs::create_dir_all(o.parent().unwrap()).unwrap();
-					fs::copy(i, &o).unwrap();
-					println!("Image: {} -> {}", i, o);
+					fs::copy(fs_path, &o).unwrap();
+					println!("Image: {} -> {}", fs_path, o);
 				}
 			}
 		}
