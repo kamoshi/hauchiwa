@@ -128,11 +128,12 @@ impl Loader {
 		};
 
 		let item = match path.is_file() {
-			true => Some(to_source(path.to_owned(), exts, func.clone())),
-			false => None,
+			true => to_source(path.to_owned(), exts, func.clone()),
+			false => return None,
 		};
 
-		item.map(Into::into)
+		let converted = func(PipelineItem::Skip(item));
+		Some(converted)
 	}
 
 	pub(crate) fn load(&self) -> Vec<FileItem> {
