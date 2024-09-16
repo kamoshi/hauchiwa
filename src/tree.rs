@@ -196,15 +196,16 @@ impl From<PipelineItem> for Option<Output> {
 /// This struct allows for querying the website hierarchy. It is passed to each rendered website
 /// page, so that it can easily access the website metadata.
 pub struct Sack<'a> {
+	/// TODO: make Sack parametric over this type
 	pub ctx: &'a BuildContext,
-	/// Processed artifacts (styles, scripts, etc.)
-	pub store: &'a Store,
-	/// Literally all of the content
-	pub hole: &'a [&'a Output],
 	/// Current path for the page being rendered
 	pub path: &'a Utf8Path,
+	/// Processed artifacts (styles, scripts, etc.)
+	pub(crate) store: &'a Store,
 	/// Original file location for this page
-	pub file: Option<&'a Utf8Path>,
+	pub(crate) file: Option<&'a Utf8Path>,
+	/// All of the content on the page.
+	pub(crate) hole: &'a [&'a Output],
 }
 
 impl<'a> Sack<'a> {
