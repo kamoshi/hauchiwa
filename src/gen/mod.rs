@@ -94,7 +94,6 @@ fn to_bundle(item: PipelineItem) -> PipelineItem {
 			}
 			.into(),
 			path,
-			link: None,
 		}
 		.into(),
 		// bibliography
@@ -109,7 +108,6 @@ fn to_bundle(item: PipelineItem) -> PipelineItem {
 				}
 				.into(),
 				path,
-				link: None,
 			}
 			.into()
 		}

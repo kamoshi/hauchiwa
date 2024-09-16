@@ -62,7 +62,6 @@ impl WebsiteDesigner {
 			Output {
 				kind: Virtual::new(func).into(),
 				path,
-				link: None,
 			}
 			.into(),
 		);

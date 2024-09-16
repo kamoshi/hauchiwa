@@ -11,9 +11,9 @@ use chrono::Datelike;
 use std::process::Command;
 
 pub use crate::collection::{Collection, Processor};
-pub use crate::content::{Bibliography, Link, LinkDate, Linkable, Outline};
+pub use crate::content::{Bibliography, Outline};
 pub use crate::gen::store::{HashedScript, HashedStyle, Store};
-pub use crate::tree::{Sack, TreePage};
+pub use crate::tree::Sack;
 pub use crate::website::{Website, WebsiteDesigner};
 
 #[derive(Debug, Clone, Copy)]

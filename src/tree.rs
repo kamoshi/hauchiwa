@@ -10,7 +10,6 @@ use camino::{Utf8Path, Utf8PathBuf};
 use hayagriva::Library;
 use serde::Serialize;
 
-use crate::content::{Link, LinkDate, Linkable};
 use crate::gen::store::{HashedScript, HashedStyle, Store};
 use crate::BuildContext;
 
@@ -161,8 +160,6 @@ pub(crate) struct Output {
 	pub(crate) kind: OutputKind,
 	/// Path for the output in dist
 	pub(crate) path: Utf8PathBuf,
-	/// Optional URL data for outputted page.
-	pub(crate) link: Option<Linkable>,
 }
 
 /// Items currently in the pipeline. In order for an item to be rendered, it needs to be marked as
@@ -232,25 +229,6 @@ impl<'a> Sack<'a> {
 			.collect()
 	}
 
-	pub fn get_tree(&self, path: &str) -> TreePage {
-		let glob = glob::Pattern::new(path).expect("Bad glob pattern");
-		let list = self
-			.hole
-			.iter()
-			.filter(|item| glob.matches_path(item.path.as_ref()))
-			.filter_map(|item| match &item.link {
-				Some(Linkable::Link(link)) => Some(link.clone()),
-				_ => None,
-			});
-
-		let mut tree = TreePage::new();
-		for link in list {
-			tree.add_link(&link);
-		}
-
-		tree
-	}
-
 	pub fn get_library(&self) -> Option<&Library> {
 		let glob = format!("{}/*.bib", self.path.parent()?);
 		let glob = glob::Pattern::new(&glob).expect("Bad glob pattern");
@@ -308,27 +286,4 @@ impl<'a> Sack<'a> {
 #[derive(Debug, Serialize)]
 pub struct ImportMap<'a> {
 	imports: &'a HashMap<String, Utf8PathBuf>,
-}
-
-#[derive(Debug)]
-pub struct TreePage {
-	pub link: Option<Link>,
-	pub subs: HashMap<String, TreePage>,
-}
-
-impl TreePage {
-	fn new() -> Self {
-		TreePage {
-			link: None,
-			subs: HashMap::new(),
-		}
-	}
-
-	fn add_link(&mut self, link: &Link) {
-		let mut ptr = self;
-		for part in link.path.iter().skip(1) {
-			ptr = ptr.subs.entry(part.to_string()).or_insert(TreePage::new());
-		}
-		ptr.link = Some(link.clone());
-	}
 }

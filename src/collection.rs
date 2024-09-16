@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use crate::{
 	tree::{Asset, FileItem, FileItemBundle, FileItemIndex, Output, PipelineItem, ProcessorFn},
-	Bibliography, Linkable, Outline, Sack,
+	Bibliography, Outline, Sack,
 };
 
 type ReaderFn = fn(&str, &Sack, &Utf8Path, Option<&Library>) -> (String, Outline, Bibliography);
@@ -19,8 +19,6 @@ pub struct Processor<D> {
 	pub read_content: ReaderFn,
 	/// Render the website page for this document.
 	pub to_html: fn(&D, &str, &Sack, Outline, Bibliography) -> String,
-	/// Get link for this content
-	pub to_link: fn(&D, path: Utf8PathBuf) -> Option<Linkable>,
 }
 
 impl<D> Processor<D>
@@ -31,7 +29,6 @@ where
 		let Processor {
 			read_content,
 			to_html,
-			to_link,
 		} = self;
 
 		move |index| {
@@ -51,8 +48,6 @@ where
 			let (meta, content) = parse_meta::<D>(&data);
 			let meta = Arc::new(meta);
 
-			let link = to_link(&meta, Utf8Path::new("/").join(&dir));
-
 			Output {
 				kind: Asset {
 					kind: crate::tree::AssetKind::html(meta.clone(), move |sack| {
@@ -65,7 +60,6 @@ where
 				}
 				.into(),
 				path,
-				link,
 			}
 			.into()
 		}
