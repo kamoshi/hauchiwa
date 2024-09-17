@@ -11,28 +11,28 @@ use hayagriva::Library;
 use serde::Serialize;
 
 use crate::gen::store::{HashedScript, HashedStyle, Store};
-use crate::BuildContext;
+use crate::Context;
 
 /// Function objects of this type can be used to process content items.
 /// This type erases the front matter type, so that it's completely opaque.
-pub(crate) type ProcessorFn = Arc<dyn Fn(FileItemIndex) -> PipelineItem + Send + Sync>;
+pub(crate) type ProcessorFn<G> = Arc<dyn Fn(FileItemIndex<G>) -> PipelineItem<G> + Send + Sync>;
 
 /// Filesystem item renderable to a HTML page.
 #[derive(Clone)]
-pub(crate) struct FileItemIndex {
+pub(crate) struct FileItemIndex<D: Send + Sync> {
 	/// Original source file location.
 	pub(crate) path: Utf8PathBuf,
 	/// Processor function closure.
-	pub(crate) func: ProcessorFn,
+	pub(crate) func: ProcessorFn<D>,
 }
 
-impl FileItemIndex {
-	pub(crate) fn process(self) -> PipelineItem {
+impl<D: Send + Sync> FileItemIndex<D> {
+	pub(crate) fn process(self) -> PipelineItem<D> {
 		(self.func.clone())(self)
 	}
 }
 
-impl Debug for FileItemIndex {
+impl<D: Send + Sync> Debug for FileItemIndex<D> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.debug_struct("FileItemIndex")
 			.field("path", &self.path)
@@ -50,14 +50,14 @@ pub(crate) struct FileItemBundle {
 
 /// Metadata for a single item consumed by SSG.
 #[derive(Debug, Clone)]
-pub(crate) enum FileItem {
+pub(crate) enum FileItem<D: Send + Sync> {
 	/// Items marked as converted to `index.html`.
-	Index(FileItemIndex),
+	Index(FileItemIndex<D>),
 	/// Items marked as bundled.
 	Bundle(FileItemBundle),
 }
 
-impl FileItem {
+impl<D: Send + Sync> FileItem<D> {
 	#[inline(always)]
 	pub(crate) fn get_path(&self) -> &Utf8Path {
 		match self {
@@ -68,35 +68,35 @@ impl FileItem {
 }
 
 #[derive(Clone)]
-pub(crate) struct DeferredHtml {
+pub(crate) struct DeferredHtml<D: Send + Sync> {
 	/// Any front matter
 	pub(crate) meta: Arc<dyn Any + Send + Sync>,
-	pub(crate) lazy: Arc<dyn Fn(&Sack) -> String + Send + Sync>,
+	pub(crate) lazy: Arc<dyn Fn(&Sack<D>) -> String + Send + Sync>,
 }
 
-impl Debug for DeferredHtml {
+impl<D: Send + Sync> Debug for DeferredHtml<D> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		let ptr = &*self.lazy as *const dyn Fn(&Sack) -> String as *const () as usize;
+		let ptr = &*self.lazy as *const dyn Fn(&Sack<_>) -> String as *const () as usize;
 		f.debug_struct("DeferredHtml").field("lazy", &ptr).finish()
 	}
 }
 
 #[derive(Debug, Clone)]
 /// Marks how the asset should be processed by the SSG.
-pub(crate) enum AssetKind {
+pub(crate) enum AssetKind<D: Send + Sync> {
 	/// Data renderable to HTML. In order to process the data, a closure should be called.
-	Html(DeferredHtml),
+	Html(DeferredHtml<D>),
 	/// Bibliographical data.
 	Bibtex(Library),
 	/// Image. For now they are simply cloned to the `dist` director.
 	Image,
 }
 
-impl AssetKind {
+impl<D: Send + Sync> AssetKind<D> {
 	pub fn html<M, F>(meta: Arc<M>, f: F) -> Self
 	where
 		M: Any + Send + Sync,
-		F: Fn(&Sack) -> String + Send + Sync + 'static,
+		F: Fn(&Sack<D>) -> String + Send + Sync + 'static,
 	{
 		Self::Html(DeferredHtml {
 			meta,
@@ -107,57 +107,57 @@ impl AssetKind {
 
 /// Asset corresponding to a file on disk.
 #[derive(Debug)]
-pub(crate) struct Asset {
+pub(crate) struct Asset<D: Send + Sync> {
 	/// The kind of a processed asset.
-	pub kind: AssetKind,
+	pub kind: AssetKind<D>,
 	/// File metadata
-	pub meta: FileItem,
+	pub meta: FileItem<D>,
 }
 
 /// Dynamically generated asset not corresponding to any file on disk. This is useful when the
 /// generated page is not a content page, e.g. page list.
-pub(crate) struct Virtual(pub Box<dyn Fn(&Sack) -> String + Send + Sync>);
+pub(crate) struct Virtual<D: Send + Sync>(pub Box<dyn Fn(&Sack<D>) -> String + Send + Sync>);
 
-impl Virtual {
-	pub fn new(call: impl Fn(&Sack) -> String + Send + Sync + 'static) -> Self {
+impl<D: Send + Sync> Virtual<D> {
+	pub fn new(call: impl Fn(&Sack<D>) -> String + Send + Sync + 'static) -> Self {
 		Self(Box::new(call))
 	}
 }
 
-impl Debug for Virtual {
+impl<D: Send + Sync> Debug for Virtual<D> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		// rust mental gymnastics moment
-		let ptr = &*self.0 as *const dyn Fn(&Sack) -> String as *const () as usize;
+		let ptr = &*self.0 as *const dyn Fn(&Sack<D>) -> String as *const () as usize;
 		f.debug_tuple("Virtual").field(&ptr).finish()
 	}
 }
 
 /// The kind of an output item.
 #[derive(Debug)]
-pub(crate) enum OutputKind {
+pub(crate) enum OutputKind<D: Send + Sync> {
 	/// Marks an output item which corresponds to a file on disk.
-	Asset(Asset),
+	Asset(Asset<D>),
 	/// Marks an output item which doesn't correspond to any file.
-	Virtual(Virtual),
+	Virtual(Virtual<D>),
 }
 
-impl From<Asset> for OutputKind {
-	fn from(value: Asset) -> Self {
+impl<D: Send + Sync> From<Asset<D>> for OutputKind<D> {
+	fn from(value: Asset<D>) -> Self {
 		OutputKind::Asset(value)
 	}
 }
 
-impl From<Virtual> for OutputKind {
-	fn from(value: Virtual) -> Self {
+impl<D: Send + Sync> From<Virtual<D>> for OutputKind<D> {
+	fn from(value: Virtual<D>) -> Self {
 		OutputKind::Virtual(value)
 	}
 }
 
 /// Renderable output
 #[derive(Debug)]
-pub(crate) struct Output {
+pub(crate) struct Output<D: Send + Sync> {
 	/// The kind of an output item
-	pub(crate) kind: OutputKind,
+	pub(crate) kind: OutputKind<D>,
 	/// Path for the output in dist
 	pub(crate) path: Utf8PathBuf,
 }
@@ -165,27 +165,27 @@ pub(crate) struct Output {
 /// Items currently in the pipeline. In order for an item to be rendered, it needs to be marked as
 /// `Take`, which means it needs to have an output location assigned to itself.
 #[derive(Debug)]
-pub(crate) enum PipelineItem {
+pub(crate) enum PipelineItem<D: Send + Sync> {
 	/// Unclaimed file.
-	Skip(FileItem),
+	Skip(FileItem<D>),
 	/// Data ready to be processed.
-	Take(Output),
+	Take(Output<D>),
 }
 
-impl From<FileItem> for PipelineItem {
-	fn from(value: FileItem) -> Self {
+impl<D: Send + Sync> From<FileItem<D>> for PipelineItem<D> {
+	fn from(value: FileItem<D>) -> Self {
 		Self::Skip(value)
 	}
 }
 
-impl From<Output> for PipelineItem {
-	fn from(value: Output) -> Self {
+impl<D: Send + Sync> From<Output<D>> for PipelineItem<D> {
+	fn from(value: Output<D>) -> Self {
 		Self::Take(value)
 	}
 }
 
-impl From<PipelineItem> for Option<Output> {
-	fn from(value: PipelineItem) -> Self {
+impl<D: Send + Sync> From<PipelineItem<D>> for Option<Output<D>> {
+	fn from(value: PipelineItem<D>) -> Self {
 		match value {
 			PipelineItem::Skip(_) => None,
 			PipelineItem::Take(e) => Some(e),
@@ -195,9 +195,9 @@ impl From<PipelineItem> for Option<Output> {
 
 /// This struct allows for querying the website hierarchy. It is passed to each rendered website
 /// page, so that it can easily access the website metadata.
-pub struct Sack<'a> {
+pub struct Sack<'a, D: Send + Sync> {
 	/// TODO: make Sack parametric over this type
-	pub ctx: &'a BuildContext,
+	pub ctx: &'a Context<D>,
 	/// Current path for the page being rendered
 	pub path: &'a Utf8Path,
 	/// Processed artifacts (styles, scripts, etc.)
@@ -205,10 +205,10 @@ pub struct Sack<'a> {
 	/// Original file location for this page
 	pub(crate) file: Option<&'a Utf8Path>,
 	/// All of the content on the page.
-	pub(crate) hole: &'a [&'a Output],
+	pub(crate) hole: &'a [&'a Output<D>],
 }
 
-impl<'a> Sack<'a> {
+impl<'a, D: Send + Sync> Sack<'a, D> {
 	pub fn get_meta<M: 'static>(&self, pattern: &str) -> Vec<(&Utf8Path, &M)> {
 		let pattern = glob::Pattern::new(pattern).expect("Bad glob pattern");
 

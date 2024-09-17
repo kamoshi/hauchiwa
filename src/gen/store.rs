@@ -28,7 +28,7 @@ pub struct Store {
 	pub javascript: HashMap<String, HashedScript>,
 }
 
-pub(crate) fn build_store(ws: &Website, content: &[Output]) -> Store {
+pub(crate) fn build_store<G: Send + Sync>(ws: &Website<G>, content: &[Output<G>]) -> Store {
 	let store = Store {
 		images: build_store_images(content, ".cache".into()),
 		styles: build_store_styles(),
@@ -54,14 +54,14 @@ pub(crate) fn build_store(ws: &Website, content: &[Output]) -> Store {
 /// # Returns
 ///
 /// A `HashMap` where the keys are the original paths of the images and the values are the paths to the optimized images in the cache.
-pub(crate) fn build_store_images(
-	content: &[Output],
+pub(crate) fn build_store_images<G: Send + Sync>(
+	content: &[Output<G>],
 	cache: &Utf8Path,
 ) -> HashMap<Utf8PathBuf, Utf8PathBuf> {
 	println!("Optimizing images. Cache in {}", cache);
 	let now = std::time::Instant::now();
 
-	let images: Vec<&Output> = content
+	let images: Vec<&Output<G>> = content
 		.par_iter()
 		.filter(|&e| match e.kind {
 			OutputKind::Asset(ref a) => matches!(a.kind, AssetKind::Image),
@@ -74,7 +74,10 @@ pub(crate) fn build_store_images(
 	hashes
 }
 
-fn hash_assets(cache: &Utf8Path, items: &[&Output]) -> HashMap<Utf8PathBuf, Utf8PathBuf> {
+fn hash_assets<G: Send + Sync>(
+	cache: &Utf8Path,
+	items: &[&Output<G>],
+) -> HashMap<Utf8PathBuf, Utf8PathBuf> {
 	fs::create_dir_all(cache).unwrap();
 
 	items

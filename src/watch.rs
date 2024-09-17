@@ -19,12 +19,12 @@ use crate::gen::content::build_content;
 use crate::gen::copy_recursively;
 use crate::gen::store::{build_store_styles, Store};
 use crate::tree::Output;
-use crate::BuildContext;
+use crate::Context;
 
-pub(crate) fn watch(
-	ctx: &BuildContext,
-	loaders: &[Collection],
-	mut state: Vec<Rc<Output>>,
+pub(crate) fn watch<G: Send + Sync + 'static>(
+	ctx: &Context<G>,
+	loaders: &[Collection<G>],
+	mut state: Vec<Rc<Output<G>>>,
 	mut store: Store,
 ) -> Result<()> {
 	let root = env::current_dir().unwrap();
@@ -71,7 +71,7 @@ pub(crate) fn watch(
 		}
 
 		{
-			let items: Vec<Rc<Output>> = paths
+			let items: Vec<Rc<Output<G>>> = paths
 				.iter()
 				.filter_map(|path| loaders.iter().find_map(|item| item.get_maybe(path)))
 				.filter_map(Option::from)
@@ -80,8 +80,8 @@ pub(crate) fn watch(
 
 			if !items.is_empty() {
 				let state_next = update_stream(&state, &items);
-				let abc: Vec<&Output> = items.iter().map(AsRef::as_ref).collect();
-				let xyz: Vec<&Output> = state_next.iter().map(AsRef::as_ref).collect();
+				let abc: Vec<&Output<G>> = items.iter().map(AsRef::as_ref).collect();
+				let xyz: Vec<&Output<G>> = state_next.iter().map(AsRef::as_ref).collect();
 				build_content(ctx, &store, &abc, &xyz);
 				state = state_next;
 				dirty = true;
@@ -99,8 +99,11 @@ pub(crate) fn watch(
 	Ok(())
 }
 
-fn update_stream(old: &[Rc<Output>], new: &[Rc<Output>]) -> Vec<Rc<Output>> {
-	let mut map: HashMap<&Utf8Path, Rc<Output>> = HashMap::new();
+fn update_stream<G: Send + Sync>(
+	old: &[Rc<Output<G>>],
+	new: &[Rc<Output<G>>],
+) -> Vec<Rc<Output<G>>> {
+	let mut map: HashMap<&Utf8Path, Rc<Output<G>>> = HashMap::new();
 
 	for output in old.iter().chain(new) {
 		map.insert(&output.path, output.clone());

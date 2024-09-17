@@ -11,21 +11,23 @@ use crate::{
 	Bibliography, Outline, Sack,
 };
 
-type ReaderFn = fn(&str, &Sack, &Utf8Path, Option<&Library>) -> (String, Outline, Bibliography);
+type ReaderFn<G> =
+	fn(&str, &Sack<G>, &Utf8Path, Option<&Library>) -> (String, Outline, Bibliography);
 
 #[derive(Clone, Copy)]
-pub struct Processor<D> {
+pub struct Processor<G: Send + Sync, D> {
 	/// Convert a single document to HTML.
-	pub read_content: ReaderFn,
+	pub read_content: ReaderFn<G>,
 	/// Render the website page for this document.
-	pub to_html: fn(&D, &str, &Sack, Outline, Bibliography) -> String,
+	pub to_html: fn(&D, &str, &Sack<G>, Outline, Bibliography) -> String,
 }
 
-impl<D> Processor<D>
+impl<G, M> Processor<G, M>
 where
-	D: for<'de> Deserialize<'de> + Send + Sync + 'static,
+	G: Send + Sync + 'static,
+	M: for<'de> Deserialize<'de> + Send + Sync + 'static,
 {
-	fn init(self) -> impl Fn(FileItemIndex) -> PipelineItem {
+	fn init(self) -> impl Fn(FileItemIndex<G>) -> PipelineItem<G> {
 		let Processor {
 			read_content,
 			to_html,
@@ -45,7 +47,7 @@ where
 			let path = dir.join("index.html");
 
 			let data = fs::read_to_string(&index.path).unwrap();
-			let (meta, content) = parse_meta::<D>(&data);
+			let (meta, content) = parse_meta::<M>(&data);
 			let meta = Arc::new(meta);
 
 			Output {
@@ -82,26 +84,26 @@ where
 	)
 }
 
-struct LoaderGlob {
+struct LoaderGlob<G: Send + Sync> {
 	base: &'static str,
 	glob: &'static str,
 	exts: HashSet<&'static str>,
-	func: ProcessorFn,
+	func: ProcessorFn<G>,
 }
 
-enum Loader {
-	Glob(LoaderGlob),
+enum Loader<G: Send + Sync> {
+	Glob(LoaderGlob<G>),
 }
 
-pub struct Collection(Loader);
+pub struct Collection<G: Send + Sync>(Loader<G>);
 
-impl Collection {
+impl<G: Send + Sync + 'static> Collection<G> {
 	/// Collect file items from file system for further processing.
 	pub fn glob_with<D>(
 		base: &'static str,
 		glob: &'static str,
 		exts: HashSet<&'static str>,
-		processor: Processor<D>,
+		processor: Processor<G, D>,
 	) -> Self
 	where
 		D: for<'de> Deserialize<'de> + Send + Sync + 'static,
@@ -114,7 +116,7 @@ impl Collection {
 		}))
 	}
 
-	pub(crate) fn get_maybe(&self, path: &Utf8Path) -> Option<PipelineItem> {
+	pub(crate) fn get_maybe(&self, path: &Utf8Path) -> Option<PipelineItem<G>> {
 		let Loader::Glob(loader) = &self.0;
 
 		let pattern = Utf8Path::new(loader.base).join(loader.glob);
@@ -136,7 +138,7 @@ impl Collection {
 		}
 	}
 
-	pub(crate) fn load(&self) -> Vec<FileItem> {
+	pub(crate) fn load(&self) -> Vec<FileItem<G>> {
 		match &self.0 {
 			Loader::Glob(loader) => {
 				let glob = Utf8Path::new(loader.base).join(loader.glob);
@@ -147,13 +149,17 @@ impl Collection {
 	}
 }
 
-impl Debug for Collection {
+impl<G: Send + Sync> Debug for Collection<G> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.debug_struct("Collection").finish()
 	}
 }
 
-fn to_source(path: Utf8PathBuf, exts: &HashSet<&'static str>, func: ProcessorFn) -> FileItem {
+fn to_source<G: Send + Sync>(
+	path: Utf8PathBuf,
+	exts: &HashSet<&'static str>,
+	func: ProcessorFn<G>,
+) -> FileItem<G> {
 	let has_ext = path.extension().map_or(false, |ext| exts.contains(ext));
 
 	match has_ext {
@@ -162,7 +168,11 @@ fn to_source(path: Utf8PathBuf, exts: &HashSet<&'static str>, func: ProcessorFn)
 	}
 }
 
-fn load_glob(pattern: &str, exts: &HashSet<&'static str>, func: &ProcessorFn) -> Vec<FileItem> {
+fn load_glob<G: Send + Sync>(
+	pattern: &str,
+	exts: &HashSet<&'static str>,
+	func: &ProcessorFn<G>,
+) -> Vec<FileItem<G>> {
 	glob(pattern)
 		.expect("Invalid glob pattern")
 		.filter_map(|path| {

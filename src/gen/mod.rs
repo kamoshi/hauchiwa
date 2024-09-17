@@ -13,7 +13,7 @@ use crate::gen::pagefind::build_pagefind;
 use crate::gen::store::{build_store, Store};
 use crate::tree::FileItem;
 use crate::tree::{Asset, AssetKind, Output, PipelineItem};
-use crate::{BuildContext, Website};
+use crate::{Context, Website};
 
 pub(crate) fn clean_dist() {
 	println!("Cleaning dist");
@@ -41,10 +41,13 @@ pub(crate) fn copy_recursively(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> 
 	Ok(())
 }
 
-pub(crate) fn build(ctx: &BuildContext, ws: &Website) -> (Vec<Rc<Output>>, Store) {
+pub(crate) fn build<G: Send + Sync + Clone + 'static>(
+	ctx: &Context<G>,
+	ws: &Website<G>,
+) -> (Vec<Rc<Output<G>>>, Store) {
 	clean_dist();
 
-	let content: Vec<Output> = ws
+	let content: Vec<Output<G>> = ws
 		.loaders
 		.iter()
 		.flat_map(Collection::load)
@@ -77,7 +80,7 @@ pub(crate) fn build(ctx: &BuildContext, ws: &Website) -> (Vec<Rc<Output>>, Store
 	)
 }
 
-fn to_bundle(item: PipelineItem) -> PipelineItem {
+fn to_bundle<G: Send + Sync>(item: PipelineItem<G>) -> PipelineItem<G> {
 	let meta = match item {
 		PipelineItem::Skip(FileItem::Bundle(bundle)) => bundle,
 		_ => return item,

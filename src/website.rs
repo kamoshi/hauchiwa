@@ -7,36 +7,36 @@ use crate::collection::Collection;
 use crate::gen::build;
 use crate::tree::{Output, Sack, Virtual};
 use crate::watch::watch;
-use crate::{BuildContext, Mode};
+use crate::{Context, Mode};
 
 /// This struct represents the website which will be built by the generator. The infividual
 /// settings can be set by calling the `design` function.
 #[derive(Debug)]
-pub struct Website {
-	pub(crate) loaders: Vec<Collection>,
+pub struct Website<G: Send + Sync> {
+	pub(crate) loaders: Vec<Collection<G>>,
 	pub(crate) dist: Utf8PathBuf,
 	pub(crate) dist_js: Utf8PathBuf,
-	pub(crate) special: Vec<Rc<Output>>,
+	pub(crate) special: Vec<Rc<Output<G>>>,
 	pub(crate) javascript: HashMap<&'static str, &'static str>,
 }
 
-impl Website {
-	pub fn design() -> WebsiteDesigner {
-		WebsiteDesigner::default()
+impl<G: Send + Sync + Clone + 'static> Website<G> {
+	pub fn design() -> WebsiteDesigner<G> {
+		WebsiteDesigner::new()
 	}
 
-	pub fn build(&self) {
-		let ctx = BuildContext {
+	pub fn build(&self, global: G) {
+		let ctx = Context {
 			mode: Mode::Build,
-			..Default::default()
+			data: global,
 		};
 		let _ = build(&ctx, self);
 	}
 
-	pub fn watch(&self) {
-		let ctx = BuildContext {
+	pub fn watch(&self, global: G) {
+		let ctx = Context {
 			mode: Mode::Watch,
-			..Default::default()
+			data: global,
 		};
 		let (state, artifacts) = crate::gen::build(&ctx, self);
 		watch(&ctx, &self.loaders, state, artifacts).unwrap()
@@ -45,19 +45,35 @@ impl Website {
 
 /// A builder struct for creating a `Website` with specified settings.
 #[derive(Debug, Default)]
-pub struct WebsiteDesigner {
-	loaders: Vec<Collection>,
-	special: Vec<Rc<Output>>,
+pub struct WebsiteDesigner<G: Send + Sync> {
+	loaders: Vec<Collection<G>>,
+	special: Vec<Rc<Output<G>>>,
 	js: HashMap<&'static str, &'static str>,
 }
 
-impl WebsiteDesigner {
-	pub fn add_loaders(mut self, loaders: impl IntoIterator<Item = Collection>) -> Self {
-		self.loaders.extend(loaders);
+impl<G: Send + Sync + 'static> WebsiteDesigner<G> {
+	fn new() -> Self {
+		Self {
+			loaders: Vec::default(),
+			special: Vec::default(),
+			js: HashMap::default(),
+		}
+	}
+
+	pub fn add_collections(mut self, collections: impl IntoIterator<Item = Collection<G>>) -> Self {
+		self.loaders.extend(collections);
 		self
 	}
 
-	pub fn add_virtual(mut self, func: fn(&Sack) -> String, path: Utf8PathBuf) -> Self {
+	pub fn add_scripts(
+		mut self,
+		scripts: impl IntoIterator<Item = (&'static str, &'static str)>,
+	) -> Self {
+		self.js.extend(scripts);
+		self
+	}
+
+	pub fn add_virtual(mut self, func: fn(&Sack<G>) -> String, path: Utf8PathBuf) -> Self {
 		self.special.push(
 			Output {
 				kind: Virtual::new(func).into(),
@@ -68,12 +84,7 @@ impl WebsiteDesigner {
 		self
 	}
 
-	pub fn js(mut self, alias: &'static str, path: &'static str) -> Self {
-		self.js.insert(alias, path);
-		self
-	}
-
-	pub fn finish(self) -> Website {
+	pub fn finish(self) -> Website<G> {
 		Website {
 			loaders: self.loaders,
 			dist: "dist".into(),

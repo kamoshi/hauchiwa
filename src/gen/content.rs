@@ -5,20 +5,25 @@ use camino::Utf8Path;
 
 use crate::gen::store::Store;
 use crate::tree::{AssetKind, DeferredHtml, Output, OutputKind, Virtual};
-use crate::{BuildContext, Sack};
+use crate::{Context, Sack};
 
-pub(crate) fn build_content(
-	ctx: &BuildContext,
+pub(crate) fn build_content<G: Send + Sync>(
+	ctx: &Context<G>,
 	store: &Store,
-	pending: &[&Output],
-	hole: &[&Output],
+	pending: &[&Output<G>],
+	hole: &[&Output<G>],
 ) {
 	let now = std::time::Instant::now();
 	render_all(ctx, store, pending, hole);
 	println!("Elapsed: {:.2?}", now.elapsed());
 }
 
-fn render_all(ctx: &BuildContext, store: &Store, pending: &[&Output], hole: &[&Output]) {
+fn render_all<G: Send + Sync>(
+	ctx: &Context<G>,
+	store: &Store,
+	pending: &[&Output<G>],
+	hole: &[&Output<G>],
+) {
 	pending
 		.iter()
 		.map(|&item| {
@@ -41,7 +46,7 @@ fn render_all(ctx: &BuildContext, store: &Store, pending: &[&Output], hole: &[&O
 		.collect()
 }
 
-fn render(item: &Output, sack: Sack) {
+fn render<G: Send + Sync>(item: &Output<G>, sack: Sack<G>) {
 	let dist = Utf8Path::new("dist");
 	let o = dist.join(&item.path);
 	fs::create_dir_all(o.parent().unwrap()).unwrap();
