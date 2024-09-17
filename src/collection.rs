@@ -27,11 +27,9 @@ where
 	G: Send + Sync + 'static,
 	M: for<'de> Deserialize<'de> + Send + Sync + 'static,
 {
-	fn init(self) -> impl Fn(FileItemIndex<G>) -> PipelineItem<G> {
-		let Processor {
-			read_content,
-			to_html,
-		} = self;
+	fn init(&self) -> impl Fn(FileItemIndex<G>) -> PipelineItem<G> {
+		let read_content = self.read_content;
+		let to_html = self.to_html;
 
 		move |index| {
 			let dir = index

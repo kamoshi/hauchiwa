@@ -26,8 +26,8 @@ pub(crate) struct FileItemIndex<D: Send + Sync> {
 	pub(crate) func: ProcessorFn<D>,
 }
 
-impl<D: Send + Sync> FileItemIndex<D> {
-	pub(crate) fn process(self) -> PipelineItem<D> {
+impl<G: Send + Sync> FileItemIndex<G> {
+	pub(crate) fn process(self) -> PipelineItem<G> {
 		(self.func.clone())(self)
 	}
 }

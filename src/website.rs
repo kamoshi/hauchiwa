@@ -9,20 +9,25 @@ use crate::tree::{Output, Sack, Virtual};
 use crate::watch::watch;
 use crate::{Context, Mode};
 
-/// This struct represents the website which will be built by the generator. The infividual
-/// settings can be set by calling the `design` function.
+/// This struct represents the website which will be built by the generator. The individual
+/// settings can be set by calling the `setup` function.
+///
+/// The `G` type parameter is the global data container accessible in every page renderer as `ctx.data`,
+/// though it can be replaced with the `()` Unit if you don't need to pass any data.
 #[derive(Debug)]
 pub struct Website<G: Send + Sync> {
-	pub(crate) loaders: Vec<Collection<G>>,
-	pub(crate) dist: Utf8PathBuf,
+	/// Rendered assets and content are outputted to this directory.
+	pub(crate) dir_dist: Utf8PathBuf,
+	/// All collections added to this website. The collections are the source of rendered pages.
+	pub(crate) collections: Vec<Collection<G>>,
 	pub(crate) dist_js: Utf8PathBuf,
 	pub(crate) special: Vec<Rc<Output<G>>>,
 	pub(crate) javascript: HashMap<&'static str, &'static str>,
 }
 
-impl<G: Send + Sync + Clone + 'static> Website<G> {
-	pub fn design() -> WebsiteDesigner<G> {
-		WebsiteDesigner::new()
+impl<G: Send + Sync + 'static> Website<G> {
+	pub fn setup() -> WebsiteCreator<G> {
+		WebsiteCreator::new()
 	}
 
 	pub fn build(&self, global: G) {
@@ -39,19 +44,19 @@ impl<G: Send + Sync + Clone + 'static> Website<G> {
 			data: global,
 		};
 		let (state, artifacts) = crate::gen::build(&ctx, self);
-		watch(&ctx, &self.loaders, state, artifacts).unwrap()
+		watch(&ctx, &self.collections, state, artifacts).unwrap()
 	}
 }
 
 /// A builder struct for creating a `Website` with specified settings.
 #[derive(Debug, Default)]
-pub struct WebsiteDesigner<G: Send + Sync> {
+pub struct WebsiteCreator<G: Send + Sync> {
 	loaders: Vec<Collection<G>>,
 	special: Vec<Rc<Output<G>>>,
 	js: HashMap<&'static str, &'static str>,
 }
 
-impl<G: Send + Sync + 'static> WebsiteDesigner<G> {
+impl<G: Send + Sync + 'static> WebsiteCreator<G> {
 	fn new() -> Self {
 		Self {
 			loaders: Vec::default(),
@@ -86,8 +91,8 @@ impl<G: Send + Sync + 'static> WebsiteDesigner<G> {
 
 	pub fn finish(self) -> Website<G> {
 		Website {
-			loaders: self.loaders,
-			dist: "dist".into(),
+			dir_dist: "dist".into(),
+			collections: self.loaders,
 			dist_js: "js".into(),
 			special: self.special,
 			javascript: self.js,

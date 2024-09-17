@@ -41,18 +41,18 @@ pub(crate) fn copy_recursively(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> 
 	Ok(())
 }
 
-pub(crate) fn build<G: Send + Sync + Clone + 'static>(
+pub(crate) fn build<G: Send + Sync + 'static>(
 	ctx: &Context<G>,
-	ws: &Website<G>,
+	website: &Website<G>,
 ) -> (Vec<Rc<Output<G>>>, Store) {
 	clean_dist();
 
-	let content: Vec<Output<G>> = ws
-		.loaders
+	let content: Vec<Output<G>> = website
+		.collections
 		.iter()
 		.flat_map(Collection::load)
-		.map(|x| match &x {
-			FileItem::Index(index) => index.clone().process(),
+		.map(|x| match x {
+			FileItem::Index(index) => index.process(),
 			FileItem::Bundle(_) => PipelineItem::Skip(x),
 		})
 		.map(to_bundle)
@@ -61,20 +61,20 @@ pub(crate) fn build<G: Send + Sync + Clone + 'static>(
 
 	let assets: Vec<_> = content
 		.iter()
-		.chain(ws.special.iter().map(AsRef::as_ref))
+		.chain(website.special.iter().map(AsRef::as_ref))
 		.collect();
 
-	let store = build_store(ws, &content);
+	let store = build_store(website, &content);
 
 	build_content(ctx, &store, &assets, &assets);
 	build_static();
-	build_pagefind(&ws.dist);
+	build_pagefind(&website.dir_dist);
 
 	(
 		content
 			.into_iter()
 			.map(Rc::new)
-			.chain(ws.special.iter().map(ToOwned::to_owned))
+			.chain(website.special.iter().map(ToOwned::to_owned))
 			.collect(),
 		store,
 	)

@@ -32,7 +32,7 @@ pub(crate) fn build_store<G: Send + Sync>(ws: &Website<G>, content: &[Output<G>]
 	let store = Store {
 		images: build_store_images(content, ".cache".into()),
 		styles: build_store_styles(),
-		javascript: build_js(&ws.javascript, &ws.dist, &ws.dist_js),
+		javascript: build_js(&ws.javascript, &ws.dir_dist, &ws.dist_js),
 	};
 
 	copy_recursively(".cache", "dist/hash").unwrap();
