@@ -21,7 +21,7 @@ use crate::tree::{AssetKind, Output, OutputKind};
 use crate::utils::hex;
 use crate::Website;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Store {
 	pub images: HashMap<Utf8PathBuf, Utf8PathBuf>,
 	pub styles: HashMap<String, HashedStyle>,

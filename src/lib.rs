@@ -1,16 +1,18 @@
 #![doc = include_str!("../README.md")]
+mod builder;
 mod collection;
 mod content;
-mod gen;
-mod tree;
+// mod gen;
+// mod tree;
 mod utils;
-mod watch;
+// mod watch;
+mod generator;
 mod website;
 
-pub use crate::collection::{Collection, Processor};
+pub use crate::collection::Collection;
 pub use crate::content::{Bibliography, Outline};
-pub use crate::gen::store::{HashedScript, HashedStyle, Store};
-pub use crate::tree::Sack;
+// pub use crate::gen::store::{HashedScript, HashedStyle, Store};
+pub use crate::generator::Sack;
 pub use crate::website::{Website, WebsiteCreator};
 
 #[derive(Debug, Clone, Copy)]

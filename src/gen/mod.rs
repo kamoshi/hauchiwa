@@ -15,48 +15,16 @@ use crate::tree::FileItem;
 use crate::tree::{Asset, AssetKind, Output, PipelineItem};
 use crate::{Context, Website};
 
-pub(crate) fn clean_dist() {
-	println!("Cleaning dist");
-	if fs::metadata("dist").is_ok() {
-		fs::remove_dir_all("dist").unwrap();
-	}
-	fs::create_dir("dist").unwrap();
-}
-
-pub(crate) fn build_static() {
-	copy_recursively(std::path::Path::new("public"), std::path::Path::new("dist")).unwrap();
-}
-
-pub(crate) fn copy_recursively(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io::Result<()> {
-	fs::create_dir_all(&dst)?;
-	for entry in fs::read_dir(src)? {
-		let entry = entry?;
-		let filetype = entry.file_type()?;
-		if filetype.is_dir() {
-			copy_recursively(entry.path(), dst.as_ref().join(entry.file_name()))?;
-		} else {
-			fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
-		}
-	}
-	Ok(())
-}
-
 pub(crate) fn build<G: Send + Sync + 'static>(
-	ctx: &Context<G>,
 	website: &Website<G>,
+	context: &Context<G>,
 ) -> (Vec<Rc<Output<G>>>, Store) {
 	clean_dist();
 
-	let content: Vec<Output<G>> = website
+	let content: Vec<_> = website
 		.collections
 		.iter()
 		.flat_map(Collection::load)
-		.map(|x| match x {
-			FileItem::Index(index) => index.process(),
-			FileItem::Bundle(_) => PipelineItem::Skip(x),
-		})
-		.map(to_bundle)
-		.filter_map(Option::from)
 		.collect();
 
 	let assets: Vec<_> = content
@@ -66,7 +34,7 @@ pub(crate) fn build<G: Send + Sync + 'static>(
 
 	let store = build_store(website, &content);
 
-	build_content(ctx, &store, &assets, &assets);
+	build_content(context, &store, &assets, &assets);
 	build_static();
 	build_pagefind(&website.dir_dist);
 
