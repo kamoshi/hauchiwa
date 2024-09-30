@@ -1,8 +1,8 @@
-use std::any::Any;
 use std::fmt::Debug;
 use std::fs;
 use std::io::Write;
 use std::sync::Arc;
+use std::{any::Any, collections::HashMap};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use gray_matter::{engine::YAML, Matter};
@@ -84,30 +84,6 @@ pub(crate) struct InputItem {
 	pub(crate) data: Input,
 }
 
-impl InputItem {
-	/** **IO** */
-	pub(crate) fn build(&self) -> Utf8PathBuf {
-		match &self.data {
-			Input::Content(input_content) => "".into(),
-			Input::Library(input_library) => "".into(),
-			Input::Picture => "".into(),
-			Input::Stylesheet(input) => {
-				let hash = crate::utils::hex(&self.hash);
-				let path = Utf8Path::new("hash").join(&hash).with_extension("css");
-
-				let path_root = Utf8Path::new("/").join(&path);
-				let path_dist = Utf8Path::new("dist").join(&path);
-
-				println!("CSS: {}", path_dist);
-				fs::create_dir_all(path_dist.parent().unwrap_or(&path_dist)).unwrap();
-				fs::write(&path_dist, &input.stylesheet).unwrap();
-
-				path_root
-			}
-		}
-	}
-}
-
 /// Task function pointer used to dynamically generate a website page.
 type TaskFnPtr<G> = Arc<dyn Fn(Sack<G>) -> Vec<(Utf8PathBuf, String)>>;
 
@@ -143,5 +119,50 @@ impl<G: Send + Sync> Task<G> {
 impl<G: Send + Sync> Debug for Task<G> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		write!(f, "Task(*)")
+	}
+}
+
+pub(crate) struct Scheduler {
+	state: HashMap<Vec<u8>, Utf8PathBuf>,
+}
+
+impl Scheduler {
+	pub(crate) fn new() -> Self {
+		Self {
+			state: HashMap::new(),
+		}
+	}
+
+	/** **Pure** */
+	pub(crate) fn check(&self, input: &InputItem) -> Option<Utf8PathBuf> {
+		match &input.data {
+			Input::Content(input_content) => None,
+			Input::Library(input_library) => None,
+			Input::Picture => None,
+			Input::Stylesheet(input_stylesheet) => self.state.get(&input.hash).cloned(),
+		}
+	}
+
+	/** **IO** */
+	pub(crate) fn build(&mut self, input: &InputItem) -> Utf8PathBuf {
+		match &input.data {
+			Input::Content(input_content) => "".into(),
+			Input::Library(input_library) => "".into(),
+			Input::Picture => "".into(),
+			Input::Stylesheet(stylesheet) => {
+				let hash = crate::utils::hex(&input.hash);
+				let path = Utf8Path::new("hash").join(&hash).with_extension("css");
+
+				let path_root = Utf8Path::new("/").join(&path);
+				let path_dist = Utf8Path::new("dist").join(&path);
+
+				println!("CSS: {}", path_dist);
+				fs::create_dir_all(path_dist.parent().unwrap_or(&path_dist)).unwrap();
+				fs::write(&path_dist, &stylesheet.stylesheet).unwrap();
+
+				self.state.insert(input.hash.clone(), path_root.clone());
+				path_root
+			}
+		}
 	}
 }

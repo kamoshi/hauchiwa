@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 use base64::Engine;
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::GlobError;
 use sha2::{Digest, Sha256};
 
-use crate::builder::{Input, InputItem, InputStylesheet};
+use crate::builder::{Input, InputItem, InputStylesheet, Scheduler};
 use crate::{Collection, Context, Website};
 
 #[derive(Debug)]
@@ -25,6 +26,8 @@ pub struct Sack<'a, G: Send + Sync> {
 	context: &'a Context<G>,
 	/// Every single input.
 	items: &'a [&'a InputItem],
+	/// Scheduler manages the build process
+	scheduler: Arc<RwLock<Scheduler>>,
 	// /// Current path for the page being rendered
 	// path: &'a Utf8Path,
 	// /// Processed artifacts (styles, scripts, etc.)
@@ -95,12 +98,17 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 	/// Get compiled CSS style by alias.
 	pub fn get_styles(&self, path: &Utf8Path) -> Option<Utf8PathBuf> {
 		let &item = self.items.iter().find(|item| item.file == path)?;
-
-		if matches!(item.data, Input::Stylesheet(..)) {
-			return Some(item.build());
+		if !matches!(item.data, Input::Stylesheet(..)) {
+			return None;
 		}
 
-		None
+		let res = self.scheduler.read().unwrap().check(item);
+		if res.is_some() {
+			return res;
+		}
+
+		let res = self.scheduler.write().unwrap().build(item);
+		Some(res)
 	}
 
 	/// Get optimized image path by original path.
@@ -166,16 +174,14 @@ pub(crate) fn build<G: Send + Sync + 'static>(website: &Website<G>, context: &Co
 		.chain(load_styles(&website.global_styles))
 		.collect();
 
-	for item in items.iter() {
-		item.build();
-	}
-
+	let scheduler = Arc::new(RwLock::new(Scheduler::new()));
 	let items_ptr = items.iter().collect::<Vec<_>>();
 
 	for task in website.tasks.iter() {
 		task.run(Sack {
 			context,
 			items: &items_ptr,
+			scheduler: scheduler.clone(),
 		});
 	}
 
