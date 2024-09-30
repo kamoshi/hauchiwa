@@ -75,6 +75,7 @@ pub(crate) enum Input {
 	Library(InputLibrary),
 	Picture,
 	Stylesheet(InputStylesheet),
+	Script,
 }
 
 #[derive(Debug)]
@@ -141,6 +142,7 @@ impl Scheduler {
 			Input::Library(_) => None,
 			Input::Picture => self.state.get(&input.hash).cloned(),
 			Input::Stylesheet(_) => self.state.get(&input.hash).cloned(),
+			Input::Script => self.state.get(&input.hash).cloned(),
 		}
 	}
 
@@ -181,6 +183,20 @@ impl Scheduler {
 				println!("CSS: {}", path_dist);
 				fs::create_dir_all(path_dist.parent().unwrap_or(&path_dist)).unwrap();
 				fs::write(&path_dist, &stylesheet.stylesheet).unwrap();
+
+				self.state.insert(input.hash.clone(), path_root.clone());
+				path_root
+			}
+			Input::Script => {
+				let hash = crate::utils::hex(&input.hash);
+				let path = Utf8Path::new("hash").join(&hash).with_extension("js");
+
+				let path_root = Utf8Path::new("/").join(&path);
+				let path_dist = Utf8Path::new("dist").join(&path);
+
+				println!("JS: {}", path_dist);
+				fs::create_dir_all(path_dist.parent().unwrap_or(&path_dist)).unwrap();
+				fs::copy(&input.file, path_dist).unwrap();
 
 				self.state.insert(input.hash.clone(), path_root.clone());
 				path_root

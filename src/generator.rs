@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, RwLock};
 
 use base64::Engine;
@@ -9,6 +10,7 @@ use glob::GlobError;
 use sha2::{Digest, Sha256};
 
 use crate::builder::{Input, InputItem, InputStylesheet, Scheduler};
+use crate::utils::hex;
 use crate::{Collection, Context, Website};
 
 #[derive(Debug)]
@@ -29,6 +31,7 @@ pub struct Sack<'a, G: Send + Sync> {
 	items: &'a [&'a InputItem],
 	/// Scheduler manages the build process
 	scheduler: Arc<RwLock<Scheduler>>,
+	// Global JavaScript aliases
 	// /// Current path for the page being rendered
 	// path: &'a Utf8Path,
 	// /// Processed artifacts (styles, scripts, etc.)
@@ -132,9 +135,22 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 		Some(res)
 	}
 
-	pub fn get_script(&self, alias: &str) -> Option<&Utf8Path> {
-		// todo!()
-		Some("".into())
+	pub fn get_script(&self, path: &str) -> Option<Utf8PathBuf> {
+		let path = Utf8Path::new(".cache/scripts/")
+			.join(path)
+			.with_extension("js");
+		let &item = self.items.iter().find(|item| item.file == path)?;
+		if !matches!(item.data, Input::Script) {
+			return Some("".into());
+		}
+
+		let res = self.scheduler.read().unwrap().check(item);
+		if res.is_some() {
+			return res;
+		}
+
+		let res = self.scheduler.write().unwrap().build(item);
+		Some(res)
 	}
 
 	// pub fn get_library(&self) -> Option<&Library> {
@@ -186,6 +202,7 @@ pub(crate) fn build<G: Send + Sync + 'static>(website: &Website<G>, context: &Co
 		.iter()
 		.flat_map(Collection::load)
 		.chain(load_styles(&website.global_styles))
+		.chain(load_scripts(&website.javascript))
 		.collect();
 
 	let scheduler = Arc::new(RwLock::new(Scheduler::new()));
@@ -199,17 +216,7 @@ pub(crate) fn build<G: Send + Sync + 'static>(website: &Website<G>, context: &Co
 		});
 	}
 
-	// build_static();
-	// build_pagefind(&website.dir_dist);
-
-	// (
-	// 	content
-	// 		.into_iter()
-	// 		.map(Rc::new)
-	// 		.chain(website.special.iter().map(ToOwned::to_owned))
-	// 		.collect(),
-	// 	store,
-	// )
+	build_pagefind("dist".into());
 }
 
 pub(crate) fn clean_dist() {
@@ -337,3 +344,49 @@ pub(crate) fn copy_rec(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io:
 // 		}
 // 	}
 // }
+
+fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
+	let mut cmd = Command::new("esbuild");
+
+	for (alias, path) in entrypoints.iter() {
+		cmd.arg(format!("{}={}", alias, path));
+	}
+
+	let path_scripts = Utf8Path::new(".cache/scripts/");
+
+	let res = cmd
+		.arg("--format=esm")
+		.arg("--bundle")
+		.arg("--minify")
+		.arg(format!("--outdir={}", path_scripts))
+		.output()
+		.unwrap();
+
+	let stderr = String::from_utf8(res.stderr).unwrap();
+	println!("{}", stderr);
+
+	entrypoints
+		.keys()
+		.map(|key| {
+			let file = path_scripts.join(key).with_extension("js");
+			let buffer = fs::read(&file).unwrap();
+			let hash = Vec::from_iter(Sha256::digest(buffer));
+
+			InputItem {
+				slug: file.clone(),
+				file,
+				hash,
+				data: Input::Script,
+			}
+		})
+		.collect()
+}
+
+pub(crate) fn build_pagefind(out: &Utf8Path) {
+	let res = Command::new("pagefind")
+		.args(["--site", out.as_str()])
+		.output()
+		.unwrap();
+
+	println!("{}", String::from_utf8(res.stdout).unwrap());
+}
