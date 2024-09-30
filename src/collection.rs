@@ -22,11 +22,15 @@ fn load_single(init: InitFn) -> impl Fn(Result<PathBuf, glob::GlobError>) -> Opt
 				let content = String::from_utf8_lossy(&data);
 				let (meta, content) = init.call(&content);
 
-				let slug = file.strip_prefix("content").unwrap().with_extension("");
-				let slug = match slug.file_name() {
-					Some("index") => slug.parent().map(ToOwned::to_owned).unwrap_or(slug),
-					_ => slug,
+				let area = match file.file_stem() {
+					Some("index") => file
+						.parent()
+						.map(ToOwned::to_owned)
+						.unwrap_or(file.with_extension("")),
+					_ => file.with_extension(""),
 				};
+
+				let slug = area.strip_prefix("content").unwrap().to_owned();
 
 				InputItem {
 					hash,
@@ -34,6 +38,7 @@ fn load_single(init: InitFn) -> impl Fn(Result<PathBuf, glob::GlobError>) -> Opt
 					slug,
 					data: Input::Content(InputContent {
 						init: init.clone(),
+						area,
 						meta,
 						content,
 					}),
@@ -54,9 +59,11 @@ fn load_single(init: InitFn) -> impl Fn(Result<PathBuf, glob::GlobError>) -> Opt
 				}
 			}
 			Some("jpg" | "png" | "gif") => {
+				let data = fs::read(&file).expect("Couldn't read file");
+				let hash = Vec::from_iter(Sha256::digest(&data));
 				let slug = file.strip_prefix("content").unwrap().to_owned();
 				InputItem {
-					hash: vec![],
+					hash,
 					file,
 					slug,
 					data: Input::Picture,

@@ -54,6 +54,7 @@ impl Debug for InitFn {
 #[derive(Debug)]
 pub(crate) struct InputContent {
 	pub(crate) init: InitFn,
+	pub(crate) area: Utf8PathBuf,
 	pub(crate) meta: Arc<dyn Any>,
 	pub(crate) content: String,
 }
@@ -136,10 +137,10 @@ impl Scheduler {
 	/** **Pure** */
 	pub(crate) fn check(&self, input: &InputItem) -> Option<Utf8PathBuf> {
 		match &input.data {
-			Input::Content(input_content) => None,
-			Input::Library(input_library) => None,
-			Input::Picture => None,
-			Input::Stylesheet(input_stylesheet) => self.state.get(&input.hash).cloned(),
+			Input::Content(_) => None,
+			Input::Library(_) => None,
+			Input::Picture => self.state.get(&input.hash).cloned(),
+			Input::Stylesheet(_) => self.state.get(&input.hash).cloned(),
 		}
 	}
 
@@ -148,7 +149,28 @@ impl Scheduler {
 		match &input.data {
 			Input::Content(input_content) => "".into(),
 			Input::Library(input_library) => "".into(),
-			Input::Picture => "".into(),
+			Input::Picture => {
+				let hash = crate::utils::hex(&input.hash);
+				let path = Utf8Path::new("hash").join(&hash).with_extension("webp");
+				let path_cache = Utf8Path::new(".cache").join(&path);
+
+				if !path_cache.exists() {
+					let buffer = fs::read(&input.file).unwrap();
+					let buffer = optimize_image(&buffer);
+					fs::create_dir_all(".cache/hash").unwrap();
+					fs::write(&path_cache, buffer).expect("Couldn't output optimized image");
+				}
+
+				let path_root = Utf8Path::new("/").join(&path);
+				let path_dist = Utf8Path::new("dist").join(&path);
+
+				println!("IMG: {}", path_dist);
+				fs::create_dir_all(path_dist.parent().unwrap_or(&path_dist)).unwrap();
+				fs::copy(&path_cache, path_dist).unwrap();
+
+				self.state.insert(input.hash.clone(), path_root.clone());
+				path_root
+			}
 			Input::Stylesheet(stylesheet) => {
 				let hash = crate::utils::hex(&input.hash);
 				let path = Utf8Path::new("hash").join(&hash).with_extension("css");
@@ -165,4 +187,18 @@ impl Scheduler {
 			}
 		}
 	}
+}
+
+fn optimize_image(buffer: &[u8]) -> Vec<u8> {
+	let img = image::load_from_memory(buffer).expect("Couldn't load image");
+	let dim = (img.width(), img.height());
+
+	let mut out = Vec::new();
+	let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
+
+	encoder
+		.encode(&img.to_rgba8(), dim.0, dim.1, image::ColorType::Rgba8)
+		.expect("Encoding error");
+
+	out
 }

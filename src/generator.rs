@@ -15,6 +15,7 @@ use crate::{Collection, Context, Website};
 pub struct QueryContent<'a, D> {
 	pub file: &'a Utf8Path,
 	pub slug: &'a Utf8Path,
+	pub area: &'a Utf8Path,
 	pub meta: &'a D,
 	pub content: &'a str,
 }
@@ -49,11 +50,12 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 			.iter()
 			.filter(|item| pattern.matches_path(item.slug.as_ref()))
 			.filter_map(|item| {
-				let (meta, content) = match &item.data {
+				let (area, meta, content) = match &item.data {
 					Input::Content(input_content) => {
+						let area = input_content.area.as_ref();
 						let meta = input_content.meta.downcast_ref::<D>()?;
 						let data = input_content.content.as_str();
-						Some((meta, data))
+						Some((area, meta, data))
 					}
 					_ => None,
 				}?;
@@ -61,6 +63,7 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 				Some(QueryContent {
 					file: &item.file,
 					slug: &item.slug,
+					area,
 					meta,
 					content,
 				})
@@ -76,11 +79,12 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 			.iter()
 			.filter(|item| pattern.matches_path(item.slug.as_ref()))
 			.filter_map(|item| {
-				let (meta, content) = match &item.data {
+				let (area, meta, content) = match &item.data {
 					Input::Content(input_content) => {
+						let area = input_content.area.as_ref();
 						let meta = input_content.meta.downcast_ref::<D>()?;
 						let data = input_content.content.as_str();
-						Some((meta, data))
+						Some((area, meta, data))
 					}
 					_ => None,
 				}?;
@@ -88,6 +92,7 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 				Some(QueryContent {
 					file: &item.file,
 					slug: &item.slug,
+					area,
 					meta,
 					content,
 				})
@@ -112,10 +117,19 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 	}
 
 	/// Get optimized image path by original path.
-	pub fn get_picture(&self, path: &Utf8Path) -> Option<&Utf8Path> {
-		// self.store.images.get(alias).map(AsRef::as_ref)
-		// todo!()
-		Some("".into())
+	pub fn get_picture(&self, path: &Utf8Path) -> Option<Utf8PathBuf> {
+		let &item = self.items.iter().find(|item| item.file == path)?;
+		if !matches!(item.data, Input::Picture) {
+			return Some(path.to_owned());
+		}
+
+		let res = self.scheduler.read().unwrap().check(item);
+		if res.is_some() {
+			return res;
+		}
+
+		let res = self.scheduler.write().unwrap().build(item);
+		Some(res)
 	}
 
 	pub fn get_script(&self, alias: &str) -> Option<&Utf8Path> {
