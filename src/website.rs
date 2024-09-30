@@ -24,6 +24,8 @@ pub struct Website<G: Send + Sync> {
 	// other
 	pub(crate) dist_js: Utf8PathBuf,
 	pub(crate) javascript: HashMap<&'static str, &'static str>,
+	/// Global styles
+	pub(crate) global_styles: Vec<Utf8PathBuf>,
 }
 
 impl<G: Send + Sync + 'static> Website<G> {
@@ -55,6 +57,7 @@ pub struct WebsiteCreator<G: Send + Sync> {
 	collections: Vec<Collection>,
 	tasks: Vec<Task<G>>,
 	js: HashMap<&'static str, &'static str>,
+	global_styles: Vec<Utf8PathBuf>,
 }
 
 impl<G: Send + Sync + 'static> WebsiteCreator<G> {
@@ -63,6 +66,7 @@ impl<G: Send + Sync + 'static> WebsiteCreator<G> {
 			collections: Vec::default(),
 			tasks: Vec::default(),
 			js: HashMap::default(),
+			global_styles: Vec::default(),
 		}
 	}
 
@@ -79,6 +83,11 @@ impl<G: Send + Sync + 'static> WebsiteCreator<G> {
 		self
 	}
 
+	pub fn add_global_styles(mut self, paths: impl IntoIterator<Item = Utf8PathBuf>) -> Self {
+		self.global_styles.extend(paths);
+		self
+	}
+
 	pub fn add_task(mut self, func: fn(Sack<G>) -> Vec<(Utf8PathBuf, String)>) -> Self {
 		self.tasks.push(Task::new(func));
 		self
@@ -91,6 +100,7 @@ impl<G: Send + Sync + 'static> WebsiteCreator<G> {
 			tasks: self.tasks,
 			dist_js: "js".into(),
 			javascript: self.js,
+			global_styles: self.global_styles,
 		}
 	}
 }

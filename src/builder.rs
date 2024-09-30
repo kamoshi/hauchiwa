@@ -64,10 +64,16 @@ pub(crate) struct InputLibrary {
 }
 
 #[derive(Debug)]
+pub(crate) struct InputStylesheet {
+	pub(crate) stylesheet: String,
+}
+
+#[derive(Debug)]
 pub(crate) enum Input {
 	Content(InputContent),
 	Library(InputLibrary),
 	Picture,
+	Stylesheet(InputStylesheet),
 }
 
 #[derive(Debug)]
@@ -76,6 +82,30 @@ pub(crate) struct InputItem {
 	pub(crate) file: Utf8PathBuf,
 	pub(crate) slug: Utf8PathBuf,
 	pub(crate) data: Input,
+}
+
+impl InputItem {
+	/** **IO** */
+	pub(crate) fn build(&self) -> Utf8PathBuf {
+		match &self.data {
+			Input::Content(input_content) => "".into(),
+			Input::Library(input_library) => "".into(),
+			Input::Picture => "".into(),
+			Input::Stylesheet(input) => {
+				let hash = crate::utils::hex(&self.hash);
+				let path = Utf8Path::new("hash").join(&hash).with_extension("css");
+
+				let path_root = Utf8Path::new("/").join(&path);
+				let path_dist = Utf8Path::new("dist").join(&path);
+
+				println!("CSS: {}", path_dist);
+				fs::create_dir_all(path_dist.parent().unwrap_or(&path_dist)).unwrap();
+				fs::write(&path_dist, &input.stylesheet).unwrap();
+
+				path_root
+			}
+		}
+	}
 }
 
 /// Task function pointer used to dynamically generate a website page.

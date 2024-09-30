@@ -1,10 +1,16 @@
+use std::collections::HashMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 
-use camino::Utf8Path;
+use base64::Engine;
+use camino::{Utf8Path, Utf8PathBuf};
+use glob::GlobError;
+use sha2::{Digest, Sha256};
 
-use crate::builder::{Input, InputItem};
+use crate::builder::{Input, InputItem, InputStylesheet};
 use crate::{Collection, Context, Website};
 
+#[derive(Debug)]
 pub struct QueryContent<'a, D> {
 	pub file: &'a Utf8Path,
 	pub slug: &'a Utf8Path,
@@ -87,9 +93,14 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 	}
 
 	/// Get compiled CSS style by alias.
-	pub fn get_styles(&self, alias: &str) -> Option<&Utf8Path> {
-		// todo!()
-		Some("".into())
+	pub fn get_styles(&self, path: &Utf8Path) -> Option<Utf8PathBuf> {
+		let &item = self.items.iter().find(|item| item.file == path)?;
+
+		if matches!(item.data, Input::Stylesheet(..)) {
+			return Some(item.build());
+		}
+
+		None
 	}
 
 	/// Get optimized image path by original path.
@@ -146,14 +157,18 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 
 pub(crate) fn build<G: Send + Sync + 'static>(website: &Website<G>, context: &Context<G>) {
 	clean_dist();
+	build_static();
 
 	let items: Vec<_> = website
 		.collections
 		.iter()
 		.flat_map(Collection::load)
+		.chain(load_styles(&website.global_styles))
 		.collect();
 
-	// let store = build_store(website, &content);
+	for item in items.iter() {
+		item.build();
+	}
 
 	let items_ptr = items.iter().collect::<Vec<_>>();
 
@@ -185,23 +200,54 @@ pub(crate) fn clean_dist() {
 	fs::create_dir("dist").unwrap();
 }
 
-// pub(crate) fn build_static() {
-// 	copy_recursively(std::path::Path::new("public"), std::path::Path::new("dist")).unwrap();
-// }
+fn load_styles(paths: &[Utf8PathBuf]) -> Vec<InputItem> {
+	paths
+		.iter()
+		.filter_map(|path| glob::glob(path.join("**/[!_]*.scss").as_str()).ok())
+		.flatten()
+		.filter_map(compile)
+		.collect()
+}
 
-// pub(crate) fn copy_recursively(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io::Result<()> {
-// 	fs::create_dir_all(&dst)?;
-// 	for entry in fs::read_dir(src)? {
-// 		let entry = entry?;
-// 		let filetype = entry.file_type()?;
-// 		if filetype.is_dir() {
-// 			copy_recursively(entry.path(), dst.as_ref().join(entry.file_name()))?;
-// 		} else {
-// 			fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
-// 		}
-// 	}
-// 	Ok(())
-// }
+fn compile(entry: Result<PathBuf, GlobError>) -> Option<InputItem> {
+	match entry {
+		Ok(file) => {
+			let file = Utf8PathBuf::try_from(file).expect("Invalid UTF-8 file name");
+			let opts = grass::Options::default().style(grass::OutputStyle::Compressed);
+			let stylesheet = grass::from_path(&file, &opts).unwrap();
+			let hash = Vec::from_iter(Sha256::digest(&stylesheet));
+
+			Some(InputItem {
+				hash,
+				file: file.clone(),
+				slug: file,
+				data: Input::Stylesheet(InputStylesheet { stylesheet }),
+			})
+		}
+		Err(e) => {
+			eprintln!("{:?}", e);
+			None
+		}
+	}
+}
+
+pub(crate) fn build_static() {
+	copy_rec(Path::new("public"), Path::new("dist")).unwrap();
+}
+
+pub(crate) fn copy_rec(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<()> {
+	fs::create_dir_all(&dst)?;
+	for entry in fs::read_dir(src)? {
+		let entry = entry?;
+		let filetype = entry.file_type()?;
+		if filetype.is_dir() {
+			copy_rec(entry.path(), dst.as_ref().join(entry.file_name()))?;
+		} else {
+			fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
+		}
+	}
+	Ok(())
+}
 
 // fn build_content<G: Send + Sync>(
 // 	ctx: &Context<G>,
