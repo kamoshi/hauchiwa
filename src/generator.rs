@@ -2,15 +2,13 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, RwLock};
 
-use base64::Engine;
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::GlobError;
+use hayagriva::Library;
 use sha2::{Digest, Sha256};
 
-use crate::builder::{Input, InputItem, InputStylesheet, Scheduler};
-use crate::utils::hex;
+use crate::builder::{Builder, Input, InputItem, InputStylesheet, Scheduler};
 use crate::{Collection, Context, Website};
 
 #[derive(Debug)]
@@ -30,14 +28,7 @@ pub struct Sack<'a, G: Send + Sync> {
 	/// Every single input.
 	items: &'a [&'a InputItem],
 	/// Scheduler manages the build process
-	scheduler: Arc<RwLock<Scheduler>>,
-	// Global JavaScript aliases
-	// /// Current path for the page being rendered
-	// path: &'a Utf8Path,
-	// /// Processed artifacts (styles, scripts, etc.)
-	// store: &'a Store,
-	// /// Original file location for this page
-	// file: Option<&'a Utf8Path>,
+	scheduler: Scheduler,
 }
 
 impl<'a, G: Send + Sync> Sack<'a, G> {
@@ -105,92 +96,54 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 
 	/// Get compiled CSS style by alias.
 	pub fn get_styles(&self, path: &Utf8Path) -> Option<Utf8PathBuf> {
-		let &item = self.items.iter().find(|item| item.file == path)?;
-		if !matches!(item.data, Input::Stylesheet(..)) {
+		let input = self.items.iter().find(|item| item.file == path)?;
+		if !matches!(input.data, Input::Stylesheet(..)) {
 			return None;
 		}
 
-		let res = self.scheduler.read().unwrap().check(item);
-		if res.is_some() {
-			return res;
-		}
-
-		let res = self.scheduler.write().unwrap().build(item);
-		Some(res)
+		self.scheduler.schedule(input)
 	}
 
 	/// Get optimized image path by original path.
 	pub fn get_picture(&self, path: &Utf8Path) -> Option<Utf8PathBuf> {
-		let &item = self.items.iter().find(|item| item.file == path)?;
-		if !matches!(item.data, Input::Picture) {
+		let input = self.items.iter().find(|item| item.file == path)?;
+		if !matches!(input.data, Input::Picture) {
 			return Some(path.to_owned());
 		}
 
-		let res = self.scheduler.read().unwrap().check(item);
-		if res.is_some() {
-			return res;
-		}
-
-		let res = self.scheduler.write().unwrap().build(item);
-		Some(res)
+		self.scheduler.schedule(input)
 	}
 
 	pub fn get_script(&self, path: &str) -> Option<Utf8PathBuf> {
 		let path = Utf8Path::new(".cache/scripts/")
 			.join(path)
 			.with_extension("js");
-		let &item = self.items.iter().find(|item| item.file == path)?;
-		if !matches!(item.data, Input::Script) {
-			return Some("".into());
+
+		let input = self.items.iter().find(|item| item.file == path)?;
+		if !matches!(input.data, Input::Script) {
+			return None;
 		}
 
-		let res = self.scheduler.read().unwrap().check(item);
-		if res.is_some() {
-			return res;
-		}
-
-		let res = self.scheduler.write().unwrap().build(item);
-		Some(res)
+		self.scheduler.schedule(input)
 	}
 
-	// pub fn get_library(&self) -> Option<&Library> {
-	// 	let glob = format!("{}/*.bib", self.path.parent()?);
-	// 	let glob = glob::Pattern::new(&glob).expect("Bad glob pattern");
-	// 	let opts = glob::MatchOptions {
-	// 		case_sensitive: true,
-	// 		require_literal_separator: true,
-	// 		require_literal_leading_dot: false,
-	// 	};
+	pub fn get_library(&self, area: &Utf8Path) -> Option<&Library> {
+		let glob = format!("{}/*.bib", area);
+		let glob = glob::Pattern::new(&glob).expect("Bad glob pattern");
+		let opts = glob::MatchOptions {
+			case_sensitive: true,
+			require_literal_separator: true,
+			require_literal_leading_dot: false,
+		};
 
-	// 	self.hole
-	// 		.iter()
-	// 		.filter(|item| glob.matches_path_with(item.path.as_ref(), opts))
-	// 		.filter_map(|asset| match asset.kind {
-	// 			OutputKind::Asset(ref real) => Some(real),
-	// 			_ => None,
-	// 		})
-	// 		.find_map(|asset| match asset.kind {
-	// 			AssetKind::Bibtex(ref lib) => Some(lib),
-	// 			_ => None,
-	// 		})
-	// }
-
-	// /// Get the path for original file location
-	// pub fn get_file(&self) -> Option<&'a Utf8Path> {
-	// 	self.file
-	// }
-
-	// pub fn get_import_map(&self) -> String {
-	// 	let ok = self
-	// 		.store
-	// 		.javascript
-	// 		.iter()
-	// 		.map(|(k, v)| (k.clone(), v.path.clone()))
-	// 		.collect();
-	// 	let map = ImportMap { imports: &ok };
-
-	// 	serde_json::to_string(&map).unwrap()
-	// }
+		self.items
+			.iter()
+			.filter(|item| glob.matches_path_with(item.file.as_std_path(), opts))
+			.find_map(|item| match item.data {
+				Input::Library(ref library) => Some(&library.library),
+				_ => None,
+			})
+	}
 }
 
 pub(crate) fn build<G: Send + Sync + 'static>(website: &Website<G>, context: &Context<G>) {
@@ -205,7 +158,7 @@ pub(crate) fn build<G: Send + Sync + 'static>(website: &Website<G>, context: &Co
 		.chain(load_scripts(&website.javascript))
 		.collect();
 
-	let scheduler = Arc::new(RwLock::new(Scheduler::new()));
+	let scheduler = Scheduler::new(Builder::new());
 	let items_ptr = items.iter().collect::<Vec<_>>();
 
 	for task in website.tasks.iter() {
@@ -275,75 +228,6 @@ pub(crate) fn copy_rec(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io:
 	}
 	Ok(())
 }
-
-// fn build_content<G: Send + Sync>(
-// 	ctx: &Context<G>,
-// 	pending: &[&Output<G>],
-// 	hole: &[&Output<G>],
-// ) {
-// 	let now = std::time::Instant::now();
-// 	render_all(ctx, store, pending, hole);
-// 	println!("Elapsed: {:.2?}", now.elapsed());
-// }
-
-// fn render_all<G: Send + Sync>(
-// 	ctx: &Context<G>,
-// 	store: &Store,
-// 	pending: &[&Output<G>],
-// 	hole: &[&Output<G>],
-// ) {
-// 	pending
-// 		.iter()
-// 		.map(|&item| {
-// 			let file = match &item.kind {
-// 				OutputKind::Asset(a) => Some(a.meta.get_path()),
-// 				OutputKind::Virtual(_) => None,
-// 			};
-
-// 			render(
-// 				item,
-// 				Sack {
-// 					ctx,
-// 					store,
-// 					hole,
-// 					path: &item.path,
-// 					file,
-// 				},
-// 			)
-// 		})
-// 		.collect()
-// }
-
-// fn render<G: Send + Sync>(item: &Output<G>, sack: Sack<G>) {
-// 	let dist = Utf8Path::new("dist");
-// 	let o = dist.join(&item.path);
-// 	fs::create_dir_all(o.parent().unwrap()).unwrap();
-
-// 	match item.kind {
-// 		OutputKind::Asset(ref real) => {
-// 			let fs_path = real.meta.get_path();
-
-// 			match &real.kind {
-// 				AssetKind::Html(DeferredHtml { lazy, .. }) => {
-// 					let mut file = File::create(&o).unwrap();
-// 					file.write_all(lazy(&sack).as_bytes()).unwrap();
-// 					println!("HTML: {} -> {}", fs_path, o);
-// 				}
-// 				AssetKind::Bibtex(_) => (),
-// 				AssetKind::Image => {
-// 					fs::create_dir_all(o.parent().unwrap()).unwrap();
-// 					fs::copy(fs_path, &o).unwrap();
-// 					println!("Image: {} -> {}", fs_path, o);
-// 				}
-// 			}
-// 		}
-// 		OutputKind::Virtual(Virtual(ref closure)) => {
-// 			let mut file = File::create(&o).unwrap();
-// 			file.write_all(closure(&sack).as_bytes()).unwrap();
-// 			println!("Virtual: -> {}", o);
-// 		}
-// 	}
-// }
 
 fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
 	let mut cmd = Command::new("esbuild");

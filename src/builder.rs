@@ -1,8 +1,9 @@
+use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs;
 use std::io::Write;
-use std::sync::Arc;
-use std::{any::Any, collections::HashMap};
+use std::sync::{Arc, RwLock};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use gray_matter::{engine::YAML, Matter};
@@ -124,11 +125,25 @@ impl<G: Send + Sync> Debug for Task<G> {
 	}
 }
 
-pub(crate) struct Scheduler {
+fn optimize_image(buffer: &[u8]) -> Vec<u8> {
+	let img = image::load_from_memory(buffer).expect("Couldn't load image");
+	let dim = (img.width(), img.height());
+
+	let mut out = Vec::new();
+	let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
+
+	encoder
+		.encode(&img.to_rgba8(), dim.0, dim.1, image::ColorType::Rgba8)
+		.expect("Encoding error");
+
+	out
+}
+
+pub(crate) struct Builder {
 	state: HashMap<Vec<u8>, Utf8PathBuf>,
 }
 
-impl Scheduler {
+impl Builder {
 	pub(crate) fn new() -> Self {
 		Self {
 			state: HashMap::new(),
@@ -205,16 +220,26 @@ impl Scheduler {
 	}
 }
 
-fn optimize_image(buffer: &[u8]) -> Vec<u8> {
-	let img = image::load_from_memory(buffer).expect("Couldn't load image");
-	let dim = (img.width(), img.height());
+#[derive(Clone)]
+pub(crate) struct Scheduler {
+	builder: Arc<RwLock<Builder>>,
+}
 
-	let mut out = Vec::new();
-	let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
+impl Scheduler {
+	pub fn new(builder: Builder) -> Self {
+		Self {
+			builder: Arc::new(RwLock::new(builder)),
+		}
+	}
 
-	encoder
-		.encode(&img.to_rgba8(), dim.0, dim.1, image::ColorType::Rgba8)
-		.expect("Encoding error");
+	/// Get compiled CSS style by alias.
+	pub fn schedule(&self, input: &InputItem) -> Option<Utf8PathBuf> {
+		let res = self.builder.read().unwrap().check(input);
+		if res.is_some() {
+			return res;
+		}
 
-	out
+		let res = self.builder.write().unwrap().build(input);
+		Some(res)
+	}
 }
