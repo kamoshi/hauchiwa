@@ -16,14 +16,12 @@ use crate::{Context, Mode};
 #[derive(Debug)]
 pub struct Website<G: Send + Sync> {
 	/// Rendered assets and content are outputted to this directory.
-	pub(crate) dir_dist: Utf8PathBuf,
 	/// All collections added to this website.
 	pub(crate) collections: Vec<Collection>,
 	/// Build tasks which can be used to generate pages.
 	pub(crate) tasks: Vec<Task<G>>,
-	// other
-	pub(crate) dist_js: Utf8PathBuf,
-	pub(crate) javascript: HashMap<&'static str, &'static str>,
+	/// Global scripts
+	pub(crate) global_scripts: HashMap<&'static str, &'static str>,
 	/// Global styles
 	pub(crate) global_styles: Vec<Utf8PathBuf>,
 }
@@ -56,7 +54,7 @@ impl<G: Send + Sync + 'static> Website<G> {
 pub struct WebsiteCreator<G: Send + Sync> {
 	collections: Vec<Collection>,
 	tasks: Vec<Task<G>>,
-	js: HashMap<&'static str, &'static str>,
+	global_scripts: HashMap<&'static str, &'static str>,
 	global_styles: Vec<Utf8PathBuf>,
 }
 
@@ -65,7 +63,7 @@ impl<G: Send + Sync + 'static> WebsiteCreator<G> {
 		Self {
 			collections: Vec::default(),
 			tasks: Vec::default(),
-			js: HashMap::default(),
+			global_scripts: HashMap::default(),
 			global_styles: Vec::default(),
 		}
 	}
@@ -79,7 +77,7 @@ impl<G: Send + Sync + 'static> WebsiteCreator<G> {
 		mut self,
 		scripts: impl IntoIterator<Item = (&'static str, &'static str)>,
 	) -> Self {
-		self.js.extend(scripts);
+		self.global_scripts.extend(scripts);
 		self
 	}
 
@@ -95,11 +93,9 @@ impl<G: Send + Sync + 'static> WebsiteCreator<G> {
 
 	pub fn finish(self) -> Website<G> {
 		Website {
-			dir_dist: "dist".into(),
 			collections: self.collections,
 			tasks: self.tasks,
-			dist_js: "js".into(),
-			javascript: self.js,
+			global_scripts: self.global_scripts,
 			global_styles: self.global_styles,
 		}
 	}

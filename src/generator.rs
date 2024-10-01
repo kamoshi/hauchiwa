@@ -155,7 +155,7 @@ pub(crate) fn build<G: Send + Sync + 'static>(website: &Website<G>, context: &Co
 		.iter()
 		.flat_map(Collection::load)
 		.chain(load_styles(&website.global_styles))
-		.chain(load_scripts(&website.javascript))
+		.chain(load_scripts(&website.global_scripts))
 		.collect();
 
 	let scheduler = Scheduler::new(Builder::new());
