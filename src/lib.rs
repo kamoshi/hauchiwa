@@ -4,9 +4,9 @@ mod collection;
 mod content;
 // mod gen;
 // mod tree;
-mod utils;
-// mod watch;
 mod generator;
+mod utils;
+mod watch;
 mod website;
 
 pub use crate::collection::Collection;

@@ -24,11 +24,11 @@ pub struct QueryContent<'a, D> {
 /// page, so that it can easily access the website metadata.
 pub struct Sack<'a, G: Send + Sync> {
 	/// Global `Context` for the current build.
-	context: &'a Context<G>,
+	pub(crate) context: &'a Context<G>,
 	/// Every single input.
-	items: &'a [&'a InputItem],
+	pub(crate) items: &'a [&'a InputItem],
 	/// Scheduler manages the build process
-	scheduler: Scheduler,
+	pub(crate) scheduler: Scheduler,
 }
 
 impl<'a, G: Send + Sync> Sack<'a, G> {
@@ -146,7 +146,10 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 	}
 }
 
-pub(crate) fn build<G: Send + Sync + 'static>(website: &Website<G>, context: &Context<G>) {
+pub(crate) fn build<G: Send + Sync + 'static>(
+	website: &Website<G>,
+	context: &Context<G>,
+) -> (Scheduler, Vec<InputItem>) {
 	clean_dist();
 	build_static();
 
@@ -170,6 +173,8 @@ pub(crate) fn build<G: Send + Sync + 'static>(website: &Website<G>, context: &Co
 	}
 
 	build_pagefind("dist".into());
+
+	(scheduler, items)
 }
 
 pub(crate) fn clean_dist() {
@@ -180,7 +185,7 @@ pub(crate) fn clean_dist() {
 	fs::create_dir("dist").unwrap();
 }
 
-fn load_styles(paths: &[Utf8PathBuf]) -> Vec<InputItem> {
+pub(crate) fn load_styles(paths: &[Utf8PathBuf]) -> Vec<InputItem> {
 	paths
 		.iter()
 		.filter_map(|path| glob::glob(path.join("**/[!_]*.scss").as_str()).ok())

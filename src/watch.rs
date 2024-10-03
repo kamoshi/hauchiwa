@@ -3,29 +3,24 @@ use std::env;
 use std::io::Result;
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8PathBuf;
 use notify::{RecursiveMode, Watcher};
 use notify_debouncer_full::new_debouncer;
 use tungstenite::WebSocket;
 
-use crate::collection::Collection;
-use crate::gen::content::build_content;
-use crate::gen::copy_recursively;
-use crate::gen::store::{build_store_styles, Store};
-use crate::tree::Output;
-use crate::Context;
+use crate::builder::{InputItem, Scheduler};
+use crate::{Context, Sack, Website};
 
 pub(crate) fn watch<G: Send + Sync + 'static>(
-	ctx: &Context<G>,
-	loaders: &[Collection<G>],
-	mut state: Vec<Rc<Output<G>>>,
-	mut store: Store,
+	website: &Website<G>,
+	context: &Context<G>,
+	scheduler: Scheduler,
+	mut items: HashMap<Utf8PathBuf, InputItem>,
 ) -> Result<()> {
 	let root = env::current_dir().unwrap();
 	let server = TcpListener::bind("127.0.0.1:1337")?;
@@ -39,10 +34,10 @@ pub(crate) fn watch<G: Send + Sync + 'static>(
 		.watch(Path::new("styles"), RecursiveMode::Recursive)
 		.unwrap();
 
-	debouncer
-		.watcher()
-		.watch(Path::new("content"), RecursiveMode::Recursive)
-		.unwrap();
+	// debouncer
+	// 	.watcher()
+	// 	.watch(Path::new("content"), RecursiveMode::Recursive)
+	// 	.unwrap();
 
 	let thread_i = new_thread_ws_incoming(server, client.clone());
 	let (tx_reload, thread_o) = new_thread_ws_reload(client.clone());
@@ -60,35 +55,33 @@ pub(crate) fn watch<G: Send + Sync + 'static>(
 			.collect();
 
 		let mut dirty = false;
-
 		if paths.iter().any(|path| path.starts_with("styles")) {
-			let styles = build_store_styles();
-			store.styles.extend(styles);
-			copy_recursively(".cache", "dist/hash").unwrap();
-			let state = state.iter().map(AsRef::as_ref).collect::<Vec<_>>();
-			build_content(ctx, &store, &state, &state);
+			let new_items = crate::generator::load_styles(&website.global_styles);
+
+			for item in new_items {
+				items.insert(item.file.clone(), item);
+			}
+
 			dirty = true;
 		}
 
-		{
-			let items: Vec<Rc<Output<G>>> = paths
-				.iter()
-				.filter_map(|path| loaders.iter().find_map(|item| item.get_maybe(path)))
-				.filter_map(Option::from)
-				.map(Rc::new)
-				.collect();
-
-			if !items.is_empty() {
-				let state_next = update_stream(&state, &items);
-				let abc: Vec<&Output<G>> = items.iter().map(AsRef::as_ref).collect();
-				let xyz: Vec<&Output<G>> = state_next.iter().map(AsRef::as_ref).collect();
-				build_content(ctx, &store, &abc, &xyz);
-				state = state_next;
-				dirty = true;
-			}
-		}
+		// {
+		// 	let items: Vec<Rc<Output<G>>> = paths
+		// 		.iter()
+		// 		.filter_map(|path| collextions.iter().find_map(|item| item.get_maybe(path)))
+		// 		.filter_map(Option::from)
+		// 		.map(Rc::new)
+		// 		.collect();
 
 		if dirty {
+			for task in website.tasks.iter() {
+				task.run(Sack {
+					context,
+					items: &items.values().collect::<Vec<_>>(),
+					scheduler: scheduler.clone(),
+				});
+			}
+
 			tx_reload.send(()).unwrap();
 		}
 	}
@@ -97,19 +90,6 @@ pub(crate) fn watch<G: Send + Sync + 'static>(
 	thread_o.join().unwrap();
 
 	Ok(())
-}
-
-fn update_stream<G: Send + Sync>(
-	old: &[Rc<Output<G>>],
-	new: &[Rc<Output<G>>],
-) -> Vec<Rc<Output<G>>> {
-	let mut map: HashMap<&Utf8Path, Rc<Output<G>>> = HashMap::new();
-
-	for output in old.iter().chain(new) {
-		map.insert(&output.path, output.clone());
-	}
-
-	map.into_values().collect()
 }
 
 fn new_thread_ws_incoming(

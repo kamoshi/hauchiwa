@@ -5,7 +5,7 @@ use camino::Utf8PathBuf;
 use crate::builder::Task;
 use crate::collection::Collection;
 use crate::generator::{build, Sack};
-// use crate::watch::watch;
+use crate::watch::watch;
 use crate::{Context, Mode};
 
 /// This struct represents the website which will be built by the generator. The individual
@@ -31,22 +31,26 @@ impl<G: Send + Sync + 'static> Website<G> {
 		WebsiteCreator::new()
 	}
 
-	pub fn build(&self, global: G) {
-		let context = Context {
-			mode: Mode::Build,
-			data: global,
-		};
-		let _ = build(self, &context);
+	pub fn build(&self, data: G) {
+		let _ = build(
+			self,
+			&Context {
+				mode: Mode::Build,
+				data,
+			},
+		);
 	}
 
-	// pub fn watch(&self, global: G) {
-	// 	let ctx = Context {
-	// 		mode: Mode::Watch,
-	// 		data: global,
-	// 	};
-	// 	let (state, artifacts) = crate::gen::build(&ctx, self);
-	// 	watch(&ctx, &self.collections, state, artifacts).unwrap()
-	// }
+	pub fn watch(&self, data: G) {
+		let context = Context {
+			mode: Mode::Watch,
+			data,
+		};
+
+		let (scheduler, items) = build(self, &context);
+		let items = HashMap::from_iter(items.into_iter().map(|item| (item.file.clone(), item)));
+		watch(self, &context, scheduler, items).unwrap()
+	}
 }
 
 /// A builder struct for creating a `Website` with specified settings.
