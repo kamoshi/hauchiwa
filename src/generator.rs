@@ -44,39 +44,53 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 
 	pub fn get_content<D: 'static>(&self, pattern: &str) -> Option<QueryContent<'_, D>> {
 		let pattern = glob::Pattern::new(pattern).expect("Bad glob pattern");
-
-		self.items
+		let input = self
+			.items
 			.values()
-			.filter(|item| pattern.matches_path(item.slug.as_ref()))
-			.filter_map(|item| {
-				let (area, meta, content) = match &item.data {
-					Input::Content(input_content) => {
-						let area = input_content.area.as_ref();
-						let meta = input_content.meta.downcast_ref::<D>()?;
-						let data = input_content.content.as_str();
-						Some((area, meta, data))
-					}
-					_ => None,
-				}?;
+			.find(|item| pattern.matches_path(item.slug.as_ref()))?;
+		if !matches!(input.data, Input::Content(..)) {
+			return None;
+		}
 
-				Some(QueryContent {
-					file: &item.file,
-					slug: &item.slug,
-					area,
-					meta,
-					content,
-				})
-			})
-			.next()
+		self.tracked
+			.borrow_mut()
+			.insert(input.file.clone(), input.hash.clone());
+
+		let (area, meta, content) = match &input.data {
+			Input::Content(input_content) => {
+				let area = input_content.area.as_ref();
+				let meta = input_content.meta.downcast_ref::<D>()?;
+				let data = input_content.content.as_str();
+				Some((area, meta, data))
+			}
+			_ => unreachable!(),
+		}?;
+
+		Some(QueryContent {
+			file: &input.file,
+			slug: &input.slug,
+			area,
+			meta,
+			content,
+		})
 	}
 
 	/// Retrieve many possible content items.
 	pub fn get_content_list<D: 'static>(&self, pattern: &str) -> Vec<QueryContent<'_, D>> {
 		let pattern = glob::Pattern::new(pattern).expect("Bad glob pattern");
-
-		self.items
+		let inputs: Vec<_> = self
+			.items
 			.values()
 			.filter(|item| pattern.matches_path(item.slug.as_ref()))
+			.collect();
+
+		let mut tracked = self.tracked.borrow_mut();
+		for input in inputs.iter() {
+			tracked.insert(input.file.clone(), input.hash.clone());
+		}
+
+		inputs
+			.into_iter()
 			.filter_map(|item| {
 				let (area, meta, content) = match &item.data {
 					Input::Content(input_content) => {

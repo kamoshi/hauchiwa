@@ -6,7 +6,10 @@ use sha2::{Digest, Sha256};
 
 use crate::builder::{InitFn, Input, InputContent, InputItem, InputLibrary};
 
-fn load_single(init: InitFn) -> impl Fn(Result<PathBuf, glob::GlobError>) -> Option<InputItem> {
+fn load_single<'a>(
+	init: InitFn,
+	exts: &'a HashSet<&'static str>,
+) -> impl Fn(Result<PathBuf, glob::GlobError>) -> Option<InputItem> + 'a {
 	move |file| {
 		let file = file.unwrap();
 		let file = Utf8PathBuf::from_path_buf(file).expect("Filename is not valid UTF8");
@@ -15,8 +18,39 @@ fn load_single(init: InitFn) -> impl Fn(Result<PathBuf, glob::GlobError>) -> Opt
 			return None;
 		}
 
-		let item = match file.extension() {
-			Some("md") => {
+		let ext = file.extension()?;
+
+		let item = match ext {
+			"bib" => {
+				let data = fs::read(&file).expect("Couldn't read file");
+				let hash = Vec::from_iter(Sha256::digest(&data));
+				let content = String::from_utf8_lossy(&data);
+				let library = hayagriva::io::from_biblatex_str(&content).unwrap();
+				let slug = file.strip_prefix("content").unwrap().to_owned();
+
+				InputItem {
+					hash,
+					file,
+					slug,
+					data: (Input::Library(InputLibrary { library })),
+				}
+			}
+			"jpg" | "png" | "gif" => {
+				let data = fs::read(&file).expect("Couldn't read file");
+				let hash = Vec::from_iter(Sha256::digest(&data));
+				let slug = file.strip_prefix("content").unwrap().to_owned();
+				InputItem {
+					hash,
+					file,
+					slug,
+					data: Input::Picture,
+				}
+			}
+			ext => {
+				if !exts.contains(ext) {
+					return None;
+				}
+
 				let data = fs::read(&file).expect("Couldn't read file");
 				let hash = Vec::from_iter(Sha256::digest(&data));
 				let content = String::from_utf8_lossy(&data);
@@ -43,32 +77,6 @@ fn load_single(init: InitFn) -> impl Fn(Result<PathBuf, glob::GlobError>) -> Opt
 					}),
 				}
 			}
-			Some("bib") => {
-				let data = fs::read(&file).expect("Couldn't read file");
-				let hash = Vec::from_iter(Sha256::digest(&data));
-				let content = String::from_utf8_lossy(&data);
-				let library = hayagriva::io::from_biblatex_str(&content).unwrap();
-				let slug = file.strip_prefix("content").unwrap().to_owned();
-
-				InputItem {
-					hash,
-					file,
-					slug,
-					data: (Input::Library(InputLibrary { library })),
-				}
-			}
-			Some("jpg" | "png" | "gif") => {
-				let data = fs::read(&file).expect("Couldn't read file");
-				let hash = Vec::from_iter(Sha256::digest(&data));
-				let slug = file.strip_prefix("content").unwrap().to_owned();
-				InputItem {
-					hash,
-					file,
-					slug,
-					data: Input::Picture,
-				}
-			}
-			_ => return None,
 		};
 
 		Some(item)
@@ -87,7 +95,7 @@ impl LoaderGlob {
 		let pattern = Utf8Path::new(self.base).join(self.glob);
 		glob::glob(pattern.as_str())
 			.expect("Invalid glob pattern")
-			.filter_map(load_single(init))
+			.filter_map(load_single(init, &self.exts))
 			.collect()
 	}
 }
@@ -133,7 +141,7 @@ impl Collection {
 
 		glob::glob(path.as_str())
 			.expect("Invalid glob pattern")
-			.filter_map(load_single(self.init.clone()))
+			.filter_map(load_single(self.init.clone(), &loader.exts))
 			.last()
 	}
 }

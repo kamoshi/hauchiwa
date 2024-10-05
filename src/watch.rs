@@ -32,10 +32,10 @@ pub(crate) fn watch<G: Send + Sync + 'static>(
 		.watch(Path::new("styles"), RecursiveMode::Recursive)
 		.unwrap();
 
-	// debouncer
-	// 	.watcher()
-	// 	.watch(Path::new("content"), RecursiveMode::Recursive)
-	// 	.unwrap();
+	debouncer
+		.watcher()
+		.watch(Path::new("content"), RecursiveMode::Recursive)
+		.unwrap();
 
 	let thread_i = new_thread_ws_incoming(server, client.clone());
 	let (tx_reload, thread_o) = new_thread_ws_reload(client.clone());
@@ -60,13 +60,20 @@ pub(crate) fn watch<G: Send + Sync + 'static>(
 			dirty = true;
 		}
 
-		// {
-		// 	let items: Vec<Rc<Output<G>>> = paths
-		// 		.iter()
-		// 		.filter_map(|path| collextions.iter().find_map(|item| item.get_maybe(path)))
-		// 		.filter_map(Option::from)
-		// 		.map(Rc::new)
-		// 		.collect();
+		if paths.iter().any(|path| path.starts_with("content")) {
+			let new_items = paths
+				.iter()
+				.filter_map(|path| {
+					website
+						.collections
+						.iter()
+						.find_map(|collection| collection.load_single(path))
+				})
+				.collect();
+
+			scheduler.update(new_items);
+			dirty = true;
+		}
 
 		if dirty {
 			scheduler.build();
