@@ -9,6 +9,7 @@ use std::{fs, mem};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use gray_matter::{engine::YAML, Matter};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::Deserialize;
 
 use crate::generator::Sack;
@@ -17,7 +18,7 @@ use crate::{Context, Website};
 /// Init pointer used to dynamically retrieve front matter. The type of front matter
 /// needs to be erased at run time and this is one way of accomplishing this,
 /// it's hidden behind the `dyn Fn` existential type.
-type InitFnPtr = Arc<dyn Fn(&str) -> (Arc<dyn Any>, String)>;
+type InitFnPtr = Arc<dyn Fn(&str) -> (Arc<dyn Any + Send + Sync>, String)>;
 
 /// Wraps `InitFnPtr` and implements `Debug` trait for function pointer.
 #[derive(Clone)]
@@ -28,7 +29,7 @@ impl InitFn {
 	/// extract front-matter from a document with `D` as the metadata shape.
 	pub(crate) fn new<D>() -> Self
 	where
-		D: for<'de> Deserialize<'de> + 'static,
+		D: for<'de> Deserialize<'de> + Send + Sync + 'static,
 	{
 		InitFn(Arc::new(|content| {
 			// TODO: it might be more optimal to save the parser in closure
@@ -44,7 +45,7 @@ impl InitFn {
 	}
 
 	/// Call the contained `InitFn` pointer.
-	pub(crate) fn call(&self, data: &str) -> (Arc<dyn Any>, String) {
+	pub(crate) fn call(&self, data: &str) -> (Arc<dyn Any + Send + Sync>, String) {
 		(self.0)(data)
 	}
 }
@@ -58,7 +59,7 @@ impl Debug for InitFn {
 #[derive(Debug)]
 pub(crate) struct InputContent {
 	pub(crate) area: Utf8PathBuf,
-	pub(crate) meta: Arc<dyn Any>,
+	pub(crate) meta: Arc<dyn Any + Send + Sync>,
 	pub(crate) content: String,
 }
 
@@ -90,7 +91,7 @@ pub(crate) struct InputItem {
 }
 
 /// Task function pointer used to dynamically generate a website page.
-type TaskFnPtr<G> = Arc<dyn Fn(Sack<G>) -> Vec<(Utf8PathBuf, String)>>;
+type TaskFnPtr<G> = Arc<dyn Fn(Sack<G>) -> Vec<(Utf8PathBuf, String)> + Send + Sync>;
 
 /// Wraps `TaskFnPtr` and implements `Debug` trait for function pointer.
 pub(crate) struct Task<G: Send + Sync>(TaskFnPtr<G>);
@@ -99,7 +100,7 @@ impl<G: Send + Sync> Task<G> {
 	/// Create new task function pointer.
 	pub(crate) fn new<F>(func: F) -> Self
 	where
-		F: Fn(Sack<G>) -> Vec<(Utf8PathBuf, String)> + 'static,
+		F: Fn(Sack<G>) -> Vec<(Utf8PathBuf, String)> + Send + Sync + 'static,
 	{
 		Self(Arc::new(func))
 	}
@@ -156,7 +157,7 @@ impl<G: Send + Sync> Trace<G> {
 		}
 	}
 
-	fn check(&self, inputs: &HashMap<Utf8PathBuf, InputItem>) -> bool {
+	fn is_outdated(&self, inputs: &HashMap<Utf8PathBuf, InputItem>) -> bool {
 		self.init
 			|| self
 				.deps
@@ -281,25 +282,8 @@ impl<'a, G: Send + Sync> Scheduler<'a, G> {
 
 	pub fn build(&mut self) {
 		self.tracked = mem::take(&mut self.tracked)
-			.into_iter()
-			.map(|trace| {
-				if trace.check(&self.items) {
-					let deps = Rc::new(RefCell::new(HashMap::new()));
-
-					trace.task.run(Sack {
-						context: self.context,
-						builder: self.builder.clone(),
-						tracked: deps.clone(),
-						items: &self.items,
-					});
-
-					let deps = Rc::try_unwrap(deps).unwrap();
-					let deps = deps.into_inner();
-					return trace.with_deps(deps);
-				}
-
-				trace
-			})
+			.into_par_iter()
+			.map(|trace| self.rebuild_trace(trace))
 			.collect();
 	}
 
@@ -307,5 +291,24 @@ impl<'a, G: Send + Sync> Scheduler<'a, G> {
 		for input in inputs {
 			self.items.insert(input.file.clone(), input);
 		}
+	}
+
+	fn rebuild_trace(&self, trace: Trace<G>) -> Trace<G> {
+		if !trace.is_outdated(&self.items) {
+			return trace;
+		}
+
+		let deps = Rc::new(RefCell::new(HashMap::new()));
+
+		trace.task.run(Sack {
+			context: self.context,
+			builder: self.builder.clone(),
+			tracked: deps.clone(),
+			items: &self.items,
+		});
+
+		let deps = Rc::try_unwrap(deps).unwrap();
+		let deps = deps.into_inner();
+		trace.with_deps(deps)
 	}
 }
