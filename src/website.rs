@@ -47,9 +47,8 @@ impl<G: Send + Sync + 'static> Website<G> {
 			data,
 		};
 
-		let (scheduler, items) = build(self, &context);
-		let items = HashMap::from_iter(items.into_iter().map(|item| (item.file.clone(), item)));
-		watch(self, &context, scheduler, items).unwrap()
+		let scheduler = build(self, &context);
+		watch(self, scheduler).unwrap()
 	}
 }
 

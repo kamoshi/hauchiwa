@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::env;
 use std::io::Result;
 use std::net::{TcpListener, TcpStream};
@@ -13,14 +13,12 @@ use notify::{RecursiveMode, Watcher};
 use notify_debouncer_full::new_debouncer;
 use tungstenite::WebSocket;
 
-use crate::builder::{InputItem, Scheduler};
-use crate::{Context, Sack, Website};
+use crate::builder::Scheduler;
+use crate::Website;
 
 pub(crate) fn watch<G: Send + Sync + 'static>(
 	website: &Website<G>,
-	context: &Context<G>,
-	scheduler: Scheduler,
-	mut items: HashMap<Utf8PathBuf, InputItem>,
+	mut scheduler: Scheduler<G>,
 ) -> Result<()> {
 	let root = env::current_dir().unwrap();
 	let server = TcpListener::bind("127.0.0.1:1337")?;
@@ -58,10 +56,7 @@ pub(crate) fn watch<G: Send + Sync + 'static>(
 		if paths.iter().any(|path| path.starts_with("styles")) {
 			let new_items = crate::generator::load_styles(&website.global_styles);
 
-			for item in new_items {
-				items.insert(item.file.clone(), item);
-			}
-
+			scheduler.update(new_items);
 			dirty = true;
 		}
 
@@ -74,14 +69,7 @@ pub(crate) fn watch<G: Send + Sync + 'static>(
 		// 		.collect();
 
 		if dirty {
-			for task in website.tasks.iter() {
-				task.run(Sack {
-					context,
-					items: &items.values().collect::<Vec<_>>(),
-					scheduler: scheduler.clone(),
-				});
-			}
-
+			scheduler.build();
 			tx_reload.send(()).unwrap();
 		}
 	}

@@ -1,15 +1,18 @@
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::fs;
 use std::io::Write;
+use std::rc::Rc;
 use std::sync::{Arc, RwLock};
+use std::{fs, mem};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use gray_matter::{engine::YAML, Matter};
 use serde::Deserialize;
 
 use crate::generator::Sack;
+use crate::{Context, Website};
 
 /// Init pointer used to dynamically retrieve front matter. The type of front matter
 /// needs to be erased at run time and this is one way of accomplishing this,
@@ -54,7 +57,6 @@ impl Debug for InitFn {
 
 #[derive(Debug)]
 pub(crate) struct InputContent {
-	pub(crate) init: InitFn,
 	pub(crate) area: Utf8PathBuf,
 	pub(crate) meta: Arc<dyn Any>,
 	pub(crate) content: String,
@@ -91,7 +93,6 @@ pub(crate) struct InputItem {
 type TaskFnPtr<G> = Arc<dyn Fn(Sack<G>) -> Vec<(Utf8PathBuf, String)>>;
 
 /// Wraps `TaskFnPtr` and implements `Debug` trait for function pointer.
-#[derive(Clone)]
 pub(crate) struct Task<G: Send + Sync>(TaskFnPtr<G>);
 
 impl<G: Send + Sync> Task<G> {
@@ -119,9 +120,48 @@ impl<G: Send + Sync> Task<G> {
 	}
 }
 
+impl<G: Send + Sync> Clone for Task<G> {
+	fn clone(&self) -> Self {
+		Self(self.0.clone())
+	}
+}
+
 impl<G: Send + Sync> Debug for Task<G> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		write!(f, "Task(*)")
+	}
+}
+
+#[derive(Debug)]
+struct Trace<G: Send + Sync> {
+	task: Task<G>,
+	init: bool,
+	deps: HashMap<Utf8PathBuf, Vec<u8>>,
+}
+
+impl<G: Send + Sync> Trace<G> {
+	fn new(task: Task<G>) -> Self {
+		Self {
+			task,
+			init: true,
+			deps: HashMap::new(),
+		}
+	}
+
+	fn with_deps(&self, deps: HashMap<Utf8PathBuf, Vec<u8>>) -> Self {
+		Self {
+			task: self.task.clone(),
+			init: false,
+			deps,
+		}
+	}
+
+	fn check(&self, inputs: &HashMap<Utf8PathBuf, InputItem>) -> bool {
+		self.init
+			|| self
+				.deps
+				.iter()
+				.any(|dep| Some(dep.1) != inputs.get(dep.0).map(|item| &item.hash))
 	}
 }
 
@@ -139,6 +179,7 @@ fn optimize_image(buffer: &[u8]) -> Vec<u8> {
 	out
 }
 
+#[derive(Debug)]
 pub(crate) struct Builder {
 	state: HashMap<Vec<u8>, Utf8PathBuf>,
 }
@@ -164,8 +205,8 @@ impl Builder {
 	/** **IO** */
 	pub(crate) fn build(&mut self, input: &InputItem) -> Utf8PathBuf {
 		match &input.data {
-			Input::Content(input_content) => "".into(),
-			Input::Library(input_library) => "".into(),
+			Input::Content(_) => "".into(),
+			Input::Library(_) => "".into(),
 			Input::Picture => {
 				let hash = crate::utils::hex(&input.hash);
 				let path = Utf8Path::new("hash").join(&hash).with_extension("webp");
@@ -220,26 +261,51 @@ impl Builder {
 	}
 }
 
-#[derive(Clone)]
-pub(crate) struct Scheduler {
+#[derive(Debug)]
+pub(crate) struct Scheduler<'a, G: Send + Sync> {
+	context: &'a Context<G>,
 	builder: Arc<RwLock<Builder>>,
+	tracked: Vec<Trace<G>>,
+	items: HashMap<Utf8PathBuf, InputItem>,
 }
 
-impl Scheduler {
-	pub fn new(builder: Builder) -> Self {
+impl<'a, G: Send + Sync> Scheduler<'a, G> {
+	pub fn new(website: &'a Website<G>, context: &'a Context<G>, items: Vec<InputItem>) -> Self {
 		Self {
-			builder: Arc::new(RwLock::new(builder)),
+			context,
+			builder: Arc::new(RwLock::new(Builder::new())),
+			tracked: website.tasks.iter().cloned().map(Trace::new).collect(),
+			items: HashMap::from_iter(items.into_iter().map(|item| (item.file.clone(), item))),
 		}
 	}
 
-	/// Get compiled CSS style by alias.
-	pub fn schedule(&self, input: &InputItem) -> Option<Utf8PathBuf> {
-		let res = self.builder.read().unwrap().check(input);
-		if res.is_some() {
-			return res;
-		}
+	pub fn build(&mut self) {
+		self.tracked = mem::take(&mut self.tracked)
+			.into_iter()
+			.map(|trace| {
+				if trace.check(&self.items) {
+					let deps = Rc::new(RefCell::new(HashMap::new()));
 
-		let res = self.builder.write().unwrap().build(input);
-		Some(res)
+					trace.task.run(Sack {
+						context: self.context,
+						builder: self.builder.clone(),
+						tracked: deps.clone(),
+						items: &self.items,
+					});
+
+					let deps = Rc::try_unwrap(deps).unwrap();
+					let deps = deps.into_inner();
+					return trace.with_deps(deps);
+				}
+
+				trace
+			})
+			.collect();
+	}
+
+	pub fn update(&mut self, inputs: Vec<InputItem>) {
+		for input in inputs {
+			self.items.insert(input.file.clone(), input);
+		}
 	}
 }

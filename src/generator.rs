@@ -1,7 +1,10 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::rc::Rc;
+use std::sync::{Arc, RwLock};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::GlobError;
@@ -25,10 +28,12 @@ pub struct QueryContent<'a, D> {
 pub struct Sack<'a, G: Send + Sync> {
 	/// Global `Context` for the current build.
 	pub(crate) context: &'a Context<G>,
+	/// Builder allows scheduling build requests.
+	pub(crate) builder: Arc<RwLock<Builder>>,
+	/// Tracked dependencies for current instantation.
+	pub(crate) tracked: Rc<RefCell<HashMap<Utf8PathBuf, Vec<u8>>>>,
 	/// Every single input.
-	pub(crate) items: &'a [&'a InputItem],
-	/// Scheduler manages the build process
-	pub(crate) scheduler: Scheduler,
+	pub(crate) items: &'a HashMap<Utf8PathBuf, InputItem>,
 }
 
 impl<'a, G: Send + Sync> Sack<'a, G> {
@@ -41,7 +46,7 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 		let pattern = glob::Pattern::new(pattern).expect("Bad glob pattern");
 
 		self.items
-			.iter()
+			.values()
 			.filter(|item| pattern.matches_path(item.slug.as_ref()))
 			.filter_map(|item| {
 				let (area, meta, content) = match &item.data {
@@ -70,7 +75,7 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 		let pattern = glob::Pattern::new(pattern).expect("Bad glob pattern");
 
 		self.items
-			.iter()
+			.values()
 			.filter(|item| pattern.matches_path(item.slug.as_ref()))
 			.filter_map(|item| {
 				let (area, meta, content) = match &item.data {
@@ -96,22 +101,30 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 
 	/// Get compiled CSS style by alias.
 	pub fn get_styles(&self, path: &Utf8Path) -> Option<Utf8PathBuf> {
-		let input = self.items.iter().find(|item| item.file == path)?;
+		let input = self.items.values().find(|item| item.file == path)?;
 		if !matches!(input.data, Input::Stylesheet(..)) {
 			return None;
 		}
 
-		self.scheduler.schedule(input)
+		self.tracked
+			.borrow_mut()
+			.insert(input.file.clone(), input.hash.clone());
+
+		self.schedule(input)
 	}
 
 	/// Get optimized image path by original path.
 	pub fn get_picture(&self, path: &Utf8Path) -> Option<Utf8PathBuf> {
-		let input = self.items.iter().find(|item| item.file == path)?;
+		let input = self.items.values().find(|item| item.file == path)?;
 		if !matches!(input.data, Input::Picture) {
 			return Some(path.to_owned());
 		}
 
-		self.scheduler.schedule(input)
+		self.tracked
+			.borrow_mut()
+			.insert(input.file.clone(), input.hash.clone());
+
+		self.schedule(input)
 	}
 
 	pub fn get_script(&self, path: &str) -> Option<Utf8PathBuf> {
@@ -119,12 +132,16 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 			.join(path)
 			.with_extension("js");
 
-		let input = self.items.iter().find(|item| item.file == path)?;
+		let input = self.items.values().find(|item| item.file == path)?;
 		if !matches!(input.data, Input::Script) {
 			return None;
 		}
 
-		self.scheduler.schedule(input)
+		self.tracked
+			.borrow_mut()
+			.insert(input.file.clone(), input.hash.clone());
+
+		self.schedule(input)
 	}
 
 	pub fn get_library(&self, area: &Utf8Path) -> Option<&Library> {
@@ -136,20 +153,40 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 			require_literal_leading_dot: false,
 		};
 
-		self.items
-			.iter()
-			.filter(|item| glob.matches_path_with(item.file.as_std_path(), opts))
-			.find_map(|item| match item.data {
-				Input::Library(ref library) => Some(&library.library),
-				_ => None,
-			})
+		let input = self
+			.items
+			.values()
+			.find(|item| glob.matches_path_with(item.file.as_std_path(), opts))?;
+
+		if !matches!(input.data, Input::Library(..)) {
+			return None;
+		}
+
+		self.tracked
+			.borrow_mut()
+			.insert(input.file.clone(), input.hash.clone());
+
+		match input.data {
+			Input::Library(ref library) => Some(&library.library),
+			_ => unreachable!(),
+		}
+	}
+
+	fn schedule(&self, input: &InputItem) -> Option<Utf8PathBuf> {
+		let res = self.builder.read().unwrap().check(input);
+		if res.is_some() {
+			return res;
+		}
+
+		let res = self.builder.write().unwrap().build(input);
+		Some(res)
 	}
 }
 
-pub(crate) fn build<G: Send + Sync + 'static>(
-	website: &Website<G>,
-	context: &Context<G>,
-) -> (Scheduler, Vec<InputItem>) {
+pub(crate) fn build<'a, G>(website: &'a Website<G>, context: &'a Context<G>) -> Scheduler<'a, G>
+where
+	G: Send + Sync + 'static,
+{
 	clean_dist();
 	build_static();
 
@@ -161,20 +198,12 @@ pub(crate) fn build<G: Send + Sync + 'static>(
 		.chain(load_scripts(&website.global_scripts))
 		.collect();
 
-	let scheduler = Scheduler::new(Builder::new());
-	let items_ptr = items.iter().collect::<Vec<_>>();
-
-	for task in website.tasks.iter() {
-		task.run(Sack {
-			context,
-			items: &items_ptr,
-			scheduler: scheduler.clone(),
-		});
-	}
+	let mut scheduler = Scheduler::new(website, context, items);
+	scheduler.build();
 
 	build_pagefind("dist".into());
 
-	(scheduler, items)
+	scheduler
 }
 
 pub(crate) fn clean_dist() {

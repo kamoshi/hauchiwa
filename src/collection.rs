@@ -37,7 +37,6 @@ fn load_single(init: InitFn) -> impl Fn(Result<PathBuf, glob::GlobError>) -> Opt
 					file,
 					slug,
 					data: Input::Content(InputContent {
-						init: init.clone(),
 						area,
 						meta,
 						content,
