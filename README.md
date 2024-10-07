@@ -56,7 +56,7 @@ fn main() {
 
 	// Here we start by calling the `setup` function.
 	let website = Website::setup()
-	  // We can configure the collections of files used to build the pages.
+    // We can configure the collections of files used to build the pages.
 		.add_collections(vec![
 			Collection::glob_with::<Post>("content", "posts/**/*", ["md"].into()),
 		])
