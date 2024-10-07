@@ -1,24 +1,39 @@
 # Hauchiwa
 
-A small, fast SSG library.
+Incredibly flexible static site generator library with incremental rebuilds and
+cached image optimization. This library can be used as the backbone of your own
+static site generator, it can handle all the mundane work:
 
-The main goal of this library is to serve as the backbone of your custom
-generator by doing the mundane things:
-- gathering content files
-- optimizing images
-- compiling SCSS styles
-- compiling JavaScript scripts
+- gathering content files from the file system
+- optimizing images and caching the work
+- compiling SCSS and CSS stylesheets
+- compiling JavaScript applications via ESBuild
 
-The entire library is centered around a single trait [Content], which is then
-internally used by the library for processing content files and outputting
-HTML files.
+## Declarative configuration
 
-Here's a small sample of how you can use this library to create your own generator:
+The configuration API is designed to be extremely minimal while providing the
+maximum of value to the user by being flexible and unopinionated. It's supposed
+to be really delightful and intuitive to use.
+
+Here's a small sample of how you can use this library to create your own
+generator. Let's start by defining the shape of front matter for a single post
+stored as a Markdown file.
+
+```rust
+/// Represents a simple post, this is the metadata for your Markdown content.
+#[derive(Deserialize, Debug, Clone)]
+pub struct Post {
+	pub title: String,
+	#[serde(with = "isodate")]
+	pub date: DateTime<Utc>,
+}
+```
+
+The `main.rs` of your application can use `clap` to accept any additional CLI
+arguments, such as mode.
 
 ```rust
 use clap::{Parser, ValueEnum};
-use hauchiwa::Website;
-use hypertext::Renderable;
 
 #[derive(Parser, Debug, Clone)]
 struct Args {
@@ -31,35 +46,68 @@ enum Mode {
 	Build,
 	Watch,
 }
+```
 
+In the `main` function of your application you can configure how the website should be generated.
+
+```rust
 fn main() {
 	let args = Args::parse();
 
-	let website = Website::design()
-		.content::<crate::html::Post>("content/posts/**/*", ["md", "mdx"].into())
-		.content::<crate::html::Wiki>("content/wiki/**/*", ["md"].into())
-		.js("search", "./js/search/dist/search.js")
-		.add_virtual(
-			|sack| crate::html::search(sack).render().to_owned().into(),
-			"search/index.html".into(),
-		)
-		.add_virtual(
-			|sack| crate::html::to_list(sack, sack.get_links("posts/**/*.html"), "Posts".into()),
-			"posts/index.html".into(),
-		)
+	// Here we start by calling the `setup` function.
+	let website = Website::setup()
+	  // We can configure the collections of files used to build the pages.
+		.add_collections(vec![
+			Collection::glob_with::<Post>("content", "posts/**/*", ["md"].into()),
+		])
+		// We can add folders containing stylesheets, either CSS or SCSS.
+		.add_global_styles([
+		  "styles".into()
+		])
+		// We can add entrypoints to any JavaScript applications.
+		.add_scripts(vec![
+			("search", "./js/search/dist/search.js"),
+			("photos", "./js/vanilla/photos.js"),
+		])
+		// We can add a simple task to generate the `index.html` page with arbitrary
+		// content, here it's `<h1>hello world!</h1>`.
+		.add_task(|_| {
+		  vec![("index.html".into(), String::from("<h1>hello world!</h1>"))]
+		})
+		// We can retrieve any loaded content from the `sack` provided to the task.
+		// Note that you have to bring your own markdown parser and HTML templating
+		// engine here.
+		.add_task(|sack| {
+			sack.get_content_list::<Post>("posts/**/*")
+				.into_iter()
+				.map(|query| {
+					// Retrieve any assets required to build the page, they are automatically
+					// tracked when in watch mode, and cause a rebuild when modified.
+					let library = sack.get_library(query.area);
+					// Parse the content of a Markdown file, bring your own library.
+					let (parsed, outline, bib) = html::post::parse_content(query.content, &sack, query.area, library);
+					// Generate the HTML page, bring your own library.
+					let out_buff = html::post::as_html(query.meta, &parsed, &sack, outline, bib);
+					// Return the page as well as the page content as a tuple.
+					(query.slug.join("index.html"), out_buff)
+				})
+				.collect()
+		})
+		// Complete the configuration process.
 		.finish();
 
+	// Start the library in either the *build* or the *watch* mode.
 	match args.mode {
-		Mode::Build => website.build(),
-		Mode::Watch => website.watch(),
+		Mode::Build => website.build(MyData::new()),
+		Mode::Watch => website.watch(MyData::new()),
 	}
 }
 ```
 
-Note that you have to implement your own logic for parsing Markdown and for
-rendering HTML pages by implementing the [Content] trait for your own front
-matter struct type.
+The full documentation for this library is always available on
+[docs.rs](https://docs.rs/hauchiwa/latest/hauchiwa/), please feel free to take a
+look at it 😊
 
-In this example the trait is implemented for `crate::html::Post` and
-`crate::html::Wiki`, each being a different style of a page, with different
-front matter.
+## License
+
+This library is available under GPL 3.0.
