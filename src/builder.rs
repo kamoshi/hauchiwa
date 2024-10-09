@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::io::Write;
 use std::rc::Rc;
@@ -11,6 +11,8 @@ use camino::{Utf8Path, Utf8PathBuf};
 use gray_matter::{engine::YAML, Matter};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::Deserialize;
+use sitemap_rs::url::{ChangeFrequency, Url};
+use sitemap_rs::url_set::UrlSet;
 
 use crate::generator::Sack;
 use crate::{Context, Website};
@@ -105,19 +107,9 @@ impl<G: Send + Sync> Task<G> {
 		Self(Arc::new(func))
 	}
 
-	/// **IO** Run the task to generate a page.
-	pub(crate) fn run(&self, sack: Sack<G>) {
-		let func = &*self.0;
-
-		for (path, data) in func(sack) {
-			let path = Utf8Path::new("dist").join(path);
-			if let Some(dir) = path.parent() {
-				fs::create_dir_all(dir).unwrap();
-			}
-			let mut file = fs::File::create(&path).unwrap();
-			file.write_all(data.as_bytes()).unwrap();
-			println!("HTML: {}", path);
-		}
+	/// Run the task to generate a page.
+	pub(crate) fn run(&self, sack: Sack<G>) -> Vec<(Utf8PathBuf, String)> {
+		(self.0)(sack)
 	}
 }
 
@@ -138,6 +130,7 @@ struct Trace<G: Send + Sync> {
 	task: Task<G>,
 	init: bool,
 	deps: HashMap<Utf8PathBuf, Vec<u8>>,
+	path: Box<[Utf8PathBuf]>,
 }
 
 impl<G: Send + Sync> Trace<G> {
@@ -146,14 +139,16 @@ impl<G: Send + Sync> Trace<G> {
 			task,
 			init: true,
 			deps: HashMap::new(),
+			path: Box::new([]),
 		}
 	}
 
-	fn with_deps(&self, deps: HashMap<Utf8PathBuf, Vec<u8>>) -> Self {
+	fn new_with(&self, deps: HashMap<Utf8PathBuf, Vec<u8>>, path: Box<[Utf8PathBuf]>) -> Self {
 		Self {
 			task: self.task.clone(),
 			init: false,
 			deps,
+			path,
 		}
 	}
 
@@ -284,13 +279,34 @@ impl<'a, G: Send + Sync> Scheduler<'a, G> {
 		self.tracked = mem::take(&mut self.tracked)
 			.into_par_iter()
 			.map(|trace| self.rebuild_trace(trace))
-			.collect();
+			.collect::<Vec<_>>();
 	}
 
 	pub fn update(&mut self, inputs: Vec<InputItem>) {
 		for input in inputs {
 			self.items.insert(input.file.clone(), input);
 		}
+	}
+
+	pub fn build_sitemap(&self, opts: &Utf8Path) -> Box<[u8]> {
+		let urls = self
+			.tracked
+			.iter()
+			.flat_map(|x| &x.path)
+			.collect::<HashSet<_>>()
+			.into_iter()
+			.map(|path| {
+				Url::builder(opts.join(path).parent().unwrap().to_string())
+					.change_frequency(ChangeFrequency::Monthly)
+					.priority(0.8)
+					.build()
+					.expect("failed a <url> validation")
+			})
+			.collect::<Vec<_>>();
+		let urls = UrlSet::new(urls).expect("failed a <urlset> validation");
+		let mut buf = Vec::<u8>::new();
+		urls.write(&mut buf).expect("failed to write XML");
+		buf.into()
 	}
 
 	fn rebuild_trace(&self, trace: Trace<G>) -> Trace<G> {
@@ -300,15 +316,27 @@ impl<'a, G: Send + Sync> Scheduler<'a, G> {
 
 		let deps = Rc::new(RefCell::new(HashMap::new()));
 
-		trace.task.run(Sack {
+		let pages = trace.task.run(Sack {
 			context: self.context,
 			builder: self.builder.clone(),
 			tracked: deps.clone(),
 			items: &self.items,
 		});
 
+		// output
+		for (path, data) in pages.iter() {
+			let path = Utf8Path::new("dist").join(path);
+			if let Some(dir) = path.parent() {
+				fs::create_dir_all(dir).unwrap();
+			}
+			let mut file = fs::File::create(&path).unwrap();
+			file.write_all(data.as_bytes()).unwrap();
+			println!("HTML: {}", path);
+		}
+
 		let deps = Rc::try_unwrap(deps).unwrap();
 		let deps = deps.into_inner();
-		trace.with_deps(deps)
+
+		trace.new_with(deps, pages.into_iter().map(|x| x.0).collect())
 	}
 }

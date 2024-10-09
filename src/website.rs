@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::builder::Task;
 use crate::collection::Collection;
@@ -24,6 +24,8 @@ pub struct Website<G: Send + Sync> {
 	pub(crate) global_scripts: HashMap<&'static str, &'static str>,
 	/// Global styles
 	pub(crate) global_styles: Vec<Utf8PathBuf>,
+	/// Sitemap options
+	pub(crate) opts_sitemap: Option<Utf8PathBuf>,
 }
 
 impl<G: Send + Sync + 'static> Website<G> {
@@ -59,6 +61,7 @@ pub struct WebsiteCreator<G: Send + Sync> {
 	tasks: Vec<Task<G>>,
 	global_scripts: HashMap<&'static str, &'static str>,
 	global_styles: Vec<Utf8PathBuf>,
+	opts_sitemap: Option<Utf8PathBuf>,
 }
 
 impl<G: Send + Sync + 'static> WebsiteCreator<G> {
@@ -68,6 +71,7 @@ impl<G: Send + Sync + 'static> WebsiteCreator<G> {
 			tasks: Vec::default(),
 			global_scripts: HashMap::default(),
 			global_styles: Vec::default(),
+			opts_sitemap: None,
 		}
 	}
 
@@ -94,12 +98,18 @@ impl<G: Send + Sync + 'static> WebsiteCreator<G> {
 		self
 	}
 
+	pub fn set_opts_sitemap(mut self, path: impl AsRef<str>) -> Self {
+		self.opts_sitemap = Some(path.as_ref().into());
+		self
+	}
+
 	pub fn finish(self) -> Website<G> {
 		Website {
 			collections: self.collections,
 			tasks: self.tasks,
 			global_scripts: self.global_scripts,
 			global_styles: self.global_styles,
+			opts_sitemap: self.opts_sitemap,
 		}
 	}
 }

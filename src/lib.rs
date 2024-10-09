@@ -8,7 +8,7 @@ mod watch;
 mod website;
 
 pub use crate::collection::Collection;
-pub use crate::content::{Bibliography, Outline};
+pub use crate::content::Bibliography;
 pub use crate::generator::Sack;
 pub use crate::website::{Website, WebsiteCreator};
 

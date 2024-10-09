@@ -215,6 +215,11 @@ where
 	let mut scheduler = Scheduler::new(website, context, items);
 	scheduler.build();
 
+	if let Some(ref opts) = website.opts_sitemap {
+		let sitemap = scheduler.build_sitemap(opts);
+		fs::write("dist/sitemap.xml", sitemap).expect("Couldn't output sitemap");
+	}
+
 	build_pagefind("dist".into());
 
 	scheduler
