@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8PathBuf;
 
 use crate::builder::Task;
 use crate::collection::Collection;
@@ -88,7 +88,7 @@ impl<G: Send + Sync + 'static> WebsiteCreator<G> {
 		self
 	}
 
-	pub fn add_global_styles(mut self, paths: impl IntoIterator<Item = Utf8PathBuf>) -> Self {
+	pub fn add_styles(mut self, paths: impl IntoIterator<Item = Utf8PathBuf>) -> Self {
 		self.global_styles.extend(paths);
 		self
 	}

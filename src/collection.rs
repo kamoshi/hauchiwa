@@ -114,12 +114,20 @@ pub struct Collection {
 
 impl Collection {
 	/// Create a collection sourcing from the file-system.
-	pub fn glob_with<D>(base: &'static str, glob: &'static str, exts: HashSet<&'static str>) -> Self
+	pub fn glob_with<D>(
+		base: &'static str,
+		glob: &'static str,
+		exts: impl IntoIterator<Item = &'static str>,
+	) -> Self
 	where
 		D: for<'de> Deserialize<'de> + Send + Sync + 'static,
 	{
 		Self {
-			loader: Loader::Glob(LoaderGlob { base, glob, exts }),
+			loader: Loader::Glob(LoaderGlob {
+				base,
+				glob,
+				exts: HashSet::from_iter(exts),
+			}),
 			init: InitFn::new::<D>(),
 		}
 	}
