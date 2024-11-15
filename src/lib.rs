@@ -11,6 +11,10 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Debug;
 
+use gray_matter::engine::YAML;
+use gray_matter::Matter;
+use serde::Deserialize;
+
 pub use crate::collection::Collection;
 pub use crate::content::Bibliography;
 pub use crate::generator::Sack;
@@ -37,18 +41,17 @@ pub struct Context<D: Send + Sync> {
 }
 
 type Erased = Box<dyn Any + Send + Sync>;
-type CallbackAsset = fn(text: &str) -> Erased;
 
-pub(crate) enum ProcessorFn {
-	Asset(CallbackAsset),
+pub(crate) enum ProcessorKind {
+	Asset(Box<dyn Fn(&str) -> Erased>),
 	Image,
 }
 
-impl Debug for ProcessorFn {
+impl Debug for ProcessorKind {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			ProcessorFn::Asset(_) => write!(f, "<asset fn>"),
-			ProcessorFn::Image => write!(f, "<image fn>"),
+			ProcessorKind::Asset(_) => write!(f, "<Processor Asset>"),
+			ProcessorKind::Image => write!(f, "<Processor Image>"),
 		}
 	}
 }
@@ -56,24 +59,41 @@ impl Debug for ProcessorFn {
 #[derive(Debug)]
 pub struct Processor {
 	exts: HashSet<&'static str>,
-	call: ProcessorFn,
+	kind: ProcessorKind,
 }
 
 impl Processor {
-	pub fn process_assets(
+	pub fn process_assets<T: Send + Sync + 'static>(
 		exts: impl IntoIterator<Item = &'static str>,
-		call: CallbackAsset,
+		call: fn(&str) -> T,
 	) -> Self {
 		Self {
 			exts: HashSet::from_iter(exts),
-			call: ProcessorFn::Asset(call),
+			kind: ProcessorKind::Asset(Box::new(move |data| Box::new(call(data)))),
 		}
 	}
 
 	pub fn process_images(exts: impl IntoIterator<Item = &'static str>) -> Self {
 		Self {
 			exts: HashSet::from_iter(exts),
-			call: ProcessorFn::Image,
+			kind: ProcessorKind::Image,
 		}
 	}
+}
+
+/// This function can be used to extract front-matter from a document with `D`
+/// as the metadata shape.
+pub fn parse_matter<T>(content: &str) -> (T, String)
+where
+	T: for<'de> Deserialize<'de> + Send + Sync + 'static,
+{
+	// TODO: it might be more optimal to save the parser in closure
+	let parser = Matter::<YAML>::new();
+	let result = parser.parse_with_struct::<T>(content).unwrap();
+	(
+		// Just the front matter
+		result.data,
+		// The rest of the content
+		result.content,
+	)
 }

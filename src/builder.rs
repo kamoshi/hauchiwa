@@ -8,9 +8,7 @@ use std::sync::{Arc, RwLock};
 use std::{fs, mem};
 
 use camino::{Utf8Path, Utf8PathBuf};
-use gray_matter::{engine::YAML, Matter};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use serde::Deserialize;
 use sitemap_rs::url::{ChangeFrequency, Url};
 use sitemap_rs::url_set::UrlSet;
 
@@ -24,28 +22,9 @@ type InitFnPtr = Arc<dyn Fn(&str) -> (Arc<dyn Any + Send + Sync>, String)>;
 
 /// Wraps `InitFnPtr` and implements `Debug` trait for function pointer.
 #[derive(Clone)]
-pub(crate) struct InitFn(InitFnPtr);
+pub(crate) struct InitFn(pub(crate) InitFnPtr);
 
 impl InitFn {
-	/// Create new `InitFn` for a given front-matter shape. This function can be used to
-	/// extract front-matter from a document with `D` as the metadata shape.
-	pub(crate) fn new<D>() -> Self
-	where
-		D: for<'de> Deserialize<'de> + Send + Sync + 'static,
-	{
-		InitFn(Arc::new(|content| {
-			// TODO: it might be more optimal to save the parser in closure
-			let parser = Matter::<YAML>::new();
-			let result = parser.parse_with_struct::<D>(content).unwrap();
-			(
-				// Just the front matter
-				Arc::new(result.data),
-				// The rest of the content
-				result.content,
-			)
-		}))
-	}
-
 	/// Call the contained `InitFn` pointer.
 	pub(crate) fn call(&self, data: &str) -> (Arc<dyn Any + Send + Sync>, String) {
 		(self.0)(data)

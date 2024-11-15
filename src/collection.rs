@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt::Debug, fs, path::PathBuf};
+use std::{collections::HashSet, fmt::Debug, fs, path::PathBuf, sync::Arc};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Deserialize;
@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
 	builder::{InitFn, Input, InputContent, InputItem},
-	Processor, ProcessorFn,
+	Processor, ProcessorKind,
 };
 
 fn load_single<'a>(
@@ -30,8 +30,8 @@ fn load_single<'a>(
 			if processor.exts.contains(ext) {
 				let data = fs::read(&file).expect("Couldn't read file");
 
-				let input = match &processor.call {
-					ProcessorFn::Asset(ref fun) => {
+				let input = match &processor.kind {
+					ProcessorKind::Asset(ref fun) => {
 						let hash = Vec::from_iter(Sha256::digest(&data));
 						let content = String::from_utf8_lossy(&data);
 						let asset = fun(&content);
@@ -41,10 +41,10 @@ fn load_single<'a>(
 							hash,
 							file,
 							slug,
-							data: (Input::Asset(asset)),
+							data: Input::Asset(asset),
 						}
 					}
-					ProcessorFn::Image => {
+					ProcessorKind::Image => {
 						let hash = Vec::from_iter(Sha256::digest(&data));
 						let slug = file.strip_prefix("content").unwrap().to_owned();
 
@@ -128,13 +128,14 @@ pub struct Collection {
 
 impl Collection {
 	/// Create a collection sourcing from the file-system.
-	pub fn glob_with<D>(
+	pub fn glob_with<T>(
 		base: &'static str,
 		glob: &'static str,
 		exts: impl IntoIterator<Item = &'static str>,
+		call: fn(&str) -> (T, String),
 	) -> Self
 	where
-		D: for<'de> Deserialize<'de> + Send + Sync + 'static,
+		T: for<'de> Deserialize<'de> + Send + Sync + 'static,
 	{
 		Self {
 			loader: Loader::Glob(LoaderGlob {
@@ -142,7 +143,10 @@ impl Collection {
 				glob,
 				exts: HashSet::from_iter(exts),
 			}),
-			init: InitFn::new::<D>(),
+			init: InitFn(Arc::new(move |content| {
+				let (meta, data) = call(content);
+				(Arc::new(meta), data)
+			})),
 		}
 	}
 
