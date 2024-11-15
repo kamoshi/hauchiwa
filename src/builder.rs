@@ -62,12 +62,7 @@ impl Debug for InitFn {
 pub(crate) struct InputContent {
 	pub(crate) area: Utf8PathBuf,
 	pub(crate) meta: Arc<dyn Any + Send + Sync>,
-	pub(crate) content: String,
-}
-
-#[derive(Debug)]
-pub(crate) struct InputLibrary {
-	pub(crate) library: hayagriva::Library,
+	pub(crate) text: String,
 }
 
 #[derive(Debug)]
@@ -78,7 +73,7 @@ pub(crate) struct InputStylesheet {
 #[derive(Debug)]
 pub(crate) enum Input {
 	Content(InputContent),
-	Library(InputLibrary),
+	Asset(Box<dyn Any + Send + Sync>),
 	Picture,
 	Stylesheet(InputStylesheet),
 	Script,
@@ -191,7 +186,7 @@ impl Builder {
 	pub(crate) fn check(&self, input: &InputItem) -> Option<Utf8PathBuf> {
 		match &input.data {
 			Input::Content(_) => None,
-			Input::Library(_) => None,
+			Input::Asset(_) => self.state.get(&input.hash).cloned(),
 			Input::Picture => self.state.get(&input.hash).cloned(),
 			Input::Stylesheet(_) => self.state.get(&input.hash).cloned(),
 			Input::Script => self.state.get(&input.hash).cloned(),
@@ -202,7 +197,7 @@ impl Builder {
 	pub(crate) fn build(&mut self, input: &InputItem) -> Utf8PathBuf {
 		match &input.data {
 			Input::Content(_) => "".into(),
-			Input::Library(_) => "".into(),
+			Input::Asset(_) => "".into(),
 			Input::Picture => {
 				let hash = crate::utils::hex(&input.hash);
 				let path = Utf8Path::new("hash").join(&hash).with_extension("webp");

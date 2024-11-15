@@ -8,11 +8,10 @@ use std::sync::{Arc, RwLock};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::GlobError;
-use hayagriva::Library;
 use sha2::{Digest, Sha256};
 
 use crate::builder::{Builder, Input, InputItem, InputStylesheet, Scheduler};
-use crate::{Collection, Context, Website};
+use crate::{Context, Website};
 
 #[derive(Debug)]
 pub struct QueryContent<'a, D> {
@@ -60,7 +59,7 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 			Input::Content(input_content) => {
 				let area = input_content.area.as_ref();
 				let meta = input_content.meta.downcast_ref::<D>()?;
-				let data = input_content.content.as_str();
+				let data = input_content.text.as_str();
 				Some((area, meta, data))
 			}
 			_ => unreachable!(),
@@ -96,7 +95,7 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 					Input::Content(input_content) => {
 						let area = input_content.area.as_ref();
 						let meta = input_content.meta.downcast_ref::<D>()?;
-						let data = input_content.content.as_str();
+						let data = input_content.text.as_str();
 						Some((area, meta, data))
 					}
 					_ => None,
@@ -158,7 +157,7 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 		self.schedule(input)
 	}
 
-	pub fn get_library(&self, area: &Utf8Path) -> Option<&Library> {
+	pub fn get_asset<T: 'static>(&self, area: &Utf8Path) -> Option<&T> {
 		let glob = format!("{}/*.bib", area);
 		let glob = glob::Pattern::new(&glob).expect("Bad glob pattern");
 		let opts = glob::MatchOptions {
@@ -167,23 +166,23 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 			require_literal_leading_dot: false,
 		};
 
-		let input = self
+		let (data, file, hash) = self
 			.items
 			.values()
-			.find(|item| glob.matches_path_with(item.file.as_std_path(), opts))?;
+			.filter(|item| glob.matches_path_with(item.file.as_std_path(), opts))
+			.find_map(|item| match &item.data {
+				Input::Asset(any) => {
+					let data = any.downcast_ref::<T>()?;
+					let file = item.file.clone();
+					let hash = item.hash.clone();
+					Some((data, file, hash))
+				}
+				_ => None,
+			})?;
 
-		if !matches!(input.data, Input::Library(..)) {
-			return None;
-		}
+		self.tracked.borrow_mut().insert(file, hash);
 
-		self.tracked
-			.borrow_mut()
-			.insert(input.file.clone(), input.hash.clone());
-
-		match input.data {
-			Input::Library(ref library) => Some(&library.library),
-			_ => unreachable!(),
-		}
+		Some(data)
 	}
 
 	fn schedule(&self, input: &InputItem) -> Option<Utf8PathBuf> {
@@ -207,7 +206,7 @@ where
 	let items: Vec<_> = website
 		.collections
 		.iter()
-		.flat_map(Collection::load)
+		.flat_map(|collection| collection.load(&website.processors))
 		.chain(load_styles(&website.global_styles))
 		.chain(load_scripts(&website.global_scripts))
 		.collect();

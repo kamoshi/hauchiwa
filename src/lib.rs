@@ -7,6 +7,10 @@ mod utils;
 mod watch;
 mod website;
 
+use std::any::Any;
+use std::collections::HashSet;
+use std::fmt::Debug;
+
 pub use crate::collection::Collection;
 pub use crate::content::Bibliography;
 pub use crate::generator::Sack;
@@ -30,4 +34,46 @@ pub enum Mode {
 pub struct Context<D: Send + Sync> {
 	pub mode: Mode,
 	pub data: D,
+}
+
+type Erased = Box<dyn Any + Send + Sync>;
+type CallbackAsset = fn(text: &str) -> Erased;
+
+pub(crate) enum ProcessorFn {
+	Asset(CallbackAsset),
+	Image,
+}
+
+impl Debug for ProcessorFn {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			ProcessorFn::Asset(_) => write!(f, "<asset fn>"),
+			ProcessorFn::Image => write!(f, "<image fn>"),
+		}
+	}
+}
+
+#[derive(Debug)]
+pub struct Processor {
+	exts: HashSet<&'static str>,
+	call: ProcessorFn,
+}
+
+impl Processor {
+	pub fn process_assets(
+		exts: impl IntoIterator<Item = &'static str>,
+		call: CallbackAsset,
+	) -> Self {
+		Self {
+			exts: HashSet::from_iter(exts),
+			call: ProcessorFn::Asset(call),
+		}
+	}
+
+	pub fn process_images(exts: impl IntoIterator<Item = &'static str>) -> Self {
+		Self {
+			exts: HashSet::from_iter(exts),
+			call: ProcessorFn::Image,
+		}
+	}
 }

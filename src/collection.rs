@@ -4,11 +4,15 @@ use camino::{Utf8Path, Utf8PathBuf};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::builder::{InitFn, Input, InputContent, InputItem, InputLibrary};
+use crate::{
+	builder::{InitFn, Input, InputContent, InputItem},
+	Processor, ProcessorFn,
+};
 
 fn load_single<'a>(
 	init: InitFn,
 	exts: &'a HashSet<&'static str>,
+	processors: &'a [Processor],
 ) -> impl Fn(Result<PathBuf, glob::GlobError>) -> Option<InputItem> + 'a {
 	move |file| {
 		let file = file.unwrap();
@@ -20,62 +24,72 @@ fn load_single<'a>(
 
 		let ext = file.extension()?;
 
-		let item = match ext {
-			"bib" => {
+		// We check if any of the assigned processors capture and transform this file.
+		// If we match anything we can exit early.
+		for processor in processors {
+			if processor.exts.contains(ext) {
 				let data = fs::read(&file).expect("Couldn't read file");
-				let hash = Vec::from_iter(Sha256::digest(&data));
-				let content = String::from_utf8_lossy(&data);
-				let library = hayagriva::io::from_biblatex_str(&content).unwrap();
-				let slug = file.strip_prefix("content").unwrap().to_owned();
 
-				InputItem {
-					hash,
-					file,
-					slug,
-					data: (Input::Library(InputLibrary { library })),
-				}
-			}
-			"jpg" | "png" | "gif" => {
-				let data = fs::read(&file).expect("Couldn't read file");
-				let hash = Vec::from_iter(Sha256::digest(&data));
-				let slug = file.strip_prefix("content").unwrap().to_owned();
-				InputItem {
-					hash,
-					file,
-					slug,
-					data: Input::Picture,
-				}
-			}
-			ext => {
-				if !exts.contains(ext) {
-					return None;
-				}
+				let input = match &processor.call {
+					ProcessorFn::Asset(ref fun) => {
+						let hash = Vec::from_iter(Sha256::digest(&data));
+						let content = String::from_utf8_lossy(&data);
+						let asset = fun(&content);
+						let slug = file.strip_prefix("content").unwrap().to_owned();
 
-				let data = fs::read(&file).expect("Couldn't read file");
-				let hash = Vec::from_iter(Sha256::digest(&data));
-				let content = String::from_utf8_lossy(&data);
-				let (meta, content) = init.call(&content);
+						InputItem {
+							hash,
+							file,
+							slug,
+							data: (Input::Asset(asset)),
+						}
+					}
+					ProcessorFn::Image => {
+						let hash = Vec::from_iter(Sha256::digest(&data));
+						let slug = file.strip_prefix("content").unwrap().to_owned();
 
-				let area = match file.file_stem() {
-					Some("index") => file
-						.parent()
-						.map(ToOwned::to_owned)
-						.unwrap_or(file.with_extension("")),
-					_ => file.with_extension(""),
+						InputItem {
+							hash,
+							file,
+							slug,
+							data: Input::Picture,
+						}
+					}
 				};
 
-				let slug = area.strip_prefix("content").unwrap().to_owned();
+				return Some(input);
+			}
+		}
 
-				InputItem {
-					hash,
-					file,
-					slug,
-					data: Input::Content(InputContent {
-						area,
-						meta,
-						content,
-					}),
-				}
+		let item = {
+			if !exts.contains(ext) {
+				return None;
+			}
+
+			let data = fs::read(&file).expect("Couldn't read file");
+			let hash = Vec::from_iter(Sha256::digest(&data));
+			let content = String::from_utf8_lossy(&data);
+			let (meta, content) = init.call(&content);
+
+			let area = match file.file_stem() {
+				Some("index") => file
+					.parent()
+					.map(ToOwned::to_owned)
+					.unwrap_or(file.with_extension("")),
+				_ => file.with_extension(""),
+			};
+
+			let slug = area.strip_prefix("content").unwrap().to_owned();
+
+			InputItem {
+				hash,
+				file,
+				slug,
+				data: Input::Content(InputContent {
+					area,
+					meta,
+					text: content,
+				}),
 			}
 		};
 
@@ -91,11 +105,11 @@ struct LoaderGlob {
 }
 
 impl LoaderGlob {
-	fn load(&self, init: InitFn) -> Vec<InputItem> {
+	fn load(&self, init: InitFn, processors: &[Processor]) -> Vec<InputItem> {
 		let pattern = Utf8Path::new(self.base).join(self.glob);
 		glob::glob(pattern.as_str())
 			.expect("Invalid glob pattern")
-			.filter_map(load_single(init, &self.exts))
+			.filter_map(load_single(init, &self.exts, processors))
 			.collect()
 	}
 }
@@ -132,9 +146,9 @@ impl Collection {
 		}
 	}
 
-	pub(crate) fn load(&self) -> Vec<InputItem> {
+	pub(crate) fn load(&self, processors: &[Processor]) -> Vec<InputItem> {
 		match &self.loader {
-			Loader::Glob(loader) => loader.load(self.init.clone()),
+			Loader::Glob(loader) => loader.load(self.init.clone(), processors),
 		}
 	}
 
@@ -149,7 +163,7 @@ impl Collection {
 
 		glob::glob(path.as_str())
 			.expect("Invalid glob pattern")
-			.filter_map(load_single(self.init.clone(), &loader.exts))
+			.filter_map(load_single(self.init.clone(), &loader.exts, &[]))
 			.last()
 	}
 }

@@ -6,7 +6,7 @@ use crate::builder::Task;
 use crate::collection::Collection;
 use crate::generator::{build, Sack};
 use crate::watch::watch;
-use crate::{Context, Mode};
+use crate::{Context, Mode, Processor};
 
 /// This struct represents the website which will be built by the generator. The individual
 /// settings can be set by calling the `setup` function.
@@ -18,6 +18,8 @@ pub struct Website<G: Send + Sync> {
 	/// Rendered assets and content are outputted to this directory.
 	/// All collections added to this website.
 	pub(crate) collections: Vec<Collection>,
+	/// Preprocessors for files
+	pub(crate) processors: Vec<Processor>,
 	/// Build tasks which can be used to generate pages.
 	pub(crate) tasks: Vec<Task<G>>,
 	/// Global scripts
@@ -58,6 +60,7 @@ impl<G: Send + Sync + 'static> Website<G> {
 #[derive(Debug, Default)]
 pub struct WebsiteCreator<G: Send + Sync> {
 	collections: Vec<Collection>,
+	processors: Vec<Processor>,
 	tasks: Vec<Task<G>>,
 	global_scripts: HashMap<&'static str, &'static str>,
 	global_styles: Vec<Utf8PathBuf>,
@@ -68,6 +71,7 @@ impl<G: Send + Sync + 'static> WebsiteCreator<G> {
 	fn new() -> Self {
 		Self {
 			collections: Vec::default(),
+			processors: Vec::default(),
 			tasks: Vec::default(),
 			global_scripts: HashMap::default(),
 			global_styles: Vec::default(),
@@ -77,6 +81,11 @@ impl<G: Send + Sync + 'static> WebsiteCreator<G> {
 
 	pub fn add_collections(mut self, collections: impl IntoIterator<Item = Collection>) -> Self {
 		self.collections.extend(collections);
+		self
+	}
+
+	pub fn add_processors(mut self, processors: impl IntoIterator<Item = Processor>) -> Self {
+		self.processors.extend(processors);
 		self
 	}
 
@@ -106,6 +115,7 @@ impl<G: Send + Sync + 'static> WebsiteCreator<G> {
 	pub fn finish(self) -> Website<G> {
 		Website {
 			collections: self.collections,
+			processors: self.processors,
 			tasks: self.tasks,
 			global_scripts: self.global_scripts,
 			global_styles: self.global_styles,
