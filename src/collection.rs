@@ -129,22 +129,22 @@ pub struct Collection {
 impl Collection {
 	/// Create a collection sourcing from the file-system.
 	pub fn glob_with<T>(
-		base: &'static str,
-		glob: &'static str,
-		exts: impl IntoIterator<Item = &'static str>,
-		call: fn(&str) -> (T, String),
+		path_base: &'static str,
+		path_glob: &'static str,
+		exts_content: impl IntoIterator<Item = &'static str>,
+		parse_matter: fn(&str) -> (T, String),
 	) -> Self
 	where
 		T: for<'de> Deserialize<'de> + Send + Sync + 'static,
 	{
 		Self {
 			loader: Loader::Glob(LoaderGlob {
-				base,
-				glob,
-				exts: HashSet::from_iter(exts),
+				base: path_base,
+				glob: path_glob,
+				exts: HashSet::from_iter(exts_content),
 			}),
 			init: InitFn(Arc::new(move |content| {
-				let (meta, data) = call(content);
+				let (meta, data) = parse_matter(content);
 				(Arc::new(meta), data)
 			})),
 		}

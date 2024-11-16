@@ -10,14 +10,13 @@ mod website;
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::sync::LazyLock;
 
-use gray_matter::engine::YAML;
-use gray_matter::Matter;
-use serde::Deserialize;
+use gray_matter::{engine, Matter};
 
 pub use crate::collection::Collection;
 pub use crate::content::Bibliography;
-pub use crate::generator::Sack;
+pub use crate::generator::{QueryContent, Sack};
 pub use crate::website::{Website, WebsiteCreator};
 
 /// This value controls whether the library should run in the *build* or the
@@ -81,19 +80,29 @@ impl Processor {
 	}
 }
 
-/// This function can be used to extract front-matter from a document with `D`
-/// as the metadata shape.
-pub fn parse_matter<T>(content: &str) -> (T, String)
-where
-	T: for<'de> Deserialize<'de> + Send + Sync + 'static,
-{
-	// TODO: it might be more optimal to save the parser in closure
-	let parser = Matter::<YAML>::new();
-	let result = parser.parse_with_struct::<T>(content).unwrap();
-	(
-		// Just the front matter
-		result.data,
-		// The rest of the content
-		result.content,
-	)
+/// Generate the functions used to initialize content files. These functions can
+/// be used to parse the front matter using engines from crate `gray_matter`.
+macro_rules! matter_parser {
+	($name:ident, $engine:path) => {
+		/// This function can be used to extract front-matter from a document
+		/// with `D` as the metadata shape.
+		pub fn $name<D>(content: &str) -> (D, String)
+		where
+			D: for<'de> serde::Deserialize<'de> + Send + Sync + 'static,
+		{
+			// We can cache the creation of the parser
+			static PARSER: LazyLock<Matter<$engine>> = LazyLock::new(Matter::<$engine>::new);
+
+			let result = PARSER.parse_with_struct::<D>(content).unwrap();
+			(
+				// Just the front matter
+				result.data,
+				// The rest of the content
+				result.content,
+			)
+		}
+	};
 }
+
+matter_parser!(parse_matter_yaml, engine::YAML);
+matter_parser!(parse_matter_json, engine::JSON);

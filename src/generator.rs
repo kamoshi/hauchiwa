@@ -75,7 +75,7 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 	}
 
 	/// Retrieve many possible content items.
-	pub fn get_content_list<D: 'static>(&self, pattern: &str) -> Vec<QueryContent<'_, D>> {
+	pub fn query_content<D: 'static>(&self, pattern: &str) -> Vec<QueryContent<'_, D>> {
 		let pattern = glob::Pattern::new(pattern).expect("Bad glob pattern");
 		let inputs: Vec<_> = self
 			.items
