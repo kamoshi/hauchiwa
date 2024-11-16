@@ -1,7 +1,6 @@
 #![doc = include_str!("../README.md")]
 mod builder;
 mod collection;
-mod content;
 mod generator;
 mod utils;
 mod watch;
@@ -12,10 +11,10 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::LazyLock;
 
-use gray_matter::{engine, Matter};
+use gray_matter::engine::{JSON, YAML};
+use gray_matter::Matter;
 
 pub use crate::collection::Collection;
-pub use crate::content::Bibliography;
 pub use crate::generator::{QueryContent, Sack};
 pub use crate::website::{Website, WebsiteCreator};
 
@@ -84,8 +83,10 @@ impl Processor {
 /// be used to parse the front matter using engines from crate `gray_matter`.
 macro_rules! matter_parser {
 	($name:ident, $engine:path) => {
-		/// This function can be used to extract front-matter from a document
-		/// with `D` as the metadata shape.
+		#[doc = concat!(
+			"This function can be used to extract metadata from a document with `D` as the frontmatter shape.\n",
+			"Configured to use [`", stringify!($engine), "`] as the engine of the parser."
+		)]
 		pub fn $name<D>(content: &str) -> (D, String)
 		where
 			D: for<'de> serde::Deserialize<'de> + Send + Sync + 'static,
@@ -104,5 +105,5 @@ macro_rules! matter_parser {
 	};
 }
 
-matter_parser!(parse_matter_yaml, engine::YAML);
-matter_parser!(parse_matter_json, engine::JSON);
+matter_parser!(parse_matter_yaml, YAML);
+matter_parser!(parse_matter_json, JSON);

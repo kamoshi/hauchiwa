@@ -119,7 +119,14 @@ enum Loader {
 	Glob(LoaderGlob),
 }
 
-/// `Collection`s are the source of assets used to generate pages.
+/// An opaque representation of a source of inputs loaded into the generator.
+/// You can think of a single collection as a set of written articles with
+/// shared frontmatter shape, for example your blog posts.
+///
+/// Hovewer, a collection can also load additional files like images or custom
+/// assets. This is useful when you want to colocate assets and images next to
+/// the articles. A common use case is to directly reference the images relative
+/// to the markdown file.
 #[derive(Debug)]
 pub struct Collection {
 	loader: Loader,
@@ -127,7 +134,21 @@ pub struct Collection {
 }
 
 impl Collection {
-	/// Create a collection sourcing from the file-system.
+	/// Create a new collection which draws content from the filesystem files
+	/// via a glob pattern. Usually used to collect articles written as markdown
+	/// files, however it is completely format agnostic.
+	///
+	/// The parameter `parse_matter` allows you to customize how the metadata
+	/// should be parsed. Default functions for the most common formats are
+	/// provided by library:
+	/// * [`parse_matter_json`](`crate::parse_matter_json`) - parse JSON metadata
+	/// * [`parse_matter_yaml`](`crate::parse_matter_yaml`) - parse YAML metadata
+	///
+	/// # Examples
+	///
+	/// ```rust
+	/// Collection::glob_with("content", "posts/**/*", ["md"], parse_matter_yaml::<Post>);
+	/// ```
 	pub fn glob_with<T>(
 		path_base: &'static str,
 		path_glob: &'static str,
