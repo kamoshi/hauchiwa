@@ -23,9 +23,9 @@ stored as a Markdown file.
 /// Represents a simple post, this is the metadata for your Markdown content.
 #[derive(Deserialize, Debug, Clone)]
 pub struct Post {
-  pub title: String,
-  #[serde(with = "isodate")]
-  pub date: DateTime<Utc>,
+    pub title: String,
+    #[serde(with = "isodate")]
+    pub date: DateTime<Utc>,
 }
 ```
 
@@ -37,14 +37,14 @@ use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug, Clone)]
 struct Args {
-  #[clap(value_enum, index = 1, default_value = "build")]
-  mode: Mode,
+    #[clap(value_enum, index = 1, default_value = "build")]
+    mode: Mode,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
 enum Mode {
-  Build,
-  Watch,
+    Build,
+    Watch,
 }
 ```
 
@@ -52,55 +52,58 @@ In the `main` function of your application you can configure how the website sho
 
 ```rust
 fn main() {
-  let args = Args::parse();
+    let args = Args::parse();
 
-  // Here we start by calling the `setup` function.
-  let website = Website::setup()
-    // We can configure the collections of files used to build the pages.
-    .add_collections(vec![
-      Collection::glob_with::<Post>("content", "posts/**/*", ["md"].into()),
-    ])
-    // We can add folders containing stylesheets, either CSS or SCSS.
-    .add_global_styles([
-      "styles".into()
-    ])
-    // We can add entrypoints to any JavaScript applications.
-    .add_scripts(vec![
-      ("search", "./js/search/dist/search.js"),
-      ("photos", "./js/vanilla/photos.js"),
-    ])
-    // We can add a simple task to generate the `index.html` page with arbitrary
-    // content, here it's `<h1>hello world!</h1>`.
-    .add_task(|_| {
-      vec![("index.html".into(), String::from("<h1>hello world!</h1>"))]
-    })
-    // We can retrieve any loaded content from the `sack` provided to the task.
-    // Note that you have to bring your own markdown parser and HTML templating
-    // engine here.
-    .add_task(|sack| {
-      sack.get_content_list::<Post>("posts/**/*")
-        .into_iter()
-        .map(|query| {
-          // Retrieve any assets required to build the page, they are automatically
-          // tracked when in watch mode, and cause a rebuild when modified.
-          let library = sack.get_library(query.area);
-          // Parse the content of a Markdown file, bring your own library.
-          let (parsed, outline, bib) = html::post::parse_content(query.content, &sack, query.area, library);
-          // Generate the HTML page, bring your own library.
-          let out_buff = html::post::as_html(query.meta, &parsed, &sack, outline, bib);
-          // Return the page as well as the page content as a tuple.
-          (query.slug.join("index.html"), out_buff)
+    // Here we start by calling the `setup` function.
+    let website = Website::setup()
+        // We can configure the collections of files used to build the pages.
+        .add_collections([
+            Collection::glob_with("content", "posts/**/*", ["md"], process_matter_yaml::<Post>),
+        ])
+        // We can configure the generator to process additional files like images or custom assets.
+        .add_processors([
+            Processor::process_images(["jpg", "png", "gif"]),
+            Processor::process_assets(["bib"], process_bibliography),
+        ])
+        // We can add directories containing global stylesheets, either CSS or SCSS.
+        .add_global_styles(["styles"])
+        // We can add entrypoints to scripts and their aliases.
+        .add_scripts([
+            ("search", "./js/search/dist/search.js"),
+            ("photos", "./js/vanilla/photos.js"),
+        ])
+        // We can add a simple task to generate the `index.html` page with arbitrary
+        // content, here it's `<h1>hello world!</h1>`.
+        .add_task(|_| {
+            vec![("index.html".into(), String::from("<h1>hello world!</h1>"))]
         })
-        .collect()
-    })
-    // Complete the configuration process.
-    .finish();
+        // We can retrieve any loaded content from the `sack` provided to the task.
+        // Note that you have to bring your own markdown parser and HTML templating
+        // engine here.
+        .add_task(|sack| {
+            sack.query_content::<Post>("posts/**/*")
+                .into_iter()
+                .map(|query| {
+                    // Retrieve any assets required to build the page, they are automatically
+                    // tracked when in watch mode, and cause a rebuild when modified.
+                    let library = sack.get_library(query.area);
+                    // Parse the content of a Markdown file, bring your own library.
+                    let (parsed, outline, bib) = html::post::parse_content(query.content, &sack, query.area, library);
+                    // Generate the HTML page, bring your own library.
+                    let out_buff = html::post::as_html(query.meta, &parsed, &sack, outline, bib);
+                    // Return the slug and content as a tuple.
+                    (query.slug.join("index.html"), out_buff)
+                })
+                .collect()
+        })
+        // Complete the configuration process.
+        .finish();
 
-  // Start the library in either the *build* or the *watch* mode.
-  match args.mode {
-    Mode::Build => website.build(MyData::new()),
-    Mode::Watch => website.watch(MyData::new()),
-  }
+    // Start the library in either the *build* or the *watch* mode.
+    match args.mode {
+        Mode::Build => website.build(MyData::new()),
+        Mode::Watch => website.watch(MyData::new()),
+    }
 }
 ```
 
