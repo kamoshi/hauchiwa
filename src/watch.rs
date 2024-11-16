@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use camino::Utf8PathBuf;
 use notify::{RecursiveMode, Watcher};
@@ -76,8 +76,14 @@ pub(crate) fn watch<G: Send + Sync + 'static>(
 		}
 
 		if dirty {
+			println!("\nStarting rebuild...");
+			let start = Instant::now();
+
 			scheduler.build();
 			tx_reload.send(()).unwrap();
+
+			let duration = start.elapsed();
+			println!("Finished rebuild in {duration:?}");
 		}
 	}
 
