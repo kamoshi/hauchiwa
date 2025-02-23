@@ -282,7 +282,7 @@ pub(crate) fn copy_rec(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io:
 	Ok(())
 }
 
-fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
+pub(crate) fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
 	let mut cmd = Command::new("esbuild");
 
 	for (alias, path) in entrypoints.iter() {

@@ -37,6 +37,11 @@ pub(crate) fn watch<G: Send + Sync + 'static>(
 		.watch(Path::new("content"), RecursiveMode::Recursive)
 		.unwrap();
 
+	debouncer
+		.watcher()
+		.watch(Path::new("js"), RecursiveMode::Recursive)
+		.unwrap();
+
 	let thread_i = new_thread_ws_incoming(server, client.clone());
 	let (tx_reload, thread_o) = new_thread_ws_reload(client.clone());
 
@@ -70,6 +75,13 @@ pub(crate) fn watch<G: Send + Sync + 'static>(
 						.find_map(|collection| collection.load_single(path))
 				})
 				.collect();
+
+			scheduler.update(new_items);
+			dirty = true;
+		}
+
+		if paths.iter().any(|path| path.starts_with("js")) {
+			let new_items = crate::generator::load_scripts(&website.global_scripts);
 
 			scheduler.update(new_items);
 			dirty = true;
