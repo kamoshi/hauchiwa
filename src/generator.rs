@@ -8,6 +8,7 @@ use std::sync::{Arc, RwLock};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::GlobError;
+use pagefind::api::PagefindIndex;
 use sha2::{Digest, Sha256};
 
 use crate::builder::{Builder, Input, InputItem, InputStylesheet, Scheduler};
@@ -318,22 +319,22 @@ fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
 		.collect()
 }
 
-// pub(crate) fn build_pagefind(out: &Utf8Path) {
-// 	let res = Command::new("pagefind")
-// 		.args(["--site", out.as_str()])
-// 		.output()
-// 		.unwrap();
-
-// 	println!("{}", String::from_utf8(res.stdout).unwrap());
-// }
-
 pub(crate) fn build_pagefind(out: &Utf8Path) {
+	let config = pagefind::options::PagefindServiceConfig::builder().build();
+
+	let thunk = async {
+		let mut index = PagefindIndex::new(Some(config)).expect("Options should be valid");
+		let _ = index.add_directory("dist".into(), None).await.unwrap();
+		let _ = index
+			.write_files(Some("dist/pagefind".into()))
+			.await
+			.unwrap();
+	};
+
 	let rt = tokio::runtime::Builder::new_multi_thread()
 		.enable_all()
 		.build()
 		.unwrap();
 
-	if let Err(err) = rt.block_on(pagefind::runner::run_indexer()) {
-		println!("{}", err);
-	}
+	rt.block_on(thunk)
 }
