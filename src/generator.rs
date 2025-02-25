@@ -12,7 +12,7 @@ use pagefind::api::PagefindIndex;
 use sha2::{Digest, Sha256};
 
 use crate::builder::{Builder, Input, InputItem, InputStylesheet, Scheduler};
-use crate::{Context, Website};
+use crate::{Context, Hash32, Website};
 
 #[derive(Debug)]
 pub struct QueryContent<'a, D> {
@@ -31,7 +31,7 @@ pub struct Sack<'a, G: Send + Sync> {
 	/// Builder allows scheduling build requests.
 	pub(crate) builder: Arc<RwLock<Builder>>,
 	/// Tracked dependencies for current instantation.
-	pub(crate) tracked: Rc<RefCell<HashMap<Utf8PathBuf, Vec<u8>>>>,
+	pub(crate) tracked: Rc<RefCell<HashMap<Utf8PathBuf, Hash32>>>,
 	/// Every single input.
 	pub(crate) items: &'a HashMap<Utf8PathBuf, InputItem>,
 }
@@ -86,7 +86,7 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
 
 		let mut tracked = self.tracked.borrow_mut();
 		for input in inputs.iter() {
-			tracked.insert(input.file.clone(), input.hash.clone());
+			tracked.insert(input.file.clone(), input.hash);
 		}
 
 		inputs
@@ -248,7 +248,7 @@ fn compile(entry: Result<PathBuf, GlobError>) -> Option<InputItem> {
 			let file = Utf8PathBuf::try_from(file).expect("Invalid UTF-8 file name");
 			let opts = grass::Options::default().style(grass::OutputStyle::Compressed);
 			let stylesheet = grass::from_path(&file, &opts).unwrap();
-			let hash = Vec::from_iter(Sha256::digest(&stylesheet));
+			let hash = Sha256::digest(&stylesheet).into();
 
 			Some(InputItem {
 				hash,
@@ -307,7 +307,7 @@ pub(crate) fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> 
 		.map(|key| {
 			let file = path_scripts.join(key).with_extension("js");
 			let buffer = fs::read(&file).unwrap();
-			let hash = Vec::from_iter(Sha256::digest(buffer));
+			let hash = Sha256::digest(buffer).into();
 
 			InputItem {
 				slug: file.clone(),

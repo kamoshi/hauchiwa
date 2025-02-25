@@ -29,10 +29,10 @@ fn load_single<'a>(
 		for processor in processors {
 			if processor.exts.contains(ext) {
 				let data = fs::read(&file).expect("Couldn't read file");
+				let hash = Sha256::digest(&data).into();
 
 				let input = match &processor.kind {
 					ProcessorKind::Asset(ref fun) => {
-						let hash = Vec::from_iter(Sha256::digest(&data));
 						let content = String::from_utf8_lossy(&data);
 						let asset = fun(&content);
 						let slug = file.strip_prefix("content").unwrap().to_owned();
@@ -45,7 +45,6 @@ fn load_single<'a>(
 						}
 					}
 					ProcessorKind::Image => {
-						let hash = Vec::from_iter(Sha256::digest(&data));
 						let slug = file.strip_prefix("content").unwrap().to_owned();
 
 						InputItem {
@@ -67,7 +66,7 @@ fn load_single<'a>(
 			}
 
 			let data = fs::read(&file).expect("Couldn't read file");
-			let hash = Vec::from_iter(Sha256::digest(&data));
+			let hash = Sha256::digest(&data).into();
 			let content = String::from_utf8_lossy(&data);
 			let (meta, content) = init.call(&content);
 

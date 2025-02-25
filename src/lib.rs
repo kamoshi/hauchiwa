@@ -2,7 +2,6 @@
 mod builder;
 mod collection;
 mod generator;
-mod utils;
 mod watch;
 mod website;
 
@@ -107,3 +106,28 @@ macro_rules! matter_parser {
 
 matter_parser!(parse_matter_yaml, YAML);
 matter_parser!(parse_matter_json, JSON);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Hash32([u8; 32]);
+
+impl Hash32 {
+	fn to_hex(self) -> String {
+		use std::fmt::Write;
+		let mut acc = String::with_capacity(64);
+
+		for byte in self.0 {
+			write!(&mut acc, "{:02x}", byte).unwrap();
+		}
+
+		acc
+	}
+}
+
+impl<T> From<T> for Hash32
+where
+	T: Into<[u8; 32]>,
+{
+	fn from(value: T) -> Self {
+		Hash32(value.into())
+	}
+}

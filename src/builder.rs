@@ -13,7 +13,7 @@ use sitemap_rs::url::{ChangeFrequency, Url};
 use sitemap_rs::url_set::UrlSet;
 
 use crate::generator::Sack;
-use crate::{Context, Website};
+use crate::{Context, Hash32, Website};
 
 /// Init pointer used to dynamically retrieve front matter. The type of front matter
 /// needs to be erased at run time and this is one way of accomplishing this,
@@ -60,7 +60,7 @@ pub(crate) enum Input {
 
 #[derive(Debug)]
 pub(crate) struct InputItem {
-	pub(crate) hash: Vec<u8>,
+	pub(crate) hash: Hash32,
 	pub(crate) file: Utf8PathBuf,
 	pub(crate) slug: Utf8PathBuf,
 	pub(crate) data: Input,
@@ -103,7 +103,7 @@ impl<G: Send + Sync> Debug for Task<G> {
 struct Trace<G: Send + Sync> {
 	task: Task<G>,
 	init: bool,
-	deps: HashMap<Utf8PathBuf, Vec<u8>>,
+	deps: HashMap<Utf8PathBuf, Hash32>,
 	path: Box<[Utf8PathBuf]>,
 }
 
@@ -117,7 +117,7 @@ impl<G: Send + Sync> Trace<G> {
 		}
 	}
 
-	fn new_with(&self, deps: HashMap<Utf8PathBuf, Vec<u8>>, path: Box<[Utf8PathBuf]>) -> Self {
+	fn new_with(&self, deps: HashMap<Utf8PathBuf, Hash32>, path: Box<[Utf8PathBuf]>) -> Self {
 		Self {
 			task: self.task.clone(),
 			init: false,
@@ -131,7 +131,7 @@ impl<G: Send + Sync> Trace<G> {
 			|| self
 				.deps
 				.iter()
-				.any(|dep| Some(dep.1) != inputs.get(dep.0).map(|item| &item.hash))
+				.any(|dep| Some(*dep.1) != inputs.get(dep.0).map(|item| item.hash))
 	}
 }
 
@@ -151,7 +151,7 @@ fn optimize_image(buffer: &[u8]) -> Vec<u8> {
 
 #[derive(Debug)]
 pub(crate) struct Builder {
-	state: HashMap<Vec<u8>, Utf8PathBuf>,
+	state: HashMap<Hash32, Utf8PathBuf>,
 }
 
 impl Builder {
@@ -178,7 +178,7 @@ impl Builder {
 			Input::Content(_) => "".into(),
 			Input::Asset(_) => "".into(),
 			Input::Picture => {
-				let hash = crate::utils::hex(&input.hash);
+				let hash = input.hash.to_hex();
 				let path = Utf8Path::new("hash").join(&hash).with_extension("webp");
 				let path_cache = Utf8Path::new(".cache").join(&path);
 
@@ -200,7 +200,7 @@ impl Builder {
 				path_root
 			}
 			Input::Stylesheet(stylesheet) => {
-				let hash = crate::utils::hex(&input.hash);
+				let hash = input.hash.to_hex();
 				let path = Utf8Path::new("hash").join(&hash).with_extension("css");
 
 				let path_root = Utf8Path::new("/").join(&path);
@@ -214,7 +214,7 @@ impl Builder {
 				path_root
 			}
 			Input::Script => {
-				let hash = crate::utils::hex(&input.hash);
+				let hash = input.hash.to_hex();
 				let path = Utf8Path::new("hash").join(&hash).with_extension("js");
 
 				let path_root = Utf8Path::new("/").join(&path);
