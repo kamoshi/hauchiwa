@@ -112,14 +112,16 @@ struct Hash32([u8; 32]);
 
 impl Hash32 {
 	fn to_hex(self) -> String {
-		use std::fmt::Write;
-		let mut acc = String::with_capacity(64);
+		const HEX: &[u8; 16] = b"0123456789abcdef";
+		let mut acc = vec![0u8; 64];
 
-		for byte in self.0 {
-			write!(&mut acc, "{:02x}", byte).unwrap();
+		for (i, &byte) in self.0.iter().enumerate() {
+			acc[i * 2 + 0] = HEX[(byte >> 04) as usize];
+			acc[i * 2 + 1] = HEX[(byte & 0xF) as usize];
 		}
 
-		acc
+		// SAFETY: `acc` contains only valid ASCII bytes.
+		unsafe { String::from_utf8_unchecked(acc) }
 	}
 }
 
