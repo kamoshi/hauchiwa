@@ -13,7 +13,7 @@ use sitemap_rs::url::{ChangeFrequency, Url};
 use sitemap_rs::url_set::UrlSet;
 
 use crate::generator::Sack;
-use crate::{Context, Hash32, Website};
+use crate::{Builder, BuilderError, Context, Hash32, Website};
 
 /// Init pointer used to dynamically retrieve front matter. The type of front matter
 /// needs to be erased at run time and this is one way of accomplishing this,
@@ -33,7 +33,7 @@ impl InitFn {
 
 impl Debug for InitFn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Processor(*)")
+        write!(f, "InitFn(*)")
     }
 }
 
@@ -135,91 +135,6 @@ impl<G: Send + Sync> Trace<G> {
     }
 }
 
-fn optimize_image(buffer: &[u8]) -> Vec<u8> {
-    let img = image::load_from_memory(buffer).expect("Couldn't load image");
-    let dim = (img.width(), img.height());
-
-    let mut out = Vec::new();
-    let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
-
-    encoder
-        .encode(&img.to_rgba8(), dim.0, dim.1, image::ColorType::Rgba8)
-        .expect("Encoding error");
-
-    out
-}
-
-#[derive(Debug)]
-pub(crate) struct Builder {
-    /// Paths to files in dist
-    dist: HashMap<Hash32, Utf8PathBuf>,
-}
-
-impl Builder {
-    pub(crate) fn new() -> Self {
-        Self {
-            dist: HashMap::new(),
-        }
-    }
-
-    pub(crate) fn check(&self, hash: Hash32) -> Option<Utf8PathBuf> {
-        self.dist.get(&hash).cloned()
-    }
-
-    pub(crate) fn build_image(&mut self, hash: Hash32, file: &Utf8Path) -> Utf8PathBuf {
-        let hash_hex = hash.to_hex();
-        let path = Utf8Path::new("hash").join(&hash_hex).with_extension("webp");
-        let path_cache = Utf8Path::new(".cache").join(&path);
-
-        if !path_cache.exists() {
-            let buffer = fs::read(file).unwrap();
-            let buffer = optimize_image(&buffer);
-            fs::create_dir_all(".cache/hash").unwrap();
-            fs::write(&path_cache, buffer).expect("Couldn't output optimized image");
-        }
-
-        let path_root = Utf8Path::new("/").join(&path);
-        let path_dist = Utf8Path::new("dist").join(&path);
-
-        println!("IMG: {}", path_dist);
-        fs::create_dir_all(path_dist.parent().unwrap_or(&path_dist)).unwrap();
-        fs::copy(&path_cache, path_dist).unwrap();
-
-        self.dist.insert(hash, path_root.clone());
-        path_root
-    }
-
-    pub(crate) fn build_style(&mut self, hash: Hash32, style: &InputStylesheet) -> Utf8PathBuf {
-        let hash_hex = hash.to_hex();
-        let path = Utf8Path::new("hash").join(&hash_hex).with_extension("css");
-
-        let path_root = Utf8Path::new("/").join(&path);
-        let path_dist = Utf8Path::new("dist").join(&path);
-
-        println!("CSS: {}", path_dist);
-        fs::create_dir_all(path_dist.parent().unwrap_or(&path_dist)).unwrap();
-        fs::write(&path_dist, &style.stylesheet).unwrap();
-
-        self.dist.insert(hash, path_root.clone());
-        path_root
-    }
-
-    pub(crate) fn build_script(&mut self, hash: Hash32, file: &Utf8Path) -> Utf8PathBuf {
-        let hash_hex = hash.to_hex();
-        let path = Utf8Path::new("hash").join(&hash_hex).with_extension("js");
-
-        let path_root = Utf8Path::new("/").join(&path);
-        let path_dist = Utf8Path::new("dist").join(&path);
-
-        println!("JS: {}", path_dist);
-        fs::create_dir_all(path_dist.parent().unwrap_or(&path_dist)).unwrap();
-        fs::copy(file, path_dist).unwrap();
-
-        self.dist.insert(hash, path_root.clone());
-        path_root
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct Scheduler<'a, G: Send + Sync> {
     context: &'a Context<G>,
@@ -238,11 +153,12 @@ impl<'a, G: Send + Sync> Scheduler<'a, G> {
         }
     }
 
-    pub fn build(&mut self) {
+    pub fn build(&mut self) -> Result<(), BuilderError> {
         self.tracked = mem::take(&mut self.tracked)
             .into_par_iter()
             .map(|trace| self.rebuild_trace(trace))
-            .collect::<Vec<_>>();
+            .collect::<Result<_, _>>()?;
+        Ok(())
     }
 
     pub fn update(&mut self, inputs: Vec<InputItem>) {
@@ -251,7 +167,7 @@ impl<'a, G: Send + Sync> Scheduler<'a, G> {
         }
     }
 
-    pub fn build_sitemap(&self, opts: &Utf8Path) -> Box<[u8]> {
+    pub fn build_sitemap(&self, opts: &Utf8Path) -> Vec<u8> {
         let urls = self
             .tracked
             .iter()
@@ -269,37 +185,39 @@ impl<'a, G: Send + Sync> Scheduler<'a, G> {
         let urls = UrlSet::new(urls).expect("failed a <urlset> validation");
         let mut buf = Vec::<u8>::new();
         urls.write(&mut buf).expect("failed to write XML");
-        buf.into()
+        buf
     }
 
-    fn rebuild_trace(&self, trace: Trace<G>) -> Trace<G> {
+    fn rebuild_trace(&self, trace: Trace<G>) -> Result<Trace<G>, BuilderError> {
         if !trace.is_outdated(&self.items) {
-            return trace;
+            return Ok(trace);
         }
 
-        let deps = Rc::new(RefCell::new(HashMap::new()));
+        let tracked = Rc::new(RefCell::new(HashMap::new()));
 
         let pages = trace.task.run(Sack {
             context: self.context,
             builder: self.builder.clone(),
-            tracked: deps.clone(),
+            tracked: tracked.clone(),
             items: &self.items,
         });
 
-        // output
-        for (path, data) in pages.iter() {
+        for (path, data) in &pages {
             let path = Utf8Path::new("dist").join(path);
             if let Some(dir) = path.parent() {
-                fs::create_dir_all(dir).unwrap();
+                fs::create_dir_all(dir)
+                    .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
             }
-            let mut file = fs::File::create(&path).unwrap();
-            file.write_all(data.as_bytes()).unwrap();
+            let mut file = fs::File::create(&path)
+                .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
+            file.write_all(data.as_bytes())
+                .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
             println!("HTML: {}", path);
         }
 
-        let deps = Rc::try_unwrap(deps).unwrap();
-        let deps = deps.into_inner();
+        let deps = Rc::unwrap_or_clone(tracked).into_inner();
+        let path = pages.into_iter().map(|x| x.0).collect();
 
-        trace.new_with(deps, pages.into_iter().map(|x| x.0).collect())
+        Ok(trace.new_with(deps, path))
     }
 }

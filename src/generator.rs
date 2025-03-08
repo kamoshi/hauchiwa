@@ -1,31 +1,23 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 
 use camino::{Utf8Path, Utf8PathBuf};
-use glob::GlobError;
-use pagefind::api::PagefindIndex;
 use sha2::{Digest, Sha256};
 
-use crate::builder::{Builder, Input, InputItem, InputStylesheet, Scheduler};
-use crate::{Context, Hash32, Website};
-
-#[derive(Debug)]
-pub struct QueryContent<'a, D> {
-    pub file: &'a Utf8Path,
-    pub slug: &'a Utf8Path,
-    pub area: &'a Utf8Path,
-    pub meta: &'a D,
-    pub content: &'a str,
-}
+use crate::builder::{Input, InputItem};
+use crate::error::HauchiwaError;
+use crate::{Builder, Context, Hash32, QueryContent};
 
 /// This struct allows for querying the website hierarchy. It is passed to each rendered website
 /// page, so that it can easily access the website metadata.
-pub struct Sack<'a, G: Send + Sync> {
+pub struct Sack<'a, G>
+where
+    G: Send + Sync,
+{
     /// Global `Context` for the current build.
     pub(crate) context: &'a Context<G>,
     /// Builder allows scheduling build requests.
@@ -36,48 +28,56 @@ pub struct Sack<'a, G: Send + Sync> {
     pub(crate) items: &'a HashMap<Utf8PathBuf, InputItem>,
 }
 
-impl<'a, G: Send + Sync> Sack<'a, G> {
+impl<'a, G> Sack<'a, G>
+where
+    G: Send + Sync,
+{
     /// Retrieve global context
     pub fn get_context(&self) -> &Context<G> {
         self.context
     }
 
-    pub fn get_content<D: 'static>(&self, pattern: &str) -> Option<QueryContent<'_, D>> {
-        let pattern = glob::Pattern::new(pattern).expect("Bad glob pattern");
-        let input = self
+    pub fn get_content<D>(&self, pattern: &str) -> Result<QueryContent<'_, D>, HauchiwaError>
+    where
+        D: 'static,
+    {
+        let glob = glob::Pattern::new(pattern)?;
+        let item = self
             .items
             .values()
-            .find(|item| pattern.matches_path(item.slug.as_ref()))?;
-        if !matches!(input.data, Input::Content(..)) {
-            return None;
+            .find(|item| glob.matches_path(item.slug.as_ref()))
+            .ok_or_else(|| HauchiwaError::AssetNotFound(glob.to_string()))?;
+
+        if let Input::Content(content) = &item.data {
+            let meta = content
+                .meta
+                .downcast_ref::<D>()
+                .ok_or_else(|| HauchiwaError::Frontmatter(item.file.to_string()))?;
+            let area = content.area.as_ref();
+            let content = content.text.as_str();
+
+            self.tracked
+                .borrow_mut()
+                .insert(item.file.clone(), item.hash.clone());
+
+            Ok(QueryContent {
+                file: &item.file,
+                slug: &item.slug,
+                area,
+                meta,
+                content,
+            })
+        } else {
+            Err(HauchiwaError::AssetNotFound(glob.to_string()))
         }
-
-        self.tracked
-            .borrow_mut()
-            .insert(input.file.clone(), input.hash.clone());
-
-        let (area, meta, content) = match &input.data {
-            Input::Content(input_content) => {
-                let area = input_content.area.as_ref();
-                let meta = input_content.meta.downcast_ref::<D>()?;
-                let data = input_content.text.as_str();
-                Some((area, meta, data))
-            }
-            _ => unreachable!(),
-        }?;
-
-        Some(QueryContent {
-            file: &input.file,
-            slug: &input.slug,
-            area,
-            meta,
-            content,
-        })
     }
 
     /// Retrieve many possible content items.
-    pub fn query_content<D: 'static>(&self, pattern: &str) -> Vec<QueryContent<'_, D>> {
-        let pattern = glob::Pattern::new(pattern).expect("Bad glob pattern");
+    pub fn query_content<D>(&self, pattern: &str) -> Result<Vec<QueryContent<'_, D>>, HauchiwaError>
+    where
+        D: 'static,
+    {
+        let pattern = glob::Pattern::new(pattern)?;
         let inputs: Vec<_> = self
             .items
             .values()
@@ -89,7 +89,7 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
             tracked.insert(input.file.clone(), input.hash);
         }
 
-        inputs
+        let query = inputs
             .into_iter()
             .filter_map(|item| {
                 let (area, meta, content) = match &item.data {
@@ -110,96 +110,130 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
                     content,
                 })
             })
-            .collect()
+            .collect();
+
+        Ok(query)
     }
 
     /// Get compiled CSS style by alias.
-    pub fn get_styles(&self, path: &Utf8Path) -> Option<Utf8PathBuf> {
-        let input = self.items.values().find(|item| item.file == path)?;
+    pub fn get_styles(&self, path: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaError> {
+        let item = self
+            .items
+            .values()
+            .find(|item| item.file == path)
+            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
 
-        if let Input::Stylesheet(style) = &input.data {
-            let res = self.builder.read().unwrap().check(input.hash);
-            if res.is_some() {
-                return res;
+        if let Input::Stylesheet(style) = &item.data {
+            let res = self
+                .builder
+                .read()
+                .map_err(|_| HauchiwaError::LockRead)?
+                .check(item.hash);
+            if let Some(res) = res {
+                return Ok(res);
             }
 
-            let res = self.builder.write().unwrap().build_style(input.hash, style);
+            let res = self
+                .builder
+                .write()
+                .map_err(|_| HauchiwaError::LockWrite)?
+                .build_style(item.hash, style)?;
 
             self.tracked
                 .borrow_mut()
-                .insert(input.file.clone(), input.hash);
+                .insert(item.file.clone(), item.hash);
 
-            Some(res)
+            Ok(res)
         } else {
-            None
+            Err(HauchiwaError::AssetNotFound(path.to_string()))
         }
     }
 
     /// Get optimized image path by original path.
-    pub fn get_picture(&self, path: &Utf8Path) -> Option<Utf8PathBuf> {
-        let input = self.items.values().find(|item| item.file == path)?;
+    pub fn get_picture(&self, path: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaError> {
+        let input = self
+            .items
+            .values()
+            .find(|item| item.file == path)
+            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
 
         if let Input::Picture = &input.data {
-            let res = self.builder.read().unwrap().check(input.hash);
-            if res.is_some() {
-                return res;
+            let res = self
+                .builder
+                .read()
+                .map_err(|_| HauchiwaError::LockRead)?
+                .check(input.hash);
+            if let Some(res) = res {
+                return Ok(res);
             }
 
             let res = self
                 .builder
                 .write()
-                .unwrap()
-                .build_image(input.hash, &input.file);
+                .map_err(|_| HauchiwaError::LockWrite)?
+                .build_image(input.hash, &input.file)?;
 
             self.tracked
                 .borrow_mut()
                 .insert(input.file.clone(), input.hash);
 
-            Some(res)
+            Ok(res)
         } else {
-            None
+            Err(HauchiwaError::AssetNotFound(path.to_string()))
         }
     }
 
-    pub fn get_script(&self, path: &str) -> Option<Utf8PathBuf> {
+    pub fn get_script(&self, path: &str) -> Result<Utf8PathBuf, HauchiwaError> {
         let path = Utf8Path::new(".cache/scripts/")
             .join(path)
             .with_extension("js");
 
-        let input = self.items.values().find(|item| item.file == path)?;
+        let input = self
+            .items
+            .values()
+            .find(|item| item.file == path)
+            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
 
         if let Input::Script = &input.data {
-            let res = self.builder.read().unwrap().check(input.hash);
-            if res.is_some() {
-                return res;
+            let res = self
+                .builder
+                .read()
+                .map_err(|_| HauchiwaError::LockRead)?
+                .check(input.hash);
+
+            if let Some(res) = res {
+                return Ok(res);
             }
 
             let res = self
                 .builder
                 .write()
-                .unwrap()
-                .build_script(input.hash, &input.file);
+                .map_err(|_| HauchiwaError::LockWrite)?
+                .build_script(input.hash, &input.file)?;
 
             self.tracked
                 .borrow_mut()
                 .insert(input.file.clone(), input.hash);
 
-            Some(res)
+            Ok(res)
         } else {
-            None
+            Err(HauchiwaError::AssetNotFound(path.to_string()))
         }
     }
 
-    pub fn get_asset<T: 'static>(&self, area: &Utf8Path) -> Option<&T> {
-        let glob = format!("{}/*.bib", area);
-        let glob = glob::Pattern::new(&glob).expect("Bad glob pattern");
+    pub fn get_asset_any<T>(&self, area: &Utf8Path) -> Result<Option<&T>, HauchiwaError>
+    where
+        T: 'static,
+    {
+        let glob = format!("{}/*", area);
+        let glob = glob::Pattern::new(&glob)?;
         let opts = glob::MatchOptions {
             case_sensitive: true,
             require_literal_separator: true,
             require_literal_leading_dot: false,
         };
 
-        let (data, file, hash) = self
+        let found = self
             .items
             .values()
             .filter(|item| glob.matches_path_with(item.file.as_std_path(), opts))
@@ -211,97 +245,15 @@ impl<'a, G: Send + Sync> Sack<'a, G> {
                     Some((data, file, hash))
                 }
                 _ => None,
-            })?;
+            });
 
-        self.tracked.borrow_mut().insert(file, hash);
-
-        Some(data)
-    }
-}
-
-pub(crate) fn build<'a, G>(website: &'a Website<G>, context: &'a Context<G>) -> Scheduler<'a, G>
-where
-    G: Send + Sync + 'static,
-{
-    clean_dist();
-    build_static();
-
-    let items: Vec<_> = website
-        .collections
-        .iter()
-        .flat_map(|collection| collection.load(&website.processors))
-        .chain(load_styles(&website.global_styles))
-        .chain(load_scripts(&website.global_scripts))
-        .collect();
-
-    let mut scheduler = Scheduler::new(website, context, items);
-    scheduler.build();
-
-    if let Some(ref opts) = website.opts_sitemap {
-        let sitemap = scheduler.build_sitemap(opts);
-        fs::write("dist/sitemap.xml", sitemap).expect("Couldn't output sitemap");
-    }
-
-    build_pagefind("dist".into());
-
-    scheduler
-}
-
-pub(crate) fn clean_dist() {
-    println!("Cleaning dist");
-    if fs::metadata("dist").is_ok() {
-        fs::remove_dir_all("dist").unwrap();
-    }
-    fs::create_dir("dist").unwrap();
-}
-
-pub(crate) fn load_styles(paths: &[Utf8PathBuf]) -> Vec<InputItem> {
-    paths
-        .iter()
-        .filter_map(|path| glob::glob(path.join("**/[!_]*.scss").as_str()).ok())
-        .flatten()
-        .filter_map(compile)
-        .collect()
-}
-
-fn compile(entry: Result<PathBuf, GlobError>) -> Option<InputItem> {
-    match entry {
-        Ok(file) => {
-            let file = Utf8PathBuf::try_from(file).expect("Invalid UTF-8 file name");
-            let opts = grass::Options::default().style(grass::OutputStyle::Compressed);
-            let stylesheet = grass::from_path(&file, &opts).unwrap();
-            let hash = Sha256::digest(&stylesheet).into();
-
-            Some(InputItem {
-                hash,
-                file: file.clone(),
-                slug: file,
-                data: Input::Stylesheet(InputStylesheet { stylesheet }),
-            })
+        if let Some((data, file, hash)) = found {
+            self.tracked.borrow_mut().insert(file, hash);
+            return Ok(Some(data));
         }
-        Err(e) => {
-            eprintln!("{:?}", e);
-            None
-        }
-    }
-}
 
-pub(crate) fn build_static() {
-    copy_rec(Path::new("public"), Path::new("dist")).unwrap();
-}
-
-pub(crate) fn copy_rec(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<()> {
-    fs::create_dir_all(&dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let filetype = entry.file_type()?;
-        if filetype.is_dir() {
-            copy_rec(entry.path(), dst.as_ref().join(entry.file_name()))?;
-        } else {
-            fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
-        }
+        Ok(None)
     }
-    Ok(())
 }
 
 pub(crate) fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
@@ -339,24 +291,4 @@ pub(crate) fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> 
             }
         })
         .collect()
-}
-
-pub(crate) fn build_pagefind(out: &Utf8Path) {
-    let config = pagefind::options::PagefindServiceConfig::builder().build();
-
-    let thunk = async {
-        let mut index = PagefindIndex::new(Some(config)).expect("Options should be valid");
-        let _ = index.add_directory("dist".into(), None).await.unwrap();
-        let _ = index
-            .write_files(Some("dist/pagefind".into()))
-            .await
-            .unwrap();
-    };
-
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    rt.block_on(thunk)
 }
