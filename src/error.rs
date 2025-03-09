@@ -35,6 +35,9 @@ pub enum HauchiwaError {
 
     #[error("Failed to build asset {0}")]
     Builder(#[from] BuilderError),
+
+    #[error("Error while running a hook: {0}")]
+    Hook(#[from] HookError),
 }
 
 #[derive(Debug, Error)]
@@ -92,4 +95,10 @@ pub enum BuilderError {
 
     #[error("Failed to optimize image")]
     OptimizationError,
+}
+
+#[derive(Debug, Error)]
+pub enum HookError {
+    #[error("Encountered an error while running a hook {0}")]
+    Userland(#[from] anyhow::Error),
 }

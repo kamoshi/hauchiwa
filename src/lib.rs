@@ -12,9 +12,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
-use builder::{Input, InputItem, InputStylesheet, Scheduler, Trace};
+use builder::{Input, InputItem, InputStylesheet, Scheduler};
 use camino::{Utf8Path, Utf8PathBuf};
-use error::{CleanError, SitemapError, StylesheetError};
+use error::{CleanError, HookError, SitemapError, StylesheetError};
 use generator::load_scripts;
 use gray_matter::engine::{JSON, YAML};
 use gray_matter::Matter;
@@ -46,6 +46,27 @@ pub struct Context<D: Send + Sync> {
     pub data: D,
 }
 
+pub enum Hook {
+    PostBuild(Box<dyn Fn(&[&(Utf8PathBuf, String)]) -> TaskResult<()>>),
+}
+
+impl Hook {
+    pub fn post_build<F>(fun: F) -> Self
+    where
+        F: Fn(&[&(Utf8PathBuf, String)]) -> TaskResult<()> + 'static,
+    {
+        Hook::PostBuild(Box::new(fun))
+    }
+}
+
+impl Debug for Hook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Hook::PostBuild(_) => write!(f, "Hook::PostBuild(*)"),
+        }
+    }
+}
+
 /// This struct represents the website which will be built by the generator. The individual
 /// settings can be set by calling the `setup` function.
 ///
@@ -66,6 +87,8 @@ pub struct Website<D: Send + Sync> {
     pub(crate) global_styles: Vec<Utf8PathBuf>,
     /// Sitemap options
     pub(crate) opts_sitemap: Option<Utf8PathBuf>,
+    /// Hooks
+    pub(crate) hooks: Vec<Hook>,
 }
 
 impl<D: Send + Sync + 'static> Website<D> {
@@ -121,8 +144,8 @@ where
     let mut scheduler = Scheduler::new(website, context, items);
     scheduler.build()?;
 
+    build_hooks(website, &scheduler)?;
     build_sitemap(website, &scheduler)?;
-    build_pagefind(&scheduler.tracked);
 
     Ok(scheduler)
 }
@@ -155,6 +178,25 @@ fn copy_rec(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<()>
     Ok(())
 }
 
+fn build_hooks<D>(website: &Website<D>, scheduler: &Scheduler<D>) -> Result<(), HookError>
+where
+    D: Send + Sync,
+{
+    for hook in &website.hooks {
+        let pages: Vec<_> = scheduler
+            .tracked
+            .iter()
+            .flat_map(|trace| &trace.path)
+            .collect();
+
+        match hook {
+            Hook::PostBuild(fun) => fun(&pages)?,
+        }
+    }
+
+    Ok(())
+}
+
 fn build_sitemap<D>(website: &Website<D>, scheduler: &Scheduler<D>) -> Result<(), SitemapError>
 where
     D: Send + Sync + 'static,
@@ -164,39 +206,6 @@ where
         fs::write("dist/sitemap.xml", sitemap)?;
     }
     Ok(())
-}
-
-// TODO: This should be moved outside the library to post-build "hooks"
-fn build_pagefind<D: Send + Sync>(traces: &[Trace<D>]) {
-    let config = pagefind::options::PagefindServiceConfig::builder().build();
-
-    let thunk = async {
-        let mut index =
-            pagefind::api::PagefindIndex::new(Some(config)).expect("Options should be valid");
-
-        for trace in traces {
-            for (path, data) in &trace.path {
-                if let Some("html") = path.extension() {
-                    index
-                        .add_html_file(Some(path.to_string()), None, data.to_string())
-                        .await
-                        .unwrap();
-                }
-            }
-        }
-
-        let _ = index
-            .write_files(Some("dist/pagefind".into()))
-            .await
-            .unwrap();
-    };
-
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    rt.block_on(thunk)
 }
 
 fn css_load_paths(paths: &[Utf8PathBuf]) -> Result<Vec<InputItem>, StylesheetError> {
@@ -240,6 +249,7 @@ pub struct WebsiteConfiguration<G: Send + Sync> {
     global_scripts: HashMap<&'static str, &'static str>,
     global_styles: Vec<Utf8PathBuf>,
     opts_sitemap: Option<Utf8PathBuf>,
+    hooks: Vec<Hook>,
 }
 
 impl<D: Send + Sync + 'static> WebsiteConfiguration<D> {
@@ -251,6 +261,7 @@ impl<D: Send + Sync + 'static> WebsiteConfiguration<D> {
             global_scripts: HashMap::default(),
             global_styles: Vec::default(),
             opts_sitemap: None,
+            hooks: Vec::new(),
         }
     }
 
@@ -295,7 +306,13 @@ impl<D: Send + Sync + 'static> WebsiteConfiguration<D> {
             global_scripts: self.global_scripts,
             global_styles: self.global_styles,
             opts_sitemap: self.opts_sitemap,
+            hooks: self.hooks,
         }
+    }
+
+    pub fn add_hook(mut self, hook: Hook) -> Self {
+        self.hooks.push(hook);
+        self
     }
 }
 
