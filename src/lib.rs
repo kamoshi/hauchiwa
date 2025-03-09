@@ -14,15 +14,14 @@ use std::sync::{Arc, LazyLock};
 
 use builder::{Input, InputItem, InputStylesheet, Scheduler};
 use camino::{Utf8Path, Utf8PathBuf};
-use error::{CleanError, SitemapError, StylesheetError, UserlandError};
+use error::{CleanError, SitemapError, StylesheetError};
 use generator::load_scripts;
 use gray_matter::engine::{JSON, YAML};
 use gray_matter::Matter;
 use sha2::{Digest, Sha256};
 
 pub use crate::collection::Collection;
-pub use crate::error::BuilderError;
-pub use crate::error::HauchiwaError;
+pub use crate::error::{BuilderError, HauchiwaError};
 pub use crate::generator::Sack;
 
 /// This value controls whether the library should run in the *build* or the
@@ -343,7 +342,7 @@ impl Processor {
 type TaskPaths = Vec<(Utf8PathBuf, String)>;
 
 /// Result from a single executed task.
-type TaskResult<T> = Result<T, UserlandError>;
+pub type TaskResult<T> = anyhow::Result<T, anyhow::Error>;
 
 /// Task function pointer used to dynamically generate a website page. This
 /// function is provided by the user from the userland, but it is used
