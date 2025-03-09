@@ -67,14 +67,14 @@ pub(crate) struct InputItem {
 }
 
 #[derive(Debug)]
-struct Trace<D>
+pub struct Trace<D>
 where
     D: Send + Sync,
 {
     task: Task<D>,
     init: bool,
     deps: HashMap<Utf8PathBuf, Hash32>,
-    path: Box<[Utf8PathBuf]>,
+    pub(crate) path: Vec<(Utf8PathBuf, String)>,
 }
 
 impl<G: Send + Sync> Trace<G> {
@@ -83,11 +83,15 @@ impl<G: Send + Sync> Trace<G> {
             task,
             init: true,
             deps: HashMap::new(),
-            path: Box::new([]),
+            path: Vec::new(),
         }
     }
 
-    fn new_with(&self, deps: HashMap<Utf8PathBuf, Hash32>, path: Box<[Utf8PathBuf]>) -> Self {
+    fn new_with(
+        &self,
+        deps: HashMap<Utf8PathBuf, Hash32>,
+        path: Vec<(Utf8PathBuf, String)>,
+    ) -> Self {
         Self {
             task: self.task.clone(),
             init: false,
@@ -112,7 +116,7 @@ where
 {
     context: &'a Context<D>,
     builder: Arc<RwLock<Builder>>,
-    tracked: Vec<Trace<D>>,
+    pub(crate) tracked: Vec<Trace<D>>,
     items: HashMap<Utf8PathBuf, InputItem>,
 }
 
@@ -148,7 +152,7 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
             .collect::<HashSet<_>>()
             .into_iter()
             .map(|path| {
-                Url::builder(opts.join(path).parent().unwrap().to_string())
+                Url::builder(opts.join(&path.0).parent().unwrap().to_string())
                     .change_frequency(ChangeFrequency::Monthly)
                     .priority(0.8)
                     .build()
@@ -189,8 +193,7 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
         }
 
         let deps = Rc::unwrap_or_clone(tracked).into_inner();
-        let path = pages.into_iter().map(|x| x.0).collect();
 
-        Ok(trace.new_with(deps, path))
+        Ok(trace.new_with(deps, pages))
     }
 }

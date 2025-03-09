@@ -12,7 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
-use builder::{Input, InputItem, InputStylesheet, Scheduler};
+use builder::{Input, InputItem, InputStylesheet, Scheduler, Trace};
 use camino::{Utf8Path, Utf8PathBuf};
 use error::{CleanError, SitemapError, StylesheetError};
 use generator::load_scripts;
@@ -122,7 +122,7 @@ where
     scheduler.build()?;
 
     build_sitemap(website, &scheduler)?;
-    build_pagefind("dist".into());
+    build_pagefind(&scheduler.tracked);
 
     Ok(scheduler)
 }
@@ -167,13 +167,24 @@ where
 }
 
 // TODO: This should be moved outside the library to post-build "hooks"
-fn build_pagefind(_: &Utf8Path) {
+fn build_pagefind<D: Send + Sync>(traces: &[Trace<D>]) {
     let config = pagefind::options::PagefindServiceConfig::builder().build();
 
     let thunk = async {
         let mut index =
             pagefind::api::PagefindIndex::new(Some(config)).expect("Options should be valid");
-        let _ = index.add_directory("dist".into(), None).await.unwrap();
+
+        for trace in traces {
+            for (path, data) in &trace.path {
+                if let Some("html") = path.extension() {
+                    index
+                        .add_html_file(Some(path.to_string()), None, data.to_string())
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+
         let _ = index
             .write_files(Some("dist/pagefind".into()))
             .await
