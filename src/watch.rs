@@ -8,7 +8,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use camino::Utf8PathBuf;
-use notify::{RecursiveMode, Watcher};
+use notify::RecursiveMode;
 use notify_debouncer_full::new_debouncer;
 use tungstenite::WebSocket;
 
@@ -28,17 +28,14 @@ pub(crate) fn watch<G: Send + Sync + 'static>(
     let mut debouncer = new_debouncer(Duration::from_millis(250), None, tx).unwrap();
 
     debouncer
-        .watcher()
         .watch(Path::new("styles"), RecursiveMode::Recursive)
         .unwrap();
 
     debouncer
-        .watcher()
         .watch(Path::new("content"), RecursiveMode::Recursive)
         .unwrap();
 
     debouncer
-        .watcher()
         .watch(Path::new("js"), RecursiveMode::Recursive)
         .unwrap();
 

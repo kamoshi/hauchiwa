@@ -466,13 +466,14 @@ where
 
 fn optimize_image(buffer: &[u8]) -> Vec<u8> {
     let img = image::load_from_memory(buffer).expect("Couldn't load image");
-    let dim = (img.width(), img.height());
+    let w = img.width();
+    let h = img.height();
 
     let mut out = Vec::new();
     let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
 
     encoder
-        .encode(&img.to_rgba8(), dim.0, dim.1, image::ColorType::Rgba8)
+        .encode(&img.to_rgba8(), w, h, image::ExtendedColorType::Rgba8)
         .expect("Encoding error");
 
     out
