@@ -33,7 +33,7 @@ where
     G: Send + Sync,
 {
     /// Retrieve global context
-    pub fn get_context(&self) -> &Context<G> {
+    pub fn get_metadata(&self) -> &Context<G> {
         self.context
     }
 
