@@ -13,7 +13,7 @@ use sitemap_rs::url::{ChangeFrequency, Url};
 use sitemap_rs::url_set::UrlSet;
 
 use crate::generator::Sack;
-use crate::{Builder, BuilderError, Context, Hash32, Website};
+use crate::{Builder, BuilderError, Context, Hash32, Task, Website};
 
 /// Init pointer used to dynamically retrieve front matter. The type of front matter
 /// needs to be erased at run time and this is one way of accomplishing this,
@@ -66,42 +66,12 @@ pub(crate) struct InputItem {
     pub(crate) data: Input,
 }
 
-/// Task function pointer used to dynamically generate a website page.
-type TaskFnPtr<G> = Arc<dyn Fn(Sack<G>) -> Vec<(Utf8PathBuf, String)> + Send + Sync>;
-
-/// Wraps `TaskFnPtr` and implements `Debug` trait for function pointer.
-pub(crate) struct Task<G: Send + Sync>(TaskFnPtr<G>);
-
-impl<G: Send + Sync> Task<G> {
-    /// Create new task function pointer.
-    pub(crate) fn new<F>(func: F) -> Self
-    where
-        F: Fn(Sack<G>) -> Vec<(Utf8PathBuf, String)> + Send + Sync + 'static,
-    {
-        Self(Arc::new(func))
-    }
-
-    /// Run the task to generate a page.
-    pub(crate) fn run(&self, sack: Sack<G>) -> Vec<(Utf8PathBuf, String)> {
-        (self.0)(sack)
-    }
-}
-
-impl<G: Send + Sync> Clone for Task<G> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-impl<G: Send + Sync> Debug for Task<G> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Task(*)")
-    }
-}
-
 #[derive(Debug)]
-struct Trace<G: Send + Sync> {
-    task: Task<G>,
+struct Trace<D>
+where
+    D: Send + Sync,
+{
+    task: Task<D>,
     init: bool,
     deps: HashMap<Utf8PathBuf, Hash32>,
     path: Box<[Utf8PathBuf]>,
@@ -136,15 +106,18 @@ impl<G: Send + Sync> Trace<G> {
 }
 
 #[derive(Debug)]
-pub(crate) struct Scheduler<'a, G: Send + Sync> {
-    context: &'a Context<G>,
+pub(crate) struct Scheduler<'a, D>
+where
+    D: Send + Sync,
+{
+    context: &'a Context<D>,
     builder: Arc<RwLock<Builder>>,
-    tracked: Vec<Trace<G>>,
+    tracked: Vec<Trace<D>>,
     items: HashMap<Utf8PathBuf, InputItem>,
 }
 
-impl<'a, G: Send + Sync> Scheduler<'a, G> {
-    pub fn new(website: &'a Website<G>, context: &'a Context<G>, items: Vec<InputItem>) -> Self {
+impl<'a, D: Send + Sync> Scheduler<'a, D> {
+    pub fn new(website: &'a Website<D>, context: &'a Context<D>, items: Vec<InputItem>) -> Self {
         Self {
             context,
             builder: Arc::new(RwLock::new(Builder::new())),
@@ -188,7 +161,7 @@ impl<'a, G: Send + Sync> Scheduler<'a, G> {
         buf
     }
 
-    fn rebuild_trace(&self, trace: Trace<G>) -> Result<Trace<G>, BuilderError> {
+    fn rebuild_trace(&self, trace: Trace<D>) -> Result<Trace<D>, BuilderError> {
         if !trace.is_outdated(&self.items) {
             return Ok(trace);
         }
@@ -200,7 +173,7 @@ impl<'a, G: Send + Sync> Scheduler<'a, G> {
             builder: self.builder.clone(),
             tracked: tracked.clone(),
             items: &self.items,
-        });
+        })?;
 
         for (path, data) in &pages {
             let path = Utf8Path::new("dist").join(path);

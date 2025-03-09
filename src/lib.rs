@@ -10,11 +10,11 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
-use builder::{Input, InputItem, InputStylesheet, Scheduler, Task};
+use builder::{Input, InputItem, InputStylesheet, Scheduler};
 use camino::{Utf8Path, Utf8PathBuf};
-use error::{CleanError, SitemapError, StylesheetError};
+use error::{CleanError, SitemapError, StylesheetError, UserlandError};
 use generator::load_scripts;
 use gray_matter::engine::{JSON, YAML};
 use gray_matter::Matter;
@@ -232,7 +232,7 @@ pub struct WebsiteConfiguration<G: Send + Sync> {
     opts_sitemap: Option<Utf8PathBuf>,
 }
 
-impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
+impl<D: Send + Sync + 'static> WebsiteConfiguration<D> {
     fn new() -> Self {
         Self {
             collections: Vec::default(),
@@ -267,8 +267,8 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
         self
     }
 
-    pub fn add_task(mut self, func: fn(Sack<G>) -> Vec<(Utf8PathBuf, String)>) -> Self {
-        self.tasks.push(Task::new(func));
+    pub fn add_task(mut self, fun: fn(Sack<D>) -> TaskResult<TaskPaths>) -> Self {
+        self.tasks.push(Task::new(fun));
         self
     }
 
@@ -277,7 +277,7 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
         self
     }
 
-    pub fn finish(self) -> Website<G> {
+    pub fn finish(self) -> Website<D> {
         Website {
             collections: self.collections,
             processors: self.processors,
@@ -336,6 +336,48 @@ impl Processor {
             exts: HashSet::from_iter(exts),
             kind: ProcessorKind::Image,
         }
+    }
+}
+
+/// Rendered content from the userland.
+type TaskPaths = Vec<(Utf8PathBuf, String)>;
+
+/// Result from a single executed task.
+type TaskResult<T> = Result<T, UserlandError>;
+
+/// Task function pointer used to dynamically generate a website page. This
+/// function is provided by the user from the userland, but it is used
+/// internally during the build process.
+type TaskFnPtr<D> = Arc<dyn Fn(Sack<D>) -> TaskResult<TaskPaths> + Send + Sync>;
+
+/// Wraps `TaskFnPtr` and implements `Debug` trait for function pointer.
+struct Task<D: Send + Sync>(TaskFnPtr<D>);
+
+impl<D: Send + Sync> Task<D> {
+    /// Create new task function pointer.
+    fn new<F>(func: F) -> Self
+    where
+        D: Send + Sync,
+        F: Fn(Sack<D>) -> TaskResult<TaskPaths> + Send + Sync + 'static,
+    {
+        Self(Arc::new(func))
+    }
+
+    /// Run the task to generate a page.
+    fn run(&self, sack: Sack<D>) -> TaskResult<TaskPaths> {
+        (self.0)(sack)
+    }
+}
+
+impl<G: Send + Sync> Clone for Task<G> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<G: Send + Sync> Debug for Task<G> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Task(*)")
     }
 }
 

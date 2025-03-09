@@ -38,6 +38,10 @@ pub enum HauchiwaError {
 }
 
 #[derive(Debug, Error)]
+#[error("{0}")]
+pub struct UserlandError(#[from] pub Box<dyn std::error::Error + Send + Sync>);
+
+#[derive(Debug, Error)]
 pub enum CleanError {
     #[error("Failed to remove 'dist' directory: {0}")]
     RemoveError(std::io::Error),
@@ -75,6 +79,9 @@ pub enum WatchError {
 
 #[derive(Debug, Error)]
 pub enum BuilderError {
+    #[error("Userland error: {0}")]
+    Userland(#[from] UserlandError),
+
     #[error("Failed to read file `{0}`: {1}")]
     FileReadError(Utf8PathBuf, std::io::Error),
 
