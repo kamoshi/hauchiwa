@@ -1,70 +1,83 @@
 #![doc = include_str!("../README.md")]
-mod builder;
 mod error;
-mod generator;
 mod watch;
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock};
+use std::process::Command;
+use std::rc::Rc;
+use std::sync::{Arc, LazyLock, RwLock};
+use std::{fs, mem};
 
-use builder::{InitFn, Input, InputContent, InputItem, InputStylesheet, Scheduler};
 use camino::{Utf8Path, Utf8PathBuf};
-use error::{CleanError, HookError, LoaderError, SitemapError, StylesheetError};
-use generator::load_scripts;
 use gray_matter::Matter;
 use gray_matter::engine::{JSON, YAML};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use sitemap_rs::url::{ChangeFrequency, Url};
+use sitemap_rs::url_set::UrlSet;
 
-pub use crate::error::{BuilderError, HauchiwaError};
-pub use crate::generator::Sack;
+pub use crate::error::*;
 
-/// This value controls whether the library should run in the *build* or the
-/// *watch* mode. In *build* mode, the library builds every page of the website
-/// just once and stops. In *watch* mode, the library initializes the initial
+/// This value controls whether the library should run in the `Build` or the
+/// `Watch` mode. In `Build` mode, the library builds every page of the website
+/// just once and stops. In `Watch` mode, the library initializes the initial
 /// state of the build process, opens up a websocket port, and watches for any
-/// changes in the file system. Using the *watch* mode allows you to enable
+/// changes in the file system. Using the `Watch` mode allows you to enable
 /// live-reload while editing the styles or the content of your website.
 #[derive(Debug, Clone, Copy)]
 pub enum Mode {
-    /// Run the library in *build* mode.
+    /// Run the library in `Build` mode.
     Build,
-    /// Run the library in *watch* mode.
+    /// Run the library in `Watch` mode.
     Watch,
 }
 
-/// `D` represents any additional data that should be globally available
-/// during the rendering process.
+/// `G` represents any additional data that should be globally available during
+/// the HTML rendering process. If no such data is needed, it can be substituted
+/// with `()`.
 #[derive(Debug, Clone)]
-pub struct Context<D: Send + Sync> {
+pub struct Global<G: Send + Sync> {
+    /// Generator mode.
     pub mode: Mode,
-    pub data: D,
+    /// Any additional data.
+    pub data: G,
 }
 
-pub enum Hook {
-    PostBuild(Box<dyn Fn(&[&(Utf8PathBuf, String)]) -> TaskResult<()>>),
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Hash32([u8; 32]);
 
-impl Hook {
-    pub fn post_build<F>(fun: F) -> Self
-    where
-        F: Fn(&[&(Utf8PathBuf, String)]) -> TaskResult<()> + 'static,
-    {
-        Hook::PostBuild(Box::new(fun))
-    }
-}
+impl Hash32 {
+    fn to_hex(self) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut acc = vec![0u8; 64];
 
-impl Debug for Hook {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Hook::PostBuild(_) => write!(f, "Hook::PostBuild(*)"),
+        for (i, &byte) in self.0.iter().enumerate() {
+            acc[i * 2 + 0] = HEX[(byte >> 04) as usize];
+            acc[i * 2 + 1] = HEX[(byte & 0xF) as usize];
         }
+
+        // SAFETY: `acc` contains only valid ASCII bytes.
+        unsafe { String::from_utf8_unchecked(acc) }
     }
 }
+
+impl<T> From<T> for Hash32
+where
+    T: Into<[u8; 32]>,
+{
+    fn from(value: T) -> Self {
+        Hash32(value.into())
+    }
+}
+
+// ******************************
+// *       Website data         *
+// ******************************
 
 /// This struct represents the website which will be built by the generator. The individual
 /// settings can be set by calling the `setup` function.
@@ -72,14 +85,14 @@ impl Debug for Hook {
 /// The `G` type parameter is the global data container accessible in every page renderer as `ctx.data`,
 /// though it can be replaced with the `()` Unit if you don't need to pass any data.
 #[derive(Debug)]
-pub struct Website<D: Send + Sync> {
+pub struct Website<G: Send + Sync> {
     /// Rendered assets and content are outputted to this directory.
     /// All collections added to this website.
     pub(crate) collections: Vec<Collection>,
     /// Preprocessors for files
     pub(crate) processors: Vec<Processor>,
     /// Build tasks which can be used to generate pages.
-    pub(crate) tasks: Vec<Task<D>>,
+    pub(crate) tasks: Vec<Task<G>>,
     /// Global scripts
     pub(crate) global_scripts: HashMap<&'static str, &'static str>,
     /// Global styles
@@ -90,37 +103,59 @@ pub struct Website<D: Send + Sync> {
     pub(crate) hooks: Vec<Hook>,
 }
 
-impl<D: Send + Sync + 'static> Website<D> {
-    pub fn configure() -> WebsiteConfiguration<D> {
+impl<G: Send + Sync + 'static> Website<G> {
+    pub fn configure() -> WebsiteConfiguration<G> {
         WebsiteConfiguration::new()
     }
 
-    pub fn build(&self, data: D) -> Result<(), HauchiwaError> {
-        let context = Context {
+    pub fn build(&self, data: G) -> Result<(), HauchiwaError> {
+        let context = Global {
             mode: Mode::Build,
             data,
         };
 
-        let _ = init(self, &context)?;
+        let _ = self.init(&context)?;
 
         Ok(())
     }
 
-    pub fn watch(&self, data: D) -> Result<(), HauchiwaError> {
-        let context = Context {
+    pub fn watch(&self, data: G) -> Result<(), HauchiwaError> {
+        let context = Global {
             mode: Mode::Watch,
             data,
         };
 
-        let scheduler = init(self, &context)?;
-        crate::watch::watch(self, scheduler)?;
+        let _ = self.init(&context)?.watch(self)?;
 
         Ok(())
+    }
+
+    fn init<'a>(&'a self, context: &'a Global<G>) -> Result<Scheduler<'a, G>, HauchiwaError> {
+        init_clean_dist()?;
+        init_clone_static()?;
+
+        let mut items = vec![];
+
+        for collection in &self.collections {
+            items.extend(collection.load(&self.processors)?);
+        }
+
+        items.extend(css_load_paths(&self.global_styles)?);
+        items.extend(load_scripts(&self.global_scripts));
+
+        let mut scheduler = Scheduler::new(self, context, items);
+        scheduler.refresh()?;
+
+        build_hooks(self, &scheduler)?;
+        build_sitemap(self, &scheduler)?;
+
+        Ok(scheduler)
     }
 
     /// Load items by a set of paths.
     fn load_set(&self, paths: &HashSet<Utf8PathBuf>) -> Result<Vec<InputItem>, LoaderError> {
         let mut items = vec![];
+
         for path in paths {
             for collection in &self.collections {
                 if let Some(item) = collection.load_single(path)? {
@@ -131,34 +166,6 @@ impl<D: Send + Sync + 'static> Website<D> {
 
         Ok(items)
     }
-}
-
-fn init<'a, D>(
-    website: &'a Website<D>,
-    context: &'a Context<D>,
-) -> Result<Scheduler<'a, D>, HauchiwaError>
-where
-    D: Send + Sync + 'static,
-{
-    init_clean_dist()?;
-    init_clone_static()?;
-
-    let mut items = vec![];
-
-    for collection in &website.collections {
-        items.extend(collection.load(&website.processors)?);
-    }
-
-    items.extend(css_load_paths(&website.global_styles)?);
-    items.extend(load_scripts(&website.global_scripts));
-
-    let mut scheduler = Scheduler::new(website, context, items);
-    scheduler.refresh()?;
-
-    build_hooks(website, &scheduler)?;
-    build_sitemap(website, &scheduler)?;
-
-    Ok(scheduler)
 }
 
 fn init_clean_dist() -> Result<(), CleanError> {
@@ -189,9 +196,9 @@ fn copy_rec(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<()>
     Ok(())
 }
 
-fn build_hooks<D>(website: &Website<D>, scheduler: &Scheduler<D>) -> Result<(), HookError>
+fn build_hooks<G>(website: &Website<G>, scheduler: &Scheduler<G>) -> Result<(), HookError>
 where
-    D: Send + Sync,
+    G: Send + Sync,
 {
     for hook in &website.hooks {
         let pages: Vec<_> = scheduler
@@ -208,9 +215,9 @@ where
     Ok(())
 }
 
-fn build_sitemap<D>(website: &Website<D>, scheduler: &Scheduler<D>) -> Result<(), SitemapError>
+fn build_sitemap<G>(website: &Website<G>, scheduler: &Scheduler<G>) -> Result<(), SitemapError>
 where
-    D: Send + Sync + 'static,
+    G: Send + Sync,
 {
     if let Some(ref opts) = website.opts_sitemap {
         let sitemap = scheduler.build_sitemap(opts);
@@ -251,8 +258,49 @@ fn css_compile(file: PathBuf) -> Result<InputItem, StylesheetError> {
     })
 }
 
+fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
+    let mut cmd = Command::new("esbuild");
+
+    for (alias, path) in entrypoints.iter() {
+        cmd.arg(format!("{}={}", alias, path));
+    }
+
+    let path_scripts = Utf8Path::new(".cache/scripts/");
+
+    let res = cmd
+        .arg("--format=esm")
+        .arg("--bundle")
+        .arg("--minify")
+        .arg(format!("--outdir={}", path_scripts))
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(res.stderr).unwrap();
+    println!("{}", stderr);
+
+    entrypoints
+        .keys()
+        .map(|key| {
+            let file = path_scripts.join(key).with_extension("js");
+            let buffer = fs::read(&file).unwrap();
+            let hash = Sha256::digest(buffer).into();
+
+            InputItem {
+                slug: file.clone(),
+                file,
+                hash,
+                data: Input::Script,
+            }
+        })
+        .collect()
+}
+
+// ******************************
+// *       Configuration        *
+// ******************************
+
 /// A builder struct for creating a `Website` with specified settings.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct WebsiteConfiguration<G: Send + Sync> {
     collections: Vec<Collection>,
     processors: Vec<Processor>,
@@ -263,7 +311,7 @@ pub struct WebsiteConfiguration<G: Send + Sync> {
     hooks: Vec<Hook>,
 }
 
-impl<D: Send + Sync + 'static> WebsiteConfiguration<D> {
+impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
     fn new() -> Self {
         Self {
             collections: Vec::default(),
@@ -299,7 +347,7 @@ impl<D: Send + Sync + 'static> WebsiteConfiguration<D> {
         self
     }
 
-    pub fn add_task(mut self, fun: fn(Sack<D>) -> TaskResult<TaskPaths>) -> Self {
+    pub fn add_task(mut self, fun: fn(Sack<G>) -> TaskResult<TaskPaths>) -> Self {
         self.tasks.push(Task::new(fun));
         self
     }
@@ -309,7 +357,7 @@ impl<D: Send + Sync + 'static> WebsiteConfiguration<D> {
         self
     }
 
-    pub fn finish(self) -> Website<D> {
+    pub fn finish(self) -> Website<G> {
         Website {
             collections: self.collections,
             processors: self.processors,
@@ -330,6 +378,39 @@ impl<D: Send + Sync + 'static> WebsiteConfiguration<D> {
 // ******************************
 // *         Loader             *
 // ******************************
+
+/// Erased frontmatter container.
+type AnyMatter = Arc<dyn Any + Send + Sync>;
+
+/// Init pointer used to dynamically retrieve front matter.
+type InitFnPtr = Arc<dyn Fn(&str) -> Result<(AnyMatter, String), LoaderError>>;
+
+/// Wraps `InitFnPtr` and implements `Debug` trait for function pointer.
+#[derive(Clone)]
+struct InitFn(InitFnPtr);
+
+impl InitFn {
+    fn new<D>(parse_matter: fn(&str) -> Result<(D, String), anyhow::Error>) -> Self
+    where
+        D: for<'de> Deserialize<'de> + Send + Sync + 'static,
+    {
+        Self(Arc::new(move |content| {
+            let (meta, data) = parse_matter(content).map_err(|e| LoaderError::Callback(e))?;
+            Ok((Arc::new(meta), data))
+        }))
+    }
+
+    /// Call the contained `InitFn` pointer.
+    fn call(&self, data: &str) -> Result<(AnyMatter, String), LoaderError> {
+        (self.0)(data)
+    }
+}
+
+impl Debug for InitFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "InitFn(*)")
+    }
+}
 
 #[derive(Debug)]
 enum Loader {
@@ -357,6 +438,24 @@ impl LoaderGlob {
         }
 
         Ok(vec)
+    }
+
+    fn load_single(
+        &self,
+        path: &Utf8Path,
+        init: &InitFn,
+    ) -> Result<Option<InputItem>, LoaderError> {
+        let pattern = Utf8Path::new(self.base).join(self.glob);
+        let pattern = glob::Pattern::new(pattern.as_str())?;
+
+        if !pattern.matches_path(path.as_std_path()) {
+            return Ok(None);
+        };
+
+        let path = path.to_owned();
+        let item = load_item(path, init.clone(), &self.exts, &[])?;
+
+        Ok(item)
     }
 }
 
@@ -446,6 +545,10 @@ fn load_item<'a>(
     Ok(Some(item))
 }
 
+// ******************************
+// *        Collection          *
+// ******************************
+
 /// An opaque representation of a source of inputs loaded into the generator.
 /// You can think of a single collection as a set of written articles with
 /// shared frontmatter shape, for example your blog posts.
@@ -456,7 +559,9 @@ fn load_item<'a>(
 /// to the markdown file.
 #[derive(Debug)]
 pub struct Collection {
+    /// Content loader.
     loader: Loader,
+    /// Content initialization function.
     init: InitFn,
 }
 
@@ -476,14 +581,14 @@ impl Collection {
     /// ```rust
     /// Collection::glob_with("content", "posts/**/*", ["md"], parse_matter_yaml::<Post>);
     /// ```
-    pub fn glob_with<T>(
+    pub fn glob_with<D>(
         path_base: &'static str,
         path_glob: &'static str,
         exts_content: impl IntoIterator<Item = &'static str>,
-        parse_matter: fn(&str) -> Result<(T, String), anyhow::Error>,
+        parse_matter: fn(&str) -> Result<(D, String), anyhow::Error>,
     ) -> Self
     where
-        T: for<'de> Deserialize<'de> + Send + Sync + 'static,
+        D: for<'de> Deserialize<'de> + Send + Sync + 'static,
     {
         Self {
             loader: Loader::Glob(LoaderGlob {
@@ -491,10 +596,7 @@ impl Collection {
                 glob: path_glob,
                 exts: HashSet::from_iter(exts_content),
             }),
-            init: InitFn(Arc::new(move |content| {
-                let (meta, data) = parse_matter(content).map_err(|e| LoaderError::Callback(e))?;
-                Ok((Arc::new(meta), data))
-            })),
+            init: InitFn::new(parse_matter),
         }
     }
 
@@ -505,42 +607,28 @@ impl Collection {
     }
 
     fn load_single(&self, path: &Utf8Path) -> Result<Option<InputItem>, LoaderError> {
-        let Loader::Glob(loader) = &self.loader;
-        let pattern = Utf8Path::new(loader.base).join(loader.glob);
-        let pattern = glob::Pattern::new(pattern.as_str())?;
-
-        if !pattern.matches_path(path.as_std_path()) {
-            return Ok(None);
-        };
-
-        let path = path.to_owned();
-        let item = load_item(path, self.init.clone(), &loader.exts, &[])?;
-
-        Ok(item)
+        match &self.loader {
+            Loader::Glob(loader) => loader.load_single(path, &self.init),
+        }
     }
 }
 
-#[derive(Debug)]
-pub struct QueryContent<'a, D> {
-    pub file: &'a Utf8Path,
-    pub slug: &'a Utf8Path,
-    pub area: &'a Utf8Path,
-    pub meta: &'a D,
-    pub content: &'a str,
-}
+// ******************************
+// *        Processor           *
+// ******************************
 
-type Erased = Box<dyn Any + Send + Sync>;
+type AnyAsset = Box<dyn Any + Send + Sync>;
 
-pub(crate) enum ProcessorKind {
-    Asset(Box<dyn Fn(&str) -> Erased>),
+enum ProcessorKind {
+    Asset(Box<dyn Fn(&str) -> AnyAsset>),
     Image,
 }
 
 impl Debug for ProcessorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProcessorKind::Asset(_) => write!(f, "<Processor Asset>"),
-            ProcessorKind::Image => write!(f, "<Processor Image>"),
+            ProcessorKind::Asset(_) => write!(f, "ProcessorKind::Asset(*)"),
+            ProcessorKind::Image => write!(f, "ProcessorKind::Image"),
         }
     }
 }
@@ -567,48 +655,6 @@ impl Processor {
             exts: HashSet::from_iter(exts),
             kind: ProcessorKind::Image,
         }
-    }
-}
-
-/// Rendered content from the userland.
-type TaskPaths = Vec<(Utf8PathBuf, String)>;
-
-/// Result from a single executed task.
-pub type TaskResult<T> = anyhow::Result<T, anyhow::Error>;
-
-/// Task function pointer used to dynamically generate a website page. This
-/// function is provided by the user from the userland, but it is used
-/// internally during the build process.
-type TaskFnPtr<D> = Arc<dyn Fn(Sack<D>) -> TaskResult<TaskPaths> + Send + Sync>;
-
-/// Wraps `TaskFnPtr` and implements `Debug` trait for function pointer.
-struct Task<D: Send + Sync>(TaskFnPtr<D>);
-
-impl<D: Send + Sync> Task<D> {
-    /// Create new task function pointer.
-    fn new<F>(func: F) -> Self
-    where
-        D: Send + Sync,
-        F: Fn(Sack<D>) -> TaskResult<TaskPaths> + Send + Sync + 'static,
-    {
-        Self(Arc::new(func))
-    }
-
-    /// Run the task to generate a page.
-    fn run(&self, sack: Sack<D>) -> TaskResult<TaskPaths> {
-        (self.0)(sack)
-    }
-}
-
-impl<G: Send + Sync> Clone for Task<G> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-impl<G: Send + Sync> Debug for Task<G> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Task(*)")
     }
 }
 
@@ -643,47 +689,312 @@ macro_rules! matter_parser {
 matter_parser!(parse_matter_yaml, YAML);
 matter_parser!(parse_matter_json, JSON);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct Hash32([u8; 32]);
+// ******************************
+// *           Tasks            *
+// ******************************
 
-impl Hash32 {
-    fn to_hex(self) -> String {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut acc = vec![0u8; 64];
+/// Rendered content from the userland.
+type TaskPaths = Vec<(Utf8PathBuf, String)>;
 
-        for (i, &byte) in self.0.iter().enumerate() {
-            acc[i * 2 + 0] = HEX[(byte >> 04) as usize];
-            acc[i * 2 + 1] = HEX[(byte & 0xF) as usize];
+/// Result from a single executed task.
+pub type TaskResult<T> = anyhow::Result<T, anyhow::Error>;
+
+/// Task function pointer used to dynamically generate a website page. This
+/// function is provided by the user from the userland, but it is used
+/// internally during the build process.
+type TaskFnPtr<D> = Arc<dyn Fn(Sack<D>) -> TaskResult<TaskPaths> + Send + Sync>;
+
+/// Wraps `TaskFnPtr` and implements `Debug` trait for function pointer.
+struct Task<D: Send + Sync>(TaskFnPtr<D>);
+
+impl<D: Send + Sync> Task<D> {
+    /// Create new task function pointer.
+    fn new<F>(func: F) -> Self
+    where
+        D: Send + Sync,
+        F: Fn(Sack<D>) -> TaskResult<TaskPaths> + Send + Sync + 'static,
+    {
+        Self(Arc::new(func))
+    }
+
+    /// Run the task to generate a page.
+    fn call(&self, sack: Sack<D>) -> TaskResult<TaskPaths> {
+        (self.0)(sack)
+    }
+}
+
+impl<G: Send + Sync> Clone for Task<G> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<G: Send + Sync> Debug for Task<G> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Task(*)")
+    }
+}
+
+// ******************************
+// *           Hooks            *
+// ******************************
+
+pub enum Hook {
+    PostBuild(Box<dyn Fn(&[&(Utf8PathBuf, String)]) -> TaskResult<()>>),
+}
+
+impl Hook {
+    pub fn post_build<F>(fun: F) -> Self
+    where
+        F: Fn(&[&(Utf8PathBuf, String)]) -> TaskResult<()> + 'static,
+    {
+        Hook::PostBuild(Box::new(fun))
+    }
+}
+
+impl Debug for Hook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Hook::PostBuild(_) => write!(f, "Hook::PostBuild(*)"),
+        }
+    }
+}
+
+// ******************************
+// *         Scheduler          *
+// ******************************
+
+#[derive(Debug)]
+struct InputContent {
+    area: Utf8PathBuf,
+    meta: Arc<dyn Any + Send + Sync>,
+    text: String,
+}
+
+#[derive(Debug)]
+struct InputStylesheet {
+    stylesheet: String,
+}
+
+#[derive(Debug)]
+enum Input {
+    Content(InputContent),
+    Asset(Box<dyn Any + Send + Sync>),
+    Picture,
+    Stylesheet(InputStylesheet),
+    Script,
+}
+
+#[derive(Debug)]
+struct InputItem {
+    hash: Hash32,
+    file: Utf8PathBuf,
+    slug: Utf8PathBuf,
+    data: Input,
+}
+
+#[derive(Debug)]
+struct Trace<D>
+where
+    D: Send + Sync,
+{
+    task: Task<D>,
+    init: bool,
+    deps: HashMap<Utf8PathBuf, Hash32>,
+    glob: Vec<glob::Pattern>,
+    path: Vec<(Utf8PathBuf, String)>,
+}
+
+impl<G: Send + Sync> Trace<G> {
+    fn new(task: Task<G>) -> Self {
+        Self {
+            task,
+            init: true,
+            deps: HashMap::new(),
+            glob: Vec::new(),
+            path: Vec::new(),
+        }
+    }
+
+    fn new_with(&self, deps: Tracker, path: Vec<(Utf8PathBuf, String)>) -> Self {
+        Self {
+            task: self.task.clone(),
+            init: false,
+            deps: deps.hash,
+            glob: deps.glob,
+            path,
+        }
+    }
+
+    fn is_outdated(&self, inputs: &HashMap<Utf8PathBuf, InputItem>) -> bool {
+        if self.init {
+            return true;
         }
 
-        // SAFETY: `acc` contains only valid ASCII bytes.
-        unsafe { String::from_utf8_unchecked(acc) }
+        let mut cache_hits = 0;
+        for item in inputs.values() {
+            if let Some(hash_old) = self.deps.get(&item.file) {
+                if item.hash == *hash_old {
+                    cache_hits += 1;
+                    continue;
+                } else {
+                    return true;
+                }
+            }
+
+            // If we haven't had a file dependency, but it matches, it means it
+            // was recently added by the user.
+            for pattern in &self.glob {
+                if pattern.matches_path(item.slug.as_ref()) {
+                    return true;
+                }
+            }
+        }
+
+        // If any file dependency is physically removed, the cache hit count
+        // will not match the old dependency count
+        cache_hits != self.deps.len()
     }
 }
 
-impl<T> From<T> for Hash32
+#[derive(Debug)]
+struct Scheduler<'a, D>
 where
-    T: Into<[u8; 32]>,
+    D: Send + Sync,
 {
-    fn from(value: T) -> Self {
-        Hash32(value.into())
+    context: &'a Global<D>,
+    builder: Arc<RwLock<Builder>>,
+    tracked: Vec<Trace<D>>,
+    items: HashMap<Utf8PathBuf, InputItem>,
+    cache_pages: HashMap<Utf8PathBuf, Hash32>,
+}
+
+impl<'a, D: Send + Sync> Scheduler<'a, D> {
+    pub fn new(website: &'a Website<D>, context: &'a Global<D>, items: Vec<InputItem>) -> Self {
+        Self {
+            context,
+            builder: Arc::new(RwLock::new(Builder::new())),
+            tracked: website.tasks.iter().cloned().map(Trace::new).collect(),
+            items: HashMap::from_iter(items.into_iter().map(|item| (item.file.clone(), item))),
+            cache_pages: HashMap::new(),
+        }
+    }
+
+    pub fn update(&mut self, inputs: Vec<InputItem>) {
+        for input in inputs {
+            self.items.insert(input.file.clone(), input);
+        }
+    }
+
+    pub fn build_sitemap(&self, opts: &Utf8Path) -> Vec<u8> {
+        let urls = self
+            .tracked
+            .iter()
+            .flat_map(|x| &x.path)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .map(|path| {
+                Url::builder(opts.join(&path.0).parent().unwrap().to_string())
+                    .change_frequency(ChangeFrequency::Monthly)
+                    .priority(0.8)
+                    .build()
+                    .expect("failed a <url> validation")
+            })
+            .collect::<Vec<_>>();
+        let urls = UrlSet::new(urls).expect("failed a <urlset> validation");
+        let mut buf = Vec::<u8>::new();
+        urls.write(&mut buf).expect("failed to write XML");
+        buf
+    }
+
+    fn rebuild_trace(&self, trace: Trace<D>) -> Result<Trace<D>, BuilderError> {
+        if !trace.is_outdated(&self.items) {
+            return Ok(trace);
+        }
+
+        let tracker = Tracker {
+            hash: HashMap::new(),
+            glob: Vec::new(),
+        };
+
+        let tracker = Rc::new(RefCell::new(tracker));
+
+        let paths = trace.task.call(Sack {
+            context: self.context,
+            builder: self.builder.clone(),
+            tracker: tracker.clone(),
+            items: &self.items,
+        })?;
+
+        let tracker = Rc::unwrap_or_clone(tracker).into_inner();
+
+        Ok(trace.new_with(tracker, paths))
+    }
+
+    fn remove(&mut self, paths: HashSet<&Path>) {
+        self.items = mem::take(&mut self.items)
+            .into_iter()
+            .filter(|p| !paths.contains(p.1.file.as_std_path()))
+            .collect();
+    }
+
+    fn refresh(&mut self) -> Result<(), HauchiwaError> {
+        self.build_pages()?;
+        self.write_pages()?;
+
+        Ok(())
+    }
+
+    fn build_pages(&mut self) -> Result<(), BuilderError> {
+        self.tracked = mem::take(&mut self.tracked)
+            .into_par_iter()
+            .map(|trace| self.rebuild_trace(trace))
+            .collect::<Result<_, _>>()?;
+        Ok(())
+    }
+
+    fn write_pages(&mut self) -> Result<(), HauchiwaError> {
+        let mut temp = HashMap::new();
+
+        for trace in &self.tracked {
+            for (slug, data) in &trace.path {
+                let hash = Sha256::digest(&data).into();
+                let path = Utf8Path::new("dist").join(slug);
+
+                if Some(hash) == self.cache_pages.get(&path).copied() {
+                    continue;
+                } else {
+                    self.cache_pages.insert(path.clone(), hash);
+                }
+
+                if temp.contains_key(&path) {
+                    println!("Warning, overwriting path {slug}")
+                }
+
+                if let Some(dir) = path.parent() {
+                    fs::create_dir_all(dir)
+                        .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
+                }
+                let mut file = fs::File::create(&path)
+                    .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
+                std::io::Write::write_all(&mut file, data.as_bytes())
+                    .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
+
+                println!("HTML: {}", path);
+
+                temp.insert(path.clone(), hash);
+            }
+        }
+
+        self.cache_pages.extend(temp.into_iter());
+
+        Ok(())
     }
 }
 
-fn optimize_image(buffer: &[u8]) -> Vec<u8> {
-    let img = image::load_from_memory(buffer).expect("Couldn't load image");
-    let w = img.width();
-    let h = img.height();
-
-    let mut out = Vec::new();
-    let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
-
-    encoder
-        .encode(&img.to_rgba8(), w, h, image::ExtendedColorType::Rgba8)
-        .expect("Encoding error");
-
-    out
-}
+// ******************************
+// *          Builder           *
+// ******************************
 
 #[derive(Debug)]
 pub(crate) struct Builder {
@@ -777,5 +1088,291 @@ impl Builder {
 
         self.dist.insert(hash, path_root.clone());
         Ok(path_root)
+    }
+}
+
+fn optimize_image(buffer: &[u8]) -> Vec<u8> {
+    let img = image::load_from_memory(buffer).expect("Couldn't load image");
+    let w = img.width();
+    let h = img.height();
+
+    let mut out = Vec::new();
+    let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
+
+    encoder
+        .encode(&img.to_rgba8(), w, h, image::ExtendedColorType::Rgba8)
+        .expect("Encoding error");
+
+    out
+}
+
+// ******************************
+// *          Runtime           *
+// ******************************
+
+/// This struct allows for querying the website hierarchy. It is passed to each rendered website
+/// page, so that it can easily access the website metadata.
+pub struct Sack<'a, G>
+where
+    G: Send + Sync,
+{
+    /// Global `Context` for the current build.
+    context: &'a Global<G>,
+    /// Builder allows scheduling build requests.
+    builder: Arc<RwLock<Builder>>,
+    /// Tracked dependencies for current instantation.
+    tracker: Rc<RefCell<Tracker>>,
+    /// Every single input.
+    items: &'a HashMap<Utf8PathBuf, InputItem>,
+}
+
+#[derive(Debug)]
+pub struct QueryContent<'a, D> {
+    pub file: &'a Utf8Path,
+    pub slug: &'a Utf8Path,
+    pub area: &'a Utf8Path,
+    pub meta: &'a D,
+    pub content: &'a str,
+}
+
+#[derive(Clone)]
+struct Tracker {
+    hash: HashMap<Utf8PathBuf, Hash32>,
+    glob: Vec<glob::Pattern>,
+}
+
+impl<'a, G> Sack<'a, G>
+where
+    G: Send + Sync,
+{
+    /// Retrieve global context
+    pub fn get_metadata(&self) -> &Global<G> {
+        self.context
+    }
+
+    pub fn get_content<D>(&self, pattern: &str) -> Result<QueryContent<'_, D>, HauchiwaError>
+    where
+        D: 'static,
+    {
+        let glob = glob::Pattern::new(pattern)?;
+        self.tracker.borrow_mut().glob.push(glob.clone());
+
+        let item = self
+            .items
+            .values()
+            .find(|item| glob.matches_path(item.slug.as_ref()))
+            .ok_or_else(|| HauchiwaError::AssetNotFound(glob.to_string()))?;
+
+        if let Input::Content(content) = &item.data {
+            let meta = content
+                .meta
+                .downcast_ref::<D>()
+                .ok_or_else(|| HauchiwaError::Frontmatter(item.file.to_string()))?;
+            let area = content.area.as_ref();
+            let content = content.text.as_str();
+
+            self.tracker
+                .borrow_mut()
+                .hash
+                .insert(item.file.clone(), item.hash.clone());
+
+            Ok(QueryContent {
+                file: &item.file,
+                slug: &item.slug,
+                area,
+                meta,
+                content,
+            })
+        } else {
+            Err(HauchiwaError::AssetNotFound(glob.to_string()))
+        }
+    }
+
+    /// Retrieve many possible content items.
+    pub fn query_content<D>(&self, pattern: &str) -> Result<Vec<QueryContent<'_, D>>, HauchiwaError>
+    where
+        D: 'static,
+    {
+        let pattern = glob::Pattern::new(pattern)?;
+        self.tracker.borrow_mut().glob.push(pattern.clone());
+
+        let inputs: Vec<_> = self
+            .items
+            .values()
+            .filter(|item| pattern.matches_path(item.slug.as_ref()))
+            .collect();
+
+        let mut tracked = self.tracker.borrow_mut();
+        for input in inputs.iter() {
+            tracked.hash.insert(input.file.clone(), input.hash);
+        }
+
+        let query = inputs
+            .into_iter()
+            .filter_map(|item| {
+                let (area, meta, content) = match &item.data {
+                    Input::Content(input_content) => {
+                        let area = input_content.area.as_ref();
+                        let meta = input_content.meta.downcast_ref::<D>()?;
+                        let data = input_content.text.as_str();
+                        Some((area, meta, data))
+                    }
+                    _ => None,
+                }?;
+
+                Some(QueryContent {
+                    file: &item.file,
+                    slug: &item.slug,
+                    area,
+                    meta,
+                    content,
+                })
+            })
+            .collect();
+
+        Ok(query)
+    }
+
+    /// Get compiled CSS style by alias.
+    pub fn get_styles(&self, path: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaError> {
+        let item = self
+            .items
+            .values()
+            .find(|item| item.file == path)
+            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
+
+        if let Input::Stylesheet(style) = &item.data {
+            let res = self
+                .builder
+                .read()
+                .map_err(|_| HauchiwaError::LockRead)?
+                .check(item.hash);
+            if let Some(res) = res {
+                return Ok(res);
+            }
+
+            let res = self
+                .builder
+                .write()
+                .map_err(|_| HauchiwaError::LockWrite)?
+                .build_style(item.hash, style)?;
+
+            self.tracker
+                .borrow_mut()
+                .hash
+                .insert(item.file.clone(), item.hash);
+
+            Ok(res)
+        } else {
+            Err(HauchiwaError::AssetNotFound(path.to_string()))
+        }
+    }
+
+    /// Get optimized image path by original path.
+    pub fn get_picture(&self, path: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaError> {
+        let input = self
+            .items
+            .values()
+            .find(|item| item.file == path)
+            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
+
+        if let Input::Picture = &input.data {
+            let res = self
+                .builder
+                .read()
+                .map_err(|_| HauchiwaError::LockRead)?
+                .check(input.hash);
+            if let Some(res) = res {
+                return Ok(res);
+            }
+
+            let res = self
+                .builder
+                .write()
+                .map_err(|_| HauchiwaError::LockWrite)?
+                .build_image(input.hash, &input.file)?;
+
+            self.tracker
+                .borrow_mut()
+                .hash
+                .insert(input.file.clone(), input.hash);
+
+            Ok(res)
+        } else {
+            Err(HauchiwaError::AssetNotFound(path.to_string()))
+        }
+    }
+
+    pub fn get_script(&self, path: &str) -> Result<Utf8PathBuf, HauchiwaError> {
+        let path = Utf8Path::new(".cache/scripts/")
+            .join(path)
+            .with_extension("js");
+
+        let input = self
+            .items
+            .values()
+            .find(|item| item.file == path)
+            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
+
+        if let Input::Script = &input.data {
+            let res = self
+                .builder
+                .read()
+                .map_err(|_| HauchiwaError::LockRead)?
+                .check(input.hash);
+
+            if let Some(res) = res {
+                return Ok(res);
+            }
+
+            let res = self
+                .builder
+                .write()
+                .map_err(|_| HauchiwaError::LockWrite)?
+                .build_script(input.hash, &input.file)?;
+
+            self.tracker
+                .borrow_mut()
+                .hash
+                .insert(input.file.clone(), input.hash);
+
+            Ok(res)
+        } else {
+            Err(HauchiwaError::AssetNotFound(path.to_string()))
+        }
+    }
+
+    pub fn get_asset_any<T>(&self, area: &Utf8Path) -> Result<Option<&T>, HauchiwaError>
+    where
+        T: 'static,
+    {
+        let glob = format!("{}/*", area);
+        let glob = glob::Pattern::new(&glob)?;
+        let opts = glob::MatchOptions {
+            case_sensitive: true,
+            require_literal_separator: true,
+            require_literal_leading_dot: false,
+        };
+
+        let found = self
+            .items
+            .values()
+            .filter(|item| glob.matches_path_with(item.file.as_std_path(), opts))
+            .find_map(|item| match &item.data {
+                Input::Asset(any) => {
+                    let data = any.downcast_ref::<T>()?;
+                    let file = item.file.clone();
+                    let hash = item.hash.clone();
+                    Some((data, file, hash))
+                }
+                _ => None,
+            });
+
+        if let Some((data, file, hash)) = found {
+            self.tracker.borrow_mut().hash.insert(file, hash);
+            return Ok(Some(data));
+        }
+
+        Ok(None)
     }
 }
