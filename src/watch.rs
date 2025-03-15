@@ -8,13 +8,13 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use camino::Utf8PathBuf;
-use notify::RecursiveMode;
+use notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::new_debouncer;
 use tungstenite::WebSocket;
 
 use crate::builder::Scheduler;
 use crate::error::WatchError;
-use crate::Website;
+use crate::{HauchiwaError, Website};
 
 pub(crate) fn watch<G: Send + Sync + 'static>(
     website: &Website<G>,
@@ -43,10 +43,26 @@ pub(crate) fn watch<G: Send + Sync + 'static>(
     let (tx_reload, thread_o) = new_thread_ws_reload(client.clone());
 
     while let Ok(events) = rx.recv().unwrap() {
+        let mut dirty = false;
+
+        let obsolete: HashSet<_> = events
+            .iter()
+            .flat_map(|debounced| &debounced.event.paths)
+            .filter(|path| !path.exists())
+            .map(|path| path.strip_prefix(&root).unwrap())
+            .collect();
+
+        if obsolete.len() > 0 {
+            scheduler.remove(obsolete);
+            dirty = true;
+        }
+
         let paths: HashSet<Utf8PathBuf> = events
             .into_iter()
+            .filter(|event| matches!(event.kind, EventKind::Create(..) | EventKind::Modify(..)))
             .map(|debounced| debounced.event.paths)
             .flat_map(HashSet::<PathBuf>::from_iter)
+            .filter(|path| path.exists())
             .filter_map(|event| {
                 Utf8PathBuf::from_path_buf(event)
                     .ok()
@@ -54,7 +70,6 @@ pub(crate) fn watch<G: Send + Sync + 'static>(
             })
             .collect();
 
-        let mut dirty = false;
         if paths.iter().any(|path| path.starts_with("styles")) {
             println!("\nRecompiling styles...");
 
@@ -71,18 +86,18 @@ pub(crate) fn watch<G: Send + Sync + 'static>(
         }
 
         if paths.iter().any(|path| path.starts_with("content")) {
-            let new_items = paths
-                .iter()
-                .filter_map(|path| {
-                    website
-                        .collections
-                        .iter()
-                        .find_map(|collection| collection.load_single(path))
-                })
-                .collect();
+            let items = match website.load_set(&paths) {
+                Ok(items) => items,
+                Err(e) => {
+                    eprintln!("Failed to load resource: {e}");
+                    continue;
+                }
+            };
 
-            scheduler.update(new_items);
-            dirty = true;
+            if items.len() > 0 {
+                scheduler.update(items);
+                dirty = true;
+            }
         }
 
         if paths.iter().any(|path| path.starts_with("js")) {
@@ -96,7 +111,7 @@ pub(crate) fn watch<G: Send + Sync + 'static>(
             println!("\nStarting rebuild...");
             let start = Instant::now();
 
-            match scheduler.build() {
+            match scheduler.refresh() {
                 Ok(()) => tx_reload.send(()).unwrap(),
                 Err(e) => {
                     eprintln!("Encountered an error while rebuilding: {e}")

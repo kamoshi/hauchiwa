@@ -12,6 +12,12 @@ use crate::builder::{Input, InputItem};
 use crate::error::HauchiwaError;
 use crate::{Builder, Context, Hash32, QueryContent};
 
+#[derive(Clone)]
+pub(crate) struct Tracker {
+    pub(crate) hash: HashMap<Utf8PathBuf, Hash32>,
+    pub(crate) glob: Vec<glob::Pattern>,
+}
+
 /// This struct allows for querying the website hierarchy. It is passed to each rendered website
 /// page, so that it can easily access the website metadata.
 pub struct Sack<'a, G>
@@ -23,7 +29,7 @@ where
     /// Builder allows scheduling build requests.
     pub(crate) builder: Arc<RwLock<Builder>>,
     /// Tracked dependencies for current instantation.
-    pub(crate) tracked: Rc<RefCell<HashMap<Utf8PathBuf, Hash32>>>,
+    pub(crate) tracker: Rc<RefCell<Tracker>>,
     /// Every single input.
     pub(crate) items: &'a HashMap<Utf8PathBuf, InputItem>,
 }
@@ -42,6 +48,8 @@ where
         D: 'static,
     {
         let glob = glob::Pattern::new(pattern)?;
+        self.tracker.borrow_mut().glob.push(glob.clone());
+
         let item = self
             .items
             .values()
@@ -56,8 +64,9 @@ where
             let area = content.area.as_ref();
             let content = content.text.as_str();
 
-            self.tracked
+            self.tracker
                 .borrow_mut()
+                .hash
                 .insert(item.file.clone(), item.hash.clone());
 
             Ok(QueryContent {
@@ -78,15 +87,17 @@ where
         D: 'static,
     {
         let pattern = glob::Pattern::new(pattern)?;
+        self.tracker.borrow_mut().glob.push(pattern.clone());
+
         let inputs: Vec<_> = self
             .items
             .values()
             .filter(|item| pattern.matches_path(item.slug.as_ref()))
             .collect();
 
-        let mut tracked = self.tracked.borrow_mut();
+        let mut tracked = self.tracker.borrow_mut();
         for input in inputs.iter() {
-            tracked.insert(input.file.clone(), input.hash);
+            tracked.hash.insert(input.file.clone(), input.hash);
         }
 
         let query = inputs
@@ -139,8 +150,9 @@ where
                 .map_err(|_| HauchiwaError::LockWrite)?
                 .build_style(item.hash, style)?;
 
-            self.tracked
+            self.tracker
                 .borrow_mut()
+                .hash
                 .insert(item.file.clone(), item.hash);
 
             Ok(res)
@@ -173,8 +185,9 @@ where
                 .map_err(|_| HauchiwaError::LockWrite)?
                 .build_image(input.hash, &input.file)?;
 
-            self.tracked
+            self.tracker
                 .borrow_mut()
+                .hash
                 .insert(input.file.clone(), input.hash);
 
             Ok(res)
@@ -211,8 +224,9 @@ where
                 .map_err(|_| HauchiwaError::LockWrite)?
                 .build_script(input.hash, &input.file)?;
 
-            self.tracked
+            self.tracker
                 .borrow_mut()
+                .hash
                 .insert(input.file.clone(), input.hash);
 
             Ok(res)
@@ -248,7 +262,7 @@ where
             });
 
         if let Some((data, file, hash)) = found {
-            self.tracked.borrow_mut().insert(file, hash);
+            self.tracker.borrow_mut().hash.insert(file, hash);
             return Ok(Some(data));
         }
 

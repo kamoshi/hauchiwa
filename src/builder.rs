@@ -2,23 +2,25 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
-use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 use std::{fs, mem};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use sha2::{Digest, Sha256};
 use sitemap_rs::url::{ChangeFrequency, Url};
 use sitemap_rs::url_set::UrlSet;
 
-use crate::generator::Sack;
-use crate::{Builder, BuilderError, Context, Hash32, Task, Website};
+use crate::error::LoaderError;
+use crate::generator::{Sack, Tracker};
+use crate::{Builder, BuilderError, Context, Hash32, HauchiwaError, Task, Website};
 
 /// Init pointer used to dynamically retrieve front matter. The type of front matter
 /// needs to be erased at run time and this is one way of accomplishing this,
 /// it's hidden behind the `dyn Fn` existential type.
-type InitFnPtr = Arc<dyn Fn(&str) -> (Arc<dyn Any + Send + Sync>, String)>;
+type InitFnPtr = Arc<dyn Fn(&str) -> Result<(Arc<dyn Any + Send + Sync>, String), LoaderError>>;
 
 /// Wraps `InitFnPtr` and implements `Debug` trait for function pointer.
 #[derive(Clone)]
@@ -26,7 +28,10 @@ pub(crate) struct InitFn(pub(crate) InitFnPtr);
 
 impl InitFn {
     /// Call the contained `InitFn` pointer.
-    pub(crate) fn call(&self, data: &str) -> (Arc<dyn Any + Send + Sync>, String) {
+    pub(crate) fn call(
+        &self,
+        data: &str,
+    ) -> Result<(Arc<dyn Any + Send + Sync>, String), LoaderError> {
         (self.0)(data)
     }
 }
@@ -74,6 +79,7 @@ where
     task: Task<D>,
     init: bool,
     deps: HashMap<Utf8PathBuf, Hash32>,
+    glob: Vec<glob::Pattern>,
     pub(crate) path: Vec<(Utf8PathBuf, String)>,
 }
 
@@ -83,29 +89,49 @@ impl<G: Send + Sync> Trace<G> {
             task,
             init: true,
             deps: HashMap::new(),
+            glob: Vec::new(),
             path: Vec::new(),
         }
     }
 
-    fn new_with(
-        &self,
-        deps: HashMap<Utf8PathBuf, Hash32>,
-        path: Vec<(Utf8PathBuf, String)>,
-    ) -> Self {
+    fn new_with(&self, deps: Tracker, path: Vec<(Utf8PathBuf, String)>) -> Self {
         Self {
             task: self.task.clone(),
             init: false,
-            deps,
+            deps: deps.hash,
+            glob: deps.glob,
             path,
         }
     }
 
     fn is_outdated(&self, inputs: &HashMap<Utf8PathBuf, InputItem>) -> bool {
-        self.init
-            || self
-                .deps
-                .iter()
-                .any(|dep| Some(*dep.1) != inputs.get(dep.0).map(|item| item.hash))
+        if self.init {
+            return true;
+        }
+
+        let mut cache_hits = 0;
+        for item in inputs.values() {
+            if let Some(hash_old) = self.deps.get(&item.file) {
+                if item.hash == *hash_old {
+                    cache_hits += 1;
+                    continue;
+                } else {
+                    return true;
+                }
+            }
+
+            // If we haven't had a file dependency, but it matches, it means it
+            // was recently added by the user.
+            for pattern in &self.glob {
+                if pattern.matches_path(item.slug.as_ref()) {
+                    return true;
+                }
+            }
+        }
+
+        // If any file dependency is physically removed, the cache hit count
+        // will not match the old dependency count
+        cache_hits != self.deps.len()
     }
 }
 
@@ -118,6 +144,7 @@ where
     builder: Arc<RwLock<Builder>>,
     pub(crate) tracked: Vec<Trace<D>>,
     items: HashMap<Utf8PathBuf, InputItem>,
+    cache_pages: HashMap<Utf8PathBuf, Hash32>,
 }
 
 impl<'a, D: Send + Sync> Scheduler<'a, D> {
@@ -127,15 +154,8 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
             builder: Arc::new(RwLock::new(Builder::new())),
             tracked: website.tasks.iter().cloned().map(Trace::new).collect(),
             items: HashMap::from_iter(items.into_iter().map(|item| (item.file.clone(), item))),
+            cache_pages: HashMap::new(),
         }
-    }
-
-    pub fn build(&mut self) -> Result<(), BuilderError> {
-        self.tracked = mem::take(&mut self.tracked)
-            .into_par_iter()
-            .map(|trace| self.rebuild_trace(trace))
-            .collect::<Result<_, _>>()?;
-        Ok(())
     }
 
     pub fn update(&mut self, inputs: Vec<InputItem>) {
@@ -170,30 +190,86 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
             return Ok(trace);
         }
 
-        let tracked = Rc::new(RefCell::new(HashMap::new()));
+        let tracker = Tracker {
+            hash: HashMap::new(),
+            glob: Vec::new(),
+        };
 
-        let pages = trace.task.run(Sack {
+        let tracker = Rc::new(RefCell::new(tracker));
+
+        let paths = trace.task.run(Sack {
             context: self.context,
             builder: self.builder.clone(),
-            tracked: tracked.clone(),
+            tracker: tracker.clone(),
             items: &self.items,
         })?;
 
-        for (path, data) in &pages {
-            let path = Utf8Path::new("dist").join(path);
-            if let Some(dir) = path.parent() {
-                fs::create_dir_all(dir)
-                    .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
+        let tracker = Rc::unwrap_or_clone(tracker).into_inner();
+
+        Ok(trace.new_with(tracker, paths))
+    }
+
+    pub(crate) fn remove(&mut self, paths: HashSet<&Path>) {
+        self.items = mem::take(&mut self.items)
+            .into_iter()
+            .filter(|p| !paths.contains(p.1.file.as_std_path()))
+            .collect();
+    }
+
+    pub(crate) fn refresh(&mut self) -> Result<(), HauchiwaError> {
+        self.build_pages()?;
+        self.write_pages()?;
+
+        Ok(())
+    }
+
+    fn build_pages(&mut self) -> Result<(), BuilderError> {
+        self.tracked = mem::take(&mut self.tracked)
+            .into_par_iter()
+            .map(|trace| self.rebuild_trace(trace))
+            .collect::<Result<_, _>>()?;
+        Ok(())
+    }
+
+    fn write_pages(&mut self) -> Result<(), HauchiwaError> {
+        let mut temp = HashMap::new();
+
+        for trace in &self.tracked {
+            for (slug, data) in &trace.path {
+                let hash = Sha256::digest(&data).into();
+                let path = Utf8Path::new("dist").join(slug);
+
+                // if path.as_str().contains("test") {
+                //     println!("{}", &data);
+                // }
+
+                if Some(hash) == self.cache_pages.get(&path).copied() {
+                    continue;
+                } else {
+                    self.cache_pages.insert(path.clone(), hash);
+                }
+
+                if temp.contains_key(&path) {
+                    println!("Warning, overwriting path {slug}")
+                }
+
+                if let Some(dir) = path.parent() {
+                    fs::create_dir_all(dir)
+                        .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
+                }
+                let mut file = fs::File::create(&path)
+                    .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
+                std::io::Write::write_all(&mut file, data.as_bytes())
+                    .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
+
+                println!("HTML: {}", path);
+
+                temp.insert(path.clone(), hash);
             }
-            let mut file = fs::File::create(&path)
-                .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
-            file.write_all(data.as_bytes())
-                .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
-            println!("HTML: {}", path);
         }
 
-        let deps = Rc::unwrap_or_clone(tracked).into_inner();
+        self.cache_pages.extend(temp.into_iter());
 
-        Ok(trace.new_with(deps, pages))
+        Ok(())
     }
 }

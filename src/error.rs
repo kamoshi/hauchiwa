@@ -3,6 +3,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum HauchiwaError {
+    #[error(transparent)]
+    Loader(#[from] LoaderError),
+
     #[error("Error while cleaning dist: {0}")]
     Clean(#[from] CleanError),
 
@@ -41,6 +44,24 @@ pub enum HauchiwaError {
 }
 
 #[derive(Debug, Error)]
+pub enum LoaderError {
+    #[error(transparent)]
+    Callback(anyhow::Error),
+
+    #[error(transparent)]
+    GlobPattern(#[from] glob::PatternError),
+
+    #[error(transparent)]
+    Glob(#[from] glob::GlobError),
+
+    #[error(transparent)]
+    PathFormat(#[from] camino::FromPathBufError),
+
+    #[error("Wrong frontmatter shape for {0}")]
+    Frontmatter(String),
+}
+
+#[derive(Debug, Error)]
 pub enum CleanError {
     #[error("Failed to remove 'dist' directory: {0}")]
     RemoveError(std::io::Error),
@@ -74,6 +95,9 @@ pub enum StylesheetError {
 pub enum WatchError {
     #[error("Failed to bind to address {0}")]
     Bind(std::io::Error),
+
+    #[error(transparent)]
+    Loader(#[from] LoaderError),
 }
 
 #[derive(Debug, Error)]

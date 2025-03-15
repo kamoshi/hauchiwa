@@ -1,6 +1,5 @@
 #![doc = include_str!("../README.md")]
 mod builder;
-mod collection;
 mod error;
 mod generator;
 mod watch;
@@ -12,15 +11,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
-use builder::{Input, InputItem, InputStylesheet, Scheduler};
+use builder::{InitFn, Input, InputContent, InputItem, InputStylesheet, Scheduler};
 use camino::{Utf8Path, Utf8PathBuf};
-use error::{CleanError, HookError, SitemapError, StylesheetError};
+use error::{CleanError, HookError, LoaderError, SitemapError, StylesheetError};
 use generator::load_scripts;
-use gray_matter::engine::{JSON, YAML};
 use gray_matter::Matter;
+use gray_matter::engine::{JSON, YAML};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-pub use crate::collection::Collection;
 pub use crate::error::{BuilderError, HauchiwaError};
 pub use crate::generator::Sack;
 
@@ -118,6 +117,20 @@ impl<D: Send + Sync + 'static> Website<D> {
 
         Ok(())
     }
+
+    /// Load items by a set of paths.
+    fn load_set(&self, paths: &HashSet<Utf8PathBuf>) -> Result<Vec<InputItem>, LoaderError> {
+        let mut items = vec![];
+        for path in paths {
+            for collection in &self.collections {
+                if let Some(item) = collection.load_single(path)? {
+                    items.push(item);
+                }
+            }
+        }
+
+        Ok(items)
+    }
 }
 
 fn init<'a, D>(
@@ -130,19 +143,17 @@ where
     init_clean_dist()?;
     init_clone_static()?;
 
-    let styles = css_load_paths(&website.global_styles)?;
-    let script = load_scripts(&website.global_scripts);
+    let mut items = vec![];
 
-    let items: Vec<_> = website
-        .collections
-        .iter()
-        .flat_map(|collection| collection.load(&website.processors))
-        .chain(styles)
-        .chain(script)
-        .collect();
+    for collection in &website.collections {
+        items.extend(collection.load(&website.processors)?);
+    }
+
+    items.extend(css_load_paths(&website.global_styles)?);
+    items.extend(load_scripts(&website.global_scripts));
 
     let mut scheduler = Scheduler::new(website, context, items);
-    scheduler.build()?;
+    scheduler.refresh()?;
 
     build_hooks(website, &scheduler)?;
     build_sitemap(website, &scheduler)?;
@@ -316,6 +327,199 @@ impl<D: Send + Sync + 'static> WebsiteConfiguration<D> {
     }
 }
 
+// ******************************
+// *         Loader             *
+// ******************************
+
+#[derive(Debug)]
+enum Loader {
+    Glob(LoaderGlob),
+}
+
+#[derive(Debug)]
+struct LoaderGlob {
+    base: &'static str,
+    glob: &'static str,
+    exts: HashSet<&'static str>,
+}
+
+impl LoaderGlob {
+    fn load(&self, init: InitFn, processors: &[Processor]) -> Result<Vec<InputItem>, LoaderError> {
+        let pattern = Utf8Path::new(self.base).join(self.glob);
+        let iter = glob::glob(pattern.as_str())?;
+        let mut vec = vec![];
+
+        for item in iter {
+            let item = Utf8PathBuf::try_from(item?)?;
+            if let Some(item) = load_item(item, init.clone(), &self.exts, processors)? {
+                vec.push(item);
+            }
+        }
+
+        Ok(vec)
+    }
+}
+
+fn load_item<'a>(
+    file: Utf8PathBuf,
+    init: InitFn,
+    extensions: &'a HashSet<&'static str>,
+    processors: &'a [Processor],
+) -> Result<Option<InputItem>, LoaderError> {
+    if file.is_dir() {
+        return Ok(None);
+    }
+
+    let ext = file.extension();
+    if ext.is_none() {
+        return Ok(None);
+    }
+
+    // We check if any of the assigned processors capture and transform this file.
+    // If we match anything we can exit early.
+    for processor in processors {
+        if processor.exts.contains(ext.unwrap()) {
+            let data = fs::read(&file).expect("Couldn't read file");
+            let hash = Sha256::digest(&data).into();
+
+            let input = match &processor.kind {
+                ProcessorKind::Asset(fun) => {
+                    let content = String::from_utf8_lossy(&data);
+                    let asset = fun(&content);
+                    let slug = file.strip_prefix("content").unwrap().to_owned();
+
+                    InputItem {
+                        hash,
+                        file,
+                        slug,
+                        data: Input::Asset(asset),
+                    }
+                }
+                ProcessorKind::Image => {
+                    let slug = file.strip_prefix("content").unwrap().to_owned();
+
+                    InputItem {
+                        hash,
+                        file,
+                        slug,
+                        data: Input::Picture,
+                    }
+                }
+            };
+
+            return Ok(Some(input));
+        }
+    }
+
+    let item = {
+        if !extensions.contains(ext.unwrap()) {
+            return Ok(None);
+        }
+
+        let data = fs::read(&file).expect("Couldn't read file");
+        let hash = Sha256::digest(&data).into();
+        let content = String::from_utf8_lossy(&data);
+        let (meta, content) = init.call(&content)?;
+
+        let area = match file.file_stem() {
+            Some("index") => file
+                .parent()
+                .map(ToOwned::to_owned)
+                .unwrap_or(file.with_extension("")),
+            _ => file.with_extension(""),
+        };
+
+        let slug = area.strip_prefix("content").unwrap().to_owned();
+
+        InputItem {
+            hash,
+            file,
+            slug,
+            data: Input::Content(InputContent {
+                area,
+                meta,
+                text: content,
+            }),
+        }
+    };
+
+    Ok(Some(item))
+}
+
+/// An opaque representation of a source of inputs loaded into the generator.
+/// You can think of a single collection as a set of written articles with
+/// shared frontmatter shape, for example your blog posts.
+///
+/// Hovewer, a collection can also load additional files like images or custom
+/// assets. This is useful when you want to colocate assets and images next to
+/// the articles. A common use case is to directly reference the images relative
+/// to the markdown file.
+#[derive(Debug)]
+pub struct Collection {
+    loader: Loader,
+    init: InitFn,
+}
+
+impl Collection {
+    /// Create a new collection which draws content from the filesystem files
+    /// via a glob pattern. Usually used to collect articles written as markdown
+    /// files, however it is completely format agnostic.
+    ///
+    /// The parameter `parse_matter` allows you to customize how the metadata
+    /// should be parsed. Default functions for the most common formats are
+    /// provided by library:
+    /// * [`parse_matter_json`](`crate::parse_matter_json`) - parse JSON metadata
+    /// * [`parse_matter_yaml`](`crate::parse_matter_yaml`) - parse YAML metadata
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// Collection::glob_with("content", "posts/**/*", ["md"], parse_matter_yaml::<Post>);
+    /// ```
+    pub fn glob_with<T>(
+        path_base: &'static str,
+        path_glob: &'static str,
+        exts_content: impl IntoIterator<Item = &'static str>,
+        parse_matter: fn(&str) -> Result<(T, String), anyhow::Error>,
+    ) -> Self
+    where
+        T: for<'de> Deserialize<'de> + Send + Sync + 'static,
+    {
+        Self {
+            loader: Loader::Glob(LoaderGlob {
+                base: path_base,
+                glob: path_glob,
+                exts: HashSet::from_iter(exts_content),
+            }),
+            init: InitFn(Arc::new(move |content| {
+                let (meta, data) = parse_matter(content).map_err(|e| LoaderError::Callback(e))?;
+                Ok((Arc::new(meta), data))
+            })),
+        }
+    }
+
+    fn load(&self, processors: &[Processor]) -> Result<Vec<InputItem>, LoaderError> {
+        match &self.loader {
+            Loader::Glob(loader) => loader.load(self.init.clone(), processors),
+        }
+    }
+
+    fn load_single(&self, path: &Utf8Path) -> Result<Option<InputItem>, LoaderError> {
+        let Loader::Glob(loader) = &self.loader;
+        let pattern = Utf8Path::new(loader.base).join(loader.glob);
+        let pattern = glob::Pattern::new(pattern.as_str())?;
+
+        if !pattern.matches_path(path.as_std_path()) {
+            return Ok(None);
+        };
+
+        let path = path.to_owned();
+        let item = load_item(path, self.init.clone(), &loader.exts, &[])?;
+
+        Ok(item)
+    }
+}
+
 #[derive(Debug)]
 pub struct QueryContent<'a, D> {
     pub file: &'a Utf8Path,
@@ -416,20 +620,22 @@ macro_rules! matter_parser {
 			"This function can be used to extract metadata from a document with `D` as the frontmatter shape.\n",
 			"Configured to use [`", stringify!($engine), "`] as the engine of the parser."
 		)]
-		pub fn $name<D>(content: &str) -> (D, String)
+		pub fn $name<D>(content: &str) -> Result<(D, String), anyhow::Error>
 		where
 			D: for<'de> serde::Deserialize<'de> + Send + Sync + 'static,
 		{
 			// We can cache the creation of the parser
 			static PARSER: LazyLock<Matter<$engine>> = LazyLock::new(Matter::<$engine>::new);
 
-			let result = PARSER.parse_with_struct::<D>(content).unwrap();
-			(
+			let result = PARSER.parse_with_struct::<D>(content)
+			    .ok_or_else(|| crate::error::LoaderError::Frontmatter(content.to_string()))?;
+
+			Ok((
 				// Just the front matter
 				result.data,
 				// The rest of the content
 				result.content,
-			)
+			))
 		}
 	};
 }
