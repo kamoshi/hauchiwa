@@ -39,14 +39,30 @@ pub enum HauchiwaError {
     #[error("Failed to build asset {0}")]
     Builder(#[from] BuilderError),
 
-    #[error("Error while running a hook: {0}")]
+    #[error("Error while executing a hook:\n{0}")]
     Hook(#[from] HookError),
 }
 
 #[derive(Debug, Error)]
-pub enum LoaderError {
+#[error(transparent)]
+pub struct LoaderFileCallbackError(pub anyhow::Error);
+
+#[derive(Debug, Error)]
+pub enum LoaderFileError {
     #[error(transparent)]
-    Callback(anyhow::Error),
+    Callback(#[from] LoaderFileCallbackError),
+
+    #[error(transparent)]
+    FileSystem(#[from] std::io::Error),
+
+    #[error("Error while reading frontmatter - {0}")]
+    Frontmatter(String),
+}
+
+#[derive(Debug, Error)]
+pub enum LoaderError {
+    #[error("Encountered an error while loading file {0}:\n{1}")]
+    LoaderGlobFile(Utf8PathBuf, LoaderFileError),
 
     #[error(transparent)]
     GlobPattern(#[from] glob::PatternError),
@@ -56,17 +72,14 @@ pub enum LoaderError {
 
     #[error(transparent)]
     PathFormat(#[from] camino::FromPathBufError),
-
-    #[error("Wrong frontmatter shape for {0}")]
-    Frontmatter(String),
 }
 
 #[derive(Debug, Error)]
 pub enum CleanError {
-    #[error("Failed to remove 'dist' directory: {0}")]
+    #[error(transparent)]
     RemoveError(std::io::Error),
 
-    #[error("Failed to create 'dist' directory: {0}")]
+    #[error(transparent)]
     CreateError(std::io::Error),
 }
 
@@ -123,6 +136,6 @@ pub enum BuilderError {
 
 #[derive(Debug, Error)]
 pub enum HookError {
-    #[error("Encountered an error while running a hook {0}")]
+    #[error(transparent)]
     Userland(#[from] anyhow::Error),
 }

@@ -88,19 +88,19 @@ where
 pub struct Website<G: Send + Sync> {
     /// Rendered assets and content are outputted to this directory.
     /// All collections added to this website.
-    pub(crate) collections: Vec<Collection>,
+    collections: Vec<Collection>,
     /// Preprocessors for files
-    pub(crate) processors: Vec<Processor>,
+    processors: Vec<Processor>,
     /// Build tasks which can be used to generate pages.
-    pub(crate) tasks: Vec<Task<G>>,
+    tasks: Vec<Task<G>>,
     /// Global scripts
-    pub(crate) global_scripts: HashMap<&'static str, &'static str>,
+    global_scripts: HashMap<&'static str, &'static str>,
     /// Global styles
-    pub(crate) global_styles: Vec<Utf8PathBuf>,
+    global_styles: Vec<Utf8PathBuf>,
     /// Sitemap options
-    pub(crate) opts_sitemap: Option<Utf8PathBuf>,
+    opts_sitemap: Option<Utf8PathBuf>,
     /// Hooks
-    pub(crate) hooks: Vec<Hook>,
+    hooks: Vec<Hook>,
 }
 
 impl<G: Send + Sync + 'static> Website<G> {
@@ -383,7 +383,7 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
 type AnyMatter = Arc<dyn Any + Send + Sync>;
 
 /// Init pointer used to dynamically retrieve front matter.
-type InitFnPtr = Arc<dyn Fn(&str) -> Result<(AnyMatter, String), LoaderError>>;
+type InitFnPtr = Arc<dyn Fn(&str) -> Result<(AnyMatter, String), LoaderFileCallbackError>>;
 
 /// Wraps `InitFnPtr` and implements `Debug` trait for function pointer.
 #[derive(Clone)]
@@ -395,13 +395,13 @@ impl InitFn {
         D: for<'de> Deserialize<'de> + Send + Sync + 'static,
     {
         Self(Arc::new(move |content| {
-            let (meta, data) = parse_matter(content).map_err(|e| LoaderError::Callback(e))?;
+            let (meta, data) = parse_matter(content).map_err(|e| LoaderFileCallbackError(e))?;
             Ok((Arc::new(meta), data))
         }))
     }
 
     /// Call the contained `InitFn` pointer.
-    fn call(&self, data: &str) -> Result<(AnyMatter, String), LoaderError> {
+    fn call(&self, data: &str) -> Result<(AnyMatter, String), LoaderFileCallbackError> {
         (self.0)(data)
     }
 }
@@ -425,14 +425,17 @@ struct LoaderGlob {
 }
 
 impl LoaderGlob {
-    fn load(&self, init: InitFn, processors: &[Processor]) -> Result<Vec<InputItem>, LoaderError> {
+    fn read(&self, init: InitFn, processors: &[Processor]) -> Result<Vec<InputItem>, LoaderError> {
         let pattern = Utf8Path::new(self.base).join(self.glob);
         let iter = glob::glob(pattern.as_str())?;
         let mut vec = vec![];
 
-        for item in iter {
-            let item = Utf8PathBuf::try_from(item?)?;
-            if let Some(item) = load_item(item, init.clone(), &self.exts, processors)? {
+        for path in iter {
+            let path = Utf8PathBuf::try_from(path?)?;
+            if let Some(item) = self
+                .read_file(path.clone(), init.clone(), processors)
+                .map_err(|e| LoaderError::LoaderGlobFile(path, e))?
+            {
                 vec.push(item);
             }
         }
@@ -440,11 +443,7 @@ impl LoaderGlob {
         Ok(vec)
     }
 
-    fn load_single(
-        &self,
-        path: &Utf8Path,
-        init: &InitFn,
-    ) -> Result<Option<InputItem>, LoaderError> {
+    fn read_once(&self, path: &Utf8Path, init: &InitFn) -> Result<Option<InputItem>, LoaderError> {
         let pattern = Utf8Path::new(self.base).join(self.glob);
         let pattern = glob::Pattern::new(pattern.as_str())?;
 
@@ -453,96 +452,93 @@ impl LoaderGlob {
         };
 
         let path = path.to_owned();
-        let item = load_item(path, init.clone(), &self.exts, &[])?;
+        let item = self
+            .read_file(path.clone(), init.clone(), &[])
+            .map_err(|e| LoaderError::LoaderGlobFile(path, e))?;
 
         Ok(item)
     }
-}
 
-fn load_item<'a>(
-    file: Utf8PathBuf,
-    init: InitFn,
-    extensions: &'a HashSet<&'static str>,
-    processors: &'a [Processor],
-) -> Result<Option<InputItem>, LoaderError> {
-    if file.is_dir() {
-        return Ok(None);
-    }
-
-    let ext = file.extension();
-    if ext.is_none() {
-        return Ok(None);
-    }
-
-    // We check if any of the assigned processors capture and transform this file.
-    // If we match anything we can exit early.
-    for processor in processors {
-        if processor.exts.contains(ext.unwrap()) {
-            let data = fs::read(&file).expect("Couldn't read file");
-            let hash = Sha256::digest(&data).into();
-
-            let input = match &processor.kind {
-                ProcessorKind::Asset(fun) => {
-                    let content = String::from_utf8_lossy(&data);
-                    let asset = fun(&content);
-                    let slug = file.strip_prefix("content").unwrap().to_owned();
-
-                    InputItem {
-                        hash,
-                        file,
-                        slug,
-                        data: Input::Asset(asset),
-                    }
-                }
-                ProcessorKind::Image => {
-                    let slug = file.strip_prefix("content").unwrap().to_owned();
-
-                    InputItem {
-                        hash,
-                        file,
-                        slug,
-                        data: Input::Picture,
-                    }
-                }
-            };
-
-            return Ok(Some(input));
-        }
-    }
-
-    let item = {
-        if !extensions.contains(ext.unwrap()) {
+    fn read_file<'a>(
+        &self,
+        file: Utf8PathBuf,
+        init: InitFn,
+        processors: &'a [Processor],
+    ) -> Result<Option<InputItem>, LoaderFileError> {
+        if file.is_dir() {
             return Ok(None);
         }
 
-        let data = fs::read(&file).expect("Couldn't read file");
-        let hash = Sha256::digest(&data).into();
-        let content = String::from_utf8_lossy(&data);
-        let (meta, content) = init.call(&content)?;
-
-        let area = match file.file_stem() {
-            Some("index") => file
-                .parent()
-                .map(ToOwned::to_owned)
-                .unwrap_or(file.with_extension("")),
-            _ => file.with_extension(""),
+        let ext = match file.extension() {
+            Some(ext) => ext,
+            None => return Ok(None),
         };
 
-        let slug = area.strip_prefix("content").unwrap().to_owned();
+        // We check if any of the assigned processors capture and transform this
+        // file. If we match anything we can exit early.
+        for processor in processors {
+            if processor.exts.contains(ext) {
+                let bytes = fs::read(&file)?;
+                let hash = Sha256::digest(&bytes).into();
 
-        InputItem {
-            hash,
-            file,
-            slug,
-            data: Input::Content(InputContent {
-                area,
-                meta,
-                text: content,
-            }),
+                let input = match &processor.kind {
+                    ProcessorKind::Asset(fun) => {
+                        let asset = fun(&bytes);
+                        let slug = file.strip_prefix(self.base).unwrap_or(&file).to_owned();
+
+                        InputItem {
+                            hash,
+                            file,
+                            slug,
+                            data: Input::Asset(asset),
+                        }
+                    }
+                    ProcessorKind::Image => {
+                        let slug = file.strip_prefix(self.base).unwrap_or(&file).to_owned();
+
+                        InputItem {
+                            hash,
+                            file,
+                            slug,
+                            data: Input::Picture,
+                        }
+                    }
+                };
+
+                return Ok(Some(input));
+            }
         }
-    };
 
-    Ok(Some(item))
+        let item = {
+            if !self.exts.contains(ext) {
+                return Ok(None);
+            }
+
+            let bytes = fs::read(&file)?;
+            let hash = Sha256::digest(&bytes).into();
+            let text = String::from_utf8_lossy(&bytes);
+            let (meta, text) = init.call(&text)?;
+
+            let area = match file.file_stem() {
+                Some("index") => file
+                    .parent()
+                    .map(ToOwned::to_owned)
+                    .unwrap_or(file.with_extension("")),
+                _ => file.with_extension(""),
+            };
+
+            let slug = area.strip_prefix(self.base).unwrap_or(&file).to_owned();
+
+            InputItem {
+                hash,
+                file,
+                slug,
+                data: Input::Content(InputContent { area, meta, text }),
+            }
+        };
+
+        Ok(Some(item))
+    }
 }
 
 // ******************************
@@ -602,13 +598,13 @@ impl Collection {
 
     fn load(&self, processors: &[Processor]) -> Result<Vec<InputItem>, LoaderError> {
         match &self.loader {
-            Loader::Glob(loader) => loader.load(self.init.clone(), processors),
+            Loader::Glob(loader) => loader.read(self.init.clone(), processors),
         }
     }
 
     fn load_single(&self, path: &Utf8Path) -> Result<Option<InputItem>, LoaderError> {
         match &self.loader {
-            Loader::Glob(loader) => loader.load_single(path, &self.init),
+            Loader::Glob(loader) => loader.read_once(path, &self.init),
         }
     }
 }
@@ -620,7 +616,7 @@ impl Collection {
 type AnyAsset = Box<dyn Any + Send + Sync>;
 
 enum ProcessorKind {
-    Asset(Box<dyn Fn(&str) -> AnyAsset>),
+    Asset(Box<dyn Fn(&[u8]) -> AnyAsset>),
     Image,
 }
 
@@ -642,7 +638,7 @@ pub struct Processor {
 impl Processor {
     pub fn process_assets<T: Send + Sync + 'static>(
         exts: impl IntoIterator<Item = &'static str>,
-        call: fn(&str) -> T,
+        call: fn(&[u8]) -> T,
     ) -> Self {
         Self {
             exts: HashSet::from_iter(exts),
@@ -673,14 +669,18 @@ macro_rules! matter_parser {
 			// We can cache the creation of the parser
 			static PARSER: LazyLock<Matter<$engine>> = LazyLock::new(Matter::<$engine>::new);
 
-			let result = PARSER.parse_with_struct::<D>(content)
-			    .ok_or_else(|| crate::error::LoaderError::Frontmatter(content.to_string()))?;
+			let entity = PARSER.parse(content);
+            let object = entity
+                .data
+                .unwrap_or_else(|| gray_matter::Pod::new_array())
+                .deserialize::<D>()
+                .map_err(|e| anyhow::anyhow!("Malformed frontmatter:\n{e}"))?;
 
 			Ok((
 				// Just the front matter
-				result.data,
+				object,
 				// The rest of the content
-				result.content,
+				entity.content,
 			))
 		}
 	};
