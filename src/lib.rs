@@ -1242,27 +1242,27 @@ where
             .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
 
         if let Input::Stylesheet(style) = &item.data {
-            let res = self
+            let path = self
                 .builder
                 .read()
                 .map_err(|_| HauchiwaError::LockRead)?
                 .check(item.hash);
-            if let Some(res) = res {
-                return Ok(res);
-            }
-
-            let res = self
-                .builder
-                .write()
-                .map_err(|_| HauchiwaError::LockWrite)?
-                .build_style(item.hash, style)?;
 
             self.tracker
                 .borrow_mut()
                 .hash
                 .insert(item.file.clone(), item.hash);
 
-            Ok(res)
+            let path = match path {
+                Some(path) => path,
+                None => self
+                    .builder
+                    .write()
+                    .map_err(|_| HauchiwaError::LockWrite)?
+                    .build_style(item.hash, style)?,
+            };
+
+            Ok(path)
         } else {
             Err(HauchiwaError::AssetNotFound(path.to_string()))
         }
