@@ -22,6 +22,7 @@ use sitemap_rs::url::{ChangeFrequency, Url};
 use sitemap_rs::url_set::UrlSet;
 
 pub use crate::error::*;
+pub use gitmap::{GitInfo, GitRepo};
 
 /// This value controls whether the library should run in the `Build` or the
 /// `Watch` mode. In `Build` mode, the library builds every page of the website
@@ -134,10 +135,16 @@ impl<G: Send + Sync + 'static> Website<G> {
         init_clean_dist()?;
         init_clone_static()?;
 
+        let repo = gitmap::map(gitmap::Options {
+            repository: ".".to_string(),
+            revision: "HEAD".to_string(),
+        })
+        .unwrap();
+
         let mut items = vec![];
 
         for collection in &self.collections {
-            items.extend(collection.load(&self.processors)?);
+            items.extend(collection.load(&self.processors, &repo)?);
         }
 
         items.extend(css_load_paths(&self.global_styles)?);
@@ -153,12 +160,17 @@ impl<G: Send + Sync + 'static> Website<G> {
     }
 
     /// Load items by a set of paths.
-    fn load_set(&self, paths: &HashSet<Utf8PathBuf>) -> Result<Vec<InputItem>, LoaderError> {
+    fn load_set(
+        &self,
+        paths: &HashSet<Utf8PathBuf>,
+        proc: &[Processor],
+        repo: &GitRepo,
+    ) -> Result<Vec<InputItem>, LoaderError> {
         let mut items = vec![];
 
         for path in paths {
             for collection in &self.collections {
-                if let Some(item) = collection.load_single(path)? {
+                if let Some(item) = collection.load_single(path, proc, repo)? {
                     items.push(item);
                 }
             }
@@ -255,6 +267,7 @@ fn css_compile(file: PathBuf) -> Result<InputItem, StylesheetError> {
         file: file.clone(),
         slug: file,
         data: Input::Stylesheet(InputStylesheet { stylesheet }),
+        info: None,
     })
 }
 
@@ -290,6 +303,7 @@ fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
                 file,
                 hash,
                 data: Input::Script,
+                info: None,
             }
         })
         .collect()
@@ -425,7 +439,12 @@ struct LoaderGlob {
 }
 
 impl LoaderGlob {
-    fn read(&self, init: InitFn, processors: &[Processor]) -> Result<Vec<InputItem>, LoaderError> {
+    fn read(
+        &self,
+        init: InitFn,
+        processors: &[Processor],
+        repo: &GitRepo,
+    ) -> Result<Vec<InputItem>, LoaderError> {
         let pattern = Utf8Path::new(self.base).join(self.glob);
         let iter = glob::glob(pattern.as_str())?;
         let mut vec = vec![];
@@ -433,7 +452,7 @@ impl LoaderGlob {
         for path in iter {
             let path = Utf8PathBuf::try_from(path?)?;
             if let Some(item) = self
-                .read_file(path.clone(), init.clone(), processors)
+                .read_file(path.clone(), init.clone(), processors, repo)
                 .map_err(|e| LoaderError::LoaderGlobFile(path, e))?
             {
                 vec.push(item);
@@ -443,7 +462,13 @@ impl LoaderGlob {
         Ok(vec)
     }
 
-    fn read_once(&self, path: &Utf8Path, init: &InitFn) -> Result<Option<InputItem>, LoaderError> {
+    fn read_once(
+        &self,
+        path: &Utf8Path,
+        init: &InitFn,
+        proc: &[Processor],
+        repo: &GitRepo,
+    ) -> Result<Option<InputItem>, LoaderError> {
         let pattern = Utf8Path::new(self.base).join(self.glob);
         let pattern = glob::Pattern::new(pattern.as_str())?;
 
@@ -453,7 +478,7 @@ impl LoaderGlob {
 
         let path = path.to_owned();
         let item = self
-            .read_file(path.clone(), init.clone(), &[])
+            .read_file(path.clone(), init.clone(), proc, repo)
             .map_err(|e| LoaderError::LoaderGlobFile(path, e))?;
 
         Ok(item)
@@ -464,6 +489,7 @@ impl LoaderGlob {
         file: Utf8PathBuf,
         init: InitFn,
         processors: &'a [Processor],
+        repo: &GitRepo,
     ) -> Result<Option<InputItem>, LoaderFileError> {
         if file.is_dir() {
             return Ok(None);
@@ -488,6 +514,7 @@ impl LoaderGlob {
 
                         InputItem {
                             hash,
+                            info: repo.files.get(file.as_str()).cloned(),
                             file,
                             slug,
                             data: Input::Asset(asset),
@@ -498,6 +525,7 @@ impl LoaderGlob {
 
                         InputItem {
                             hash,
+                            info: repo.files.get(file.as_str()).cloned(),
                             file,
                             slug,
                             data: Input::Picture,
@@ -531,6 +559,7 @@ impl LoaderGlob {
 
             InputItem {
                 hash,
+                info: repo.files.get(file.as_str()).cloned(),
                 file,
                 slug,
                 data: Input::Content(InputContent { area, meta, text }),
@@ -596,15 +625,24 @@ impl Collection {
         }
     }
 
-    fn load(&self, processors: &[Processor]) -> Result<Vec<InputItem>, LoaderError> {
+    fn load(
+        &self,
+        processors: &[Processor],
+        repo: &GitRepo,
+    ) -> Result<Vec<InputItem>, LoaderError> {
         match &self.loader {
-            Loader::Glob(loader) => loader.read(self.init.clone(), processors),
+            Loader::Glob(loader) => loader.read(self.init.clone(), processors, repo),
         }
     }
 
-    fn load_single(&self, path: &Utf8Path) -> Result<Option<InputItem>, LoaderError> {
+    fn load_single(
+        &self,
+        path: &Utf8Path,
+        proc: &[Processor],
+        repo: &GitRepo,
+    ) -> Result<Option<InputItem>, LoaderError> {
         match &self.loader {
-            Loader::Glob(loader) => loader.read_once(path, &self.init),
+            Loader::Glob(loader) => loader.read_once(path, &self.init, proc, repo),
         }
     }
 }
@@ -791,6 +829,7 @@ struct InputItem {
     file: Utf8PathBuf,
     slug: Utf8PathBuf,
     data: Input,
+    info: Option<gitmap::GitInfo>,
 }
 
 #[derive(Debug)]
@@ -1132,6 +1171,7 @@ pub struct QueryContent<'a, D> {
     pub slug: &'a Utf8Path,
     pub area: &'a Utf8Path,
     pub meta: &'a D,
+    pub info: Option<&'a GitInfo>,
     pub content: &'a str,
 }
 
@@ -1181,6 +1221,7 @@ where
                 slug: &item.slug,
                 area,
                 meta,
+                info: item.info.as_ref(),
                 content,
             })
         } else {
@@ -1225,6 +1266,7 @@ where
                     slug: &item.slug,
                     area,
                     meta,
+                    info: item.info.as_ref(),
                     content,
                 })
             })

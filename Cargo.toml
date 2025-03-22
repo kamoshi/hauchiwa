@@ -8,6 +8,9 @@ license     = "GPL-2.0-or-later"
 description = "Incredibly flexible static site generator library with incremental rebuilds and cached image optimization"
 repository  = "https://github.com/kamoshi/hauchiwa"
 
+[dependencies.gitmap]
+path = "../gitmap"
+
 [dependencies]
 camino                  = "1.1"
 gray_matter             = { version = "0.2", default-features = false, features = ["yaml"] }

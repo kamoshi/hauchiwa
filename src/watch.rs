@@ -86,7 +86,13 @@ where
             }
 
             if paths.iter().any(|path| path.starts_with("content")) {
-                let items = match website.load_set(&paths) {
+                let repo = gitmap::map(gitmap::Options {
+                    repository: ".".to_string(),
+                    revision: "HEAD".to_string(),
+                })
+                .unwrap();
+
+                let items = match website.load_set(&paths, &website.processors, &repo) {
                     Ok(items) => items,
                     Err(e) => {
                         eprintln!("Failed to load resource: {e}");
