@@ -15,6 +15,7 @@ use std::{fs, mem};
 use camino::{Utf8Path, Utf8PathBuf};
 use gray_matter::Matter;
 use gray_matter::engine::{JSON, YAML};
+use indicatif::{ProgressBar, ProgressStyle};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -152,6 +153,7 @@ impl<G: Send + Sync + 'static> Website<G> {
 
         let mut scheduler = Scheduler::new(self, context, items);
         scheduler.refresh()?;
+        scheduler.fulfill_build_requests()?;
 
         build_hooks(self, &scheduler)?;
         build_sitemap(self, &scheduler)?;
@@ -985,15 +987,41 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
     }
 
     fn build_pages(&mut self) -> Result<(), BuilderError> {
-        self.tracked = mem::take(&mut self.tracked)
+        let traces = mem::take(&mut self.tracked);
+        let pb = ProgressBar::new(traces.len() as u64);
+        pb.set_message("Running build tasks...");
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+                .expect("Error setting progress bar template")
+                .progress_chars("#>-"),
+        );
+
+        self.tracked = traces
             .into_par_iter()
-            .map(|trace| self.rebuild_trace(trace))
+            .map(|trace| {
+                let res = self.rebuild_trace(trace);
+                pb.inc(1);
+                res
+            })
             .collect::<Result<_, _>>()?;
+
+        pb.finish_with_message("Finished running build tasks!");
+
         Ok(())
     }
 
     fn write_pages(&mut self) -> Result<(), HauchiwaError> {
         let mut temp = HashMap::new();
+
+        let pb = ProgressBar::new(self.tracked.len() as u64);
+        pb.set_message("Writing generated pages...");
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+                .expect("Error setting progress bar template")
+                .progress_chars("#>-"),
+        );
 
         for trace in &self.tracked {
             for (slug, data) in &trace.path {
@@ -1019,13 +1047,58 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
                 std::io::Write::write_all(&mut file, data.as_bytes())
                     .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
 
-                println!("HTML: {}", path);
+                pb.inc(1);
 
                 temp.insert(path.clone(), hash);
             }
         }
 
+        pb.finish_with_message("Finished writing generated pages!");
+
         self.cache_pages.extend(temp.into_iter());
+
+        Ok(())
+    }
+
+    fn fulfill_build_requests(&self) -> Result<(), BuilderError> {
+        let queue = mem::take(&mut self.builder.write().unwrap().queue);
+
+        let pb = ProgressBar::new(queue.len() as u64);
+        pb.set_message("Building requested assets...");
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+                .expect("Error setting progress bar template")
+                .progress_chars("#>-"),
+        );
+
+        queue.into_par_iter().try_for_each(|item| {
+            let BuildRequest::Image(path_image, path_cache, path_dist) = item;
+
+            if !path_cache.exists() {
+                let buffer = fs::read(&path_image)
+                    .map_err(|e| BuilderError::FileReadError(path_image, e))?;
+                let buffer = optimize_image(&buffer);
+                fs::create_dir_all(".cache/hash")
+                    .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
+                fs::write(&path_cache, buffer)
+                    .map_err(|e| BuilderError::FileWriteError(path_cache.clone(), e))?;
+            }
+
+            // println!("IMG: {}", path_dist);
+            let dir = path_dist.parent().unwrap_or(&path_dist);
+            fs::create_dir_all(dir) //
+                .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
+            fs::copy(&path_cache, &path_dist).map_err(|e| {
+                BuilderError::FileCopyError(path_cache.clone(), path_dist.clone(), e)
+            })?;
+
+            pb.inc(1);
+
+            Result::<(), BuilderError>::Ok(())
+        })?;
+
+        pb.finish_with_message("Finished building requested assets!");
 
         Ok(())
     }
@@ -1036,56 +1109,57 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
 // ******************************
 
 #[derive(Debug)]
-pub(crate) struct Builder {
+enum BuildRequest {
+    Image(Utf8PathBuf, Utf8PathBuf, Utf8PathBuf),
+}
+
+#[derive(Debug)]
+struct Builder {
     /// Paths to files in dist
     dist: HashMap<Hash32, Utf8PathBuf>,
+    /// Build queue
+    queue: Vec<BuildRequest>,
 }
 
 impl Builder {
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         Self {
             dist: HashMap::new(),
+            queue: Vec::new(),
         }
     }
 
-    pub(crate) fn check(&self, hash: Hash32) -> Option<Utf8PathBuf> {
+    fn check(&self, hash: Hash32) -> Option<Utf8PathBuf> {
         self.dist.get(&hash).cloned()
     }
 
-    pub(crate) fn build_image(
+    fn request_image(
         &mut self,
         hash: Hash32,
-        file: &Utf8Path,
+        path_image: &Utf8Path,
     ) -> Result<Utf8PathBuf, BuilderError> {
         let hash_hex = hash.to_hex();
-        let path = Utf8Path::new("hash").join(&hash_hex).with_extension("webp");
-        let path_cache = Utf8Path::new(".cache").join(&path);
 
-        if !path_cache.exists() {
-            let buffer =
-                fs::read(file).map_err(|e| BuilderError::FileReadError(file.to_owned(), e))?;
-            let buffer = optimize_image(&buffer);
-            fs::create_dir_all(".cache/hash")
-                .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
-            fs::write(&path_cache, buffer)
-                .map_err(|e| BuilderError::FileWriteError(path_cache.clone(), e))?;
-        }
+        let path_temp = Utf8Path::new(".cache/hash")
+            .join(&hash_hex)
+            .with_extension("webp");
 
-        let path_root = Utf8Path::new("/").join(&path);
-        let path_dist = Utf8Path::new("dist").join(&path);
+        let path_dist = Utf8Path::new("dist/hash")
+            .join(&hash_hex)
+            .with_extension("webp");
 
-        println!("IMG: {}", path_dist);
-        let dir = path_dist.parent().unwrap_or(&path_dist);
-        fs::create_dir_all(dir) //
-            .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
-        fs::copy(&path_cache, &path_dist)
-            .map_err(|e| BuilderError::FileCopyError(path_cache.clone(), path_dist.clone(), e))?;
+        let path_root = Utf8Path::new("/hash/")
+            .join(&hash_hex)
+            .with_extension("webp");
 
+        let request = BuildRequest::Image(path_image.to_owned(), path_temp, path_dist);
+
+        self.queue.push(request);
         self.dist.insert(hash, path_root.clone());
         Ok(path_root)
     }
 
-    pub(crate) fn build_style(
+    fn request_stylesheet(
         &mut self,
         hash: Hash32,
         style: &InputStylesheet,
@@ -1096,7 +1170,6 @@ impl Builder {
         let path_root = Utf8Path::new("/").join(&path);
         let path_dist = Utf8Path::new("dist").join(&path);
 
-        println!("CSS: {}", path_dist);
         let dir = path_dist.parent().unwrap_or(&path_dist);
         fs::create_dir_all(dir) //
             .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
@@ -1107,7 +1180,7 @@ impl Builder {
         Ok(path_root)
     }
 
-    pub(crate) fn build_script(
+    fn request_script(
         &mut self,
         hash: Hash32,
         file: &Utf8Path,
@@ -1118,7 +1191,6 @@ impl Builder {
         let path_root = Utf8Path::new("/").join(&path);
         let path_dist = Utf8Path::new("dist").join(&path);
 
-        println!("JS: {}", path_dist);
         let dir = path_dist.parent().unwrap_or(&path_dist);
         fs::create_dir_all(dir) //
             .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
@@ -1301,7 +1373,7 @@ where
                     .builder
                     .write()
                     .map_err(|_| HauchiwaError::LockWrite)?
-                    .build_style(item.hash, style)?,
+                    .request_stylesheet(item.hash, style)?,
             };
 
             Ok(path)
@@ -1332,7 +1404,7 @@ where
                 .builder
                 .write()
                 .map_err(|_| HauchiwaError::LockWrite)?
-                .build_image(input.hash, &input.file)?;
+                .request_image(input.hash, &input.file)?;
 
             self.tracker
                 .borrow_mut()
@@ -1371,7 +1443,7 @@ where
                 .builder
                 .write()
                 .map_err(|_| HauchiwaError::LockWrite)?
-                .build_script(input.hash, &input.file)?;
+                .request_script(input.hash, &input.file)?;
 
             self.tracker
                 .borrow_mut()

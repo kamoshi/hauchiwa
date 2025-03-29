@@ -21,6 +21,7 @@ rayon                   = "1.10"
 serde                   = { version = "1.0", features = ["derive"] }
 sha2                    = "0.10"
 sitemap-rs              = "0.3"
+indicatif               = "0.17"
 
 anyhow                  = "1.0"
 thiserror               = "2.0"
