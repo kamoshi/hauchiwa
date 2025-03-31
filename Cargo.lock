@@ -552,6 +552,7 @@ dependencies = [
  "anyhow",
  "camino",
  "chrono",
+ "console",
  "glob",
  "grass",
  "gray_matter",

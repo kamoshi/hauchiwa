@@ -19,8 +19,12 @@ rayon                   = "1.10"
 serde                   = { version = "1.0", features = ["derive"] }
 sha2                    = "0.10"
 sitemap-rs              = "0.3"
+
+# CLI
+console                 = { version = "0.15", default-features = false }
 indicatif               = { version = "0.17", features = ["rayon"] }
 
+# Error handling
 anyhow                  = "1.0"
 thiserror               = "2.0"
 

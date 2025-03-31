@@ -14,6 +14,7 @@ use std::sync::{Arc, LazyLock, RwLock};
 use std::{fs, mem};
 
 use camino::{Utf8Path, Utf8PathBuf};
+use console::style;
 use gray_matter::Matter;
 use gray_matter::engine::{JSON, YAML};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressIterator, ProgressStyle};
@@ -134,6 +135,7 @@ impl<G: Send + Sync + 'static> Website<G> {
     }
 
     fn init<'a>(&'a self, context: &'a Global<G>) -> Result<Scheduler<'a, G>, HauchiwaError> {
+        println!("{}", style("Cleaning dist...").cyan());
         init_clean_dist()?;
         init_clone_static()?;
 
@@ -1029,6 +1031,14 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
                 }
             })
             .collect();
+
+        if paths.is_empty() {
+            println!(
+                "{}",
+                style("No generated pages to write. Skipping.").green()
+            );
+            return Ok(());
+        }
 
         let pb = ProgressBar::new(paths.len() as u64);
         pb.set_message("Writing generated pages...");
