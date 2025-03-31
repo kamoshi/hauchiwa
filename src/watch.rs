@@ -13,6 +13,7 @@ use notify_debouncer_full::new_debouncer;
 use tungstenite::WebSocket;
 
 use crate::error::WatchError;
+use crate::gitmap;
 use crate::{Scheduler, Website};
 
 impl<G> Scheduler<'_, G>

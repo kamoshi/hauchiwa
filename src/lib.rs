@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 mod error;
+mod gitmap;
 mod watch;
 
 use std::any::Any;
@@ -15,7 +16,7 @@ use std::{fs, mem};
 use camino::{Utf8Path, Utf8PathBuf};
 use gray_matter::Matter;
 use gray_matter::engine::{JSON, YAML};
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressIterator, ProgressStyle};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -23,7 +24,7 @@ use sitemap_rs::url::{ChangeFrequency, Url};
 use sitemap_rs::url_set::UrlSet;
 
 pub use crate::error::*;
-pub use gitmap::{GitInfo, GitRepo};
+pub use crate::gitmap::{GitInfo, GitRepo};
 
 /// This value controls whether the library should run in the `Build` or the
 /// `Watch` mode. In `Build` mode, the library builds every page of the website
@@ -988,6 +989,7 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
 
     fn build_pages(&mut self) -> Result<(), BuilderError> {
         let traces = mem::take(&mut self.tracked);
+
         let pb = ProgressBar::new(traces.len() as u64);
         pb.set_message("Running build tasks...");
         pb.set_style(
@@ -999,11 +1001,8 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
 
         self.tracked = traces
             .into_par_iter()
-            .map(|trace| {
-                let res = self.rebuild_trace(trace);
-                pb.inc(1);
-                res
-            })
+            .progress_with(pb.clone())
+            .map(|trace| self.rebuild_trace(trace))
             .collect::<Result<_, _>>()?;
 
         pb.finish_with_message("Finished running build tasks!");
@@ -1014,7 +1013,24 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
     fn write_pages(&mut self) -> Result<(), HauchiwaError> {
         let mut temp = HashMap::new();
 
-        let pb = ProgressBar::new(self.tracked.len() as u64);
+        let paths: Vec<_> = self
+            .tracked
+            .iter()
+            .flat_map(|trace| &trace.path)
+            .filter_map(|(path, data)| {
+                let hash = Sha256::digest(&data).into();
+                let path = Utf8Path::new("dist").join(path);
+
+                if Some(hash) == self.cache_pages.get(&path).copied() {
+                    None
+                } else {
+                    self.cache_pages.insert(path.clone(), hash);
+                    Some((path, data, hash))
+                }
+            })
+            .collect();
+
+        let pb = ProgressBar::new(paths.len() as u64);
         pb.set_message("Writing generated pages...");
         pb.set_style(
             ProgressStyle::default_bar()
@@ -1023,19 +1039,12 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
                 .progress_chars("#>-"),
         );
 
-        for trace in &self.tracked {
-            for (slug, data) in &trace.path {
-                let hash = Sha256::digest(&data).into();
-                let path = Utf8Path::new("dist").join(slug);
-
-                if Some(hash) == self.cache_pages.get(&path).copied() {
-                    continue;
-                } else {
-                    self.cache_pages.insert(path.clone(), hash);
-                }
-
+        paths
+            .into_iter()
+            .progress_with(pb.clone())
+            .try_for_each::<_, Result<_, BuilderError>>(|(path, data, hash)| {
                 if temp.contains_key(&path) {
-                    println!("Warning, overwriting path {slug}")
+                    println!("Warning, overwriting path {path}")
                 }
 
                 if let Some(dir) = path.parent() {
@@ -1047,11 +1056,10 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
                 std::io::Write::write_all(&mut file, data.as_bytes())
                     .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
 
-                pb.inc(1);
-
                 temp.insert(path.clone(), hash);
-            }
-        }
+
+                Ok(())
+            })?;
 
         pb.finish_with_message("Finished writing generated pages!");
 
@@ -1072,31 +1080,31 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
                 .progress_chars("#>-"),
         );
 
-        queue.into_par_iter().try_for_each(|item| {
-            let BuildRequest::Image(path_image, path_cache, path_dist) = item;
+        queue
+            .into_par_iter()
+            .progress_with(pb.clone())
+            .try_for_each::<_, Result<_, BuilderError>>(|item| {
+                let BuildRequest::Image(path_image, path_cache, path_dist) = item;
 
-            if !path_cache.exists() {
-                let buffer = fs::read(&path_image)
-                    .map_err(|e| BuilderError::FileReadError(path_image, e))?;
-                let buffer = optimize_image(&buffer);
-                fs::create_dir_all(".cache/hash")
-                    .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
-                fs::write(&path_cache, buffer)
-                    .map_err(|e| BuilderError::FileWriteError(path_cache.clone(), e))?;
-            }
+                if !path_cache.exists() {
+                    let buffer = fs::read(&path_image)
+                        .map_err(|e| BuilderError::FileReadError(path_image, e))?;
+                    let buffer = optimize_image(&buffer);
+                    fs::create_dir_all(".cache/hash")
+                        .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
+                    fs::write(&path_cache, buffer)
+                        .map_err(|e| BuilderError::FileWriteError(path_cache.clone(), e))?;
+                }
 
-            // println!("IMG: {}", path_dist);
-            let dir = path_dist.parent().unwrap_or(&path_dist);
-            fs::create_dir_all(dir) //
-                .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
-            fs::copy(&path_cache, &path_dist).map_err(|e| {
-                BuilderError::FileCopyError(path_cache.clone(), path_dist.clone(), e)
+                let dir = path_dist.parent().unwrap_or(&path_dist);
+                fs::create_dir_all(dir) //
+                    .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
+                fs::copy(&path_cache, &path_dist).map_err(|e| {
+                    BuilderError::FileCopyError(path_cache.clone(), path_dist.clone(), e)
+                })?;
+
+                Ok(())
             })?;
-
-            pb.inc(1);
-
-            Result::<(), BuilderError>::Ok(())
-        })?;
 
         pb.finish_with_message("Finished building requested assets!");
 
