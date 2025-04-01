@@ -18,7 +18,7 @@ use console::style;
 use gray_matter::Matter;
 use gray_matter::engine::{JSON, YAML};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressIterator, ProgressStyle};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sitemap_rs::url::{ChangeFrequency, Url};
@@ -45,7 +45,7 @@ pub enum Mode {
 /// the HTML rendering process. If no such data is needed, it can be substituted
 /// with `()`.
 #[derive(Debug, Clone)]
-pub struct Global<G: Send + Sync> {
+pub struct Global<G: Send + Sync = ()> {
     /// Generator mode.
     pub mode: Mode,
     /// Any additional data.
@@ -113,6 +113,12 @@ impl<G: Send + Sync + 'static> Website<G> {
     }
 
     pub fn build(&self, data: G) -> Result<(), HauchiwaError> {
+        eprintln!(
+            "Running {} in {} mode.",
+            style("Hauchiwa").red(),
+            style("build").blue()
+        );
+
         let context = Global {
             mode: Mode::Build,
             data,
@@ -124,6 +130,12 @@ impl<G: Send + Sync + 'static> Website<G> {
     }
 
     pub fn watch(&self, data: G) -> Result<(), HauchiwaError> {
+        eprintln!(
+            "Running {} in {} mode.",
+            style("Hauchiwa").red(),
+            style("watch").blue()
+        );
+
         let context = Global {
             mode: Mode::Watch,
             data,
@@ -135,7 +147,6 @@ impl<G: Send + Sync + 'static> Website<G> {
     }
 
     fn init<'a>(&'a self, context: &'a Global<G>) -> Result<Scheduler<'a, G>, HauchiwaError> {
-        println!("{}", style("Cleaning dist...").cyan());
         init_clean_dist()?;
         init_clone_static()?;
 
@@ -145,11 +156,30 @@ impl<G: Send + Sync + 'static> Website<G> {
         })
         .unwrap();
 
-        let mut items = vec![];
+        let mut items = {
+            let pb = ProgressBar::new(self.collections.len() as u64);
+            pb.set_message("Loading content items...");
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos} {msg}")
+                    .expect("Error setting progress bar template")
+                    .progress_chars("#>-"),
+            );
 
-        for collection in &self.collections {
-            items.extend(collection.load(&self.processors, &repo)?);
-        }
+            let proc = &self.processors;
+            let data = self
+                .collections
+                .par_iter()
+                .progress_with(pb.clone())
+                .map(|collection| collection.load(proc, &repo))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+
+            pb.finish_with_message("Finished loading content items!");
+            data
+        };
 
         items.extend(css_load_paths(&self.global_styles)?);
         items.extend(load_scripts(&self.global_scripts));
@@ -186,7 +216,8 @@ impl<G: Send + Sync + 'static> Website<G> {
 }
 
 fn init_clean_dist() -> Result<(), CleanError> {
-    println!("Cleaning dist");
+    eprintln!("Cleaning dist directory.");
+
     if fs::metadata("dist").is_ok() {
         fs::remove_dir_all("dist").map_err(|e| CleanError::RemoveError(e))?;
     }
@@ -195,19 +226,33 @@ fn init_clean_dist() -> Result<(), CleanError> {
 }
 
 fn init_clone_static() -> Result<(), HauchiwaError> {
-    copy_rec(Utf8Path::new("public"), Utf8Path::new("dist"))
-        .map_err(|e| HauchiwaError::CloneStatic(e))
+    let pb = ProgressBar::no_length();
+    pb.set_message("Copying static files...");
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos} {msg}")
+            .expect("Error setting progress bar template")
+            .progress_chars("#>-"),
+    );
+
+    copy_rec(Utf8Path::new("public"), Utf8Path::new("dist"), &pb)
+        .map_err(|e| HauchiwaError::CloneStatic(e))?;
+
+    pb.finish_with_message("Finished copying static files!");
+
+    Ok(())
 }
 
-fn copy_rec(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<()> {
+fn copy_rec(src: impl AsRef<Path>, dst: impl AsRef<Path>, pb: &ProgressBar) -> std::io::Result<()> {
     fs::create_dir_all(&dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let filetype = entry.file_type()?;
         if filetype.is_dir() {
-            copy_rec(entry.path(), dst.as_ref().join(entry.file_name()))?;
+            copy_rec(entry.path(), dst.as_ref().join(entry.file_name()), pb)?;
         } else {
             fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
+            pb.inc(1);
         }
     }
     Ok(())
@@ -402,7 +447,8 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
 type AnyMatter = Arc<dyn Any + Send + Sync>;
 
 /// Init pointer used to dynamically retrieve front matter.
-type InitFnPtr = Arc<dyn Fn(&str) -> Result<(AnyMatter, String), LoaderFileCallbackError>>;
+type InitFnPtr =
+    Arc<dyn Fn(&str) -> Result<(AnyMatter, String), LoaderFileCallbackError> + Send + Sync>;
 
 /// Wraps `InitFnPtr` and implements `Debug` trait for function pointer.
 #[derive(Clone)]
@@ -659,7 +705,7 @@ impl Collection {
 type AnyAsset = Box<dyn Any + Send + Sync>;
 
 enum ProcessorKind {
-    Asset(Box<dyn Fn(&[u8]) -> AnyAsset>),
+    Asset(Box<dyn Fn(&[u8]) -> AnyAsset + Send + Sync>),
     Image,
 }
 
