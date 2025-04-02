@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock, RwLock};
+use std::time::Instant;
 use std::{fs, mem};
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -150,22 +151,31 @@ impl<G: Send + Sync + 'static> Website<G> {
         init_clean_dist()?;
         init_clone_static()?;
 
-        let repo = gitmap::map(gitmap::Options {
-            repository: ".".to_string(),
-            revision: "HEAD".to_string(),
-        })
-        .unwrap();
+        let repo = {
+            let s = Instant::now();
+            let x = gitmap::map(gitmap::Options {
+                repository: ".".to_string(),
+                revision: "HEAD".to_string(),
+            })
+            .unwrap();
+            eprintln!(
+                "Loaded git repository data (+{}ms)",
+                Instant::now().duration_since(s).as_millis()
+            );
+            x
+        };
 
         let mut items = {
             let pb = ProgressBar::new(self.collections.len() as u64);
             pb.set_message("Loading content items...");
             pb.set_style(
                 ProgressStyle::default_bar()
-                    .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos} {msg}")
+                    .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
                     .expect("Error setting progress bar template")
                     .progress_chars("#>-"),
             );
 
+            let s = Instant::now();
             let proc = &self.processors;
             let data = self
                 .collections
@@ -177,7 +187,10 @@ impl<G: Send + Sync + 'static> Website<G> {
                 .flatten()
                 .collect::<Vec<_>>();
 
-            pb.finish_with_message("Finished loading content items!");
+            pb.finish_with_message(format!(
+                "Finished loading content items! (+{}ms)",
+                Instant::now().duration_since(s).as_millis()
+            ));
             data
         };
 
@@ -216,12 +229,18 @@ impl<G: Send + Sync + 'static> Website<G> {
 }
 
 fn init_clean_dist() -> Result<(), CleanError> {
-    eprintln!("Cleaning dist directory.");
+    let s = Instant::now();
 
     if fs::metadata("dist").is_ok() {
         fs::remove_dir_all("dist").map_err(|e| CleanError::RemoveError(e))?;
     }
     fs::create_dir("dist").map_err(|e| CleanError::CreateError(e))?;
+
+    eprintln!(
+        "Cleaned the dist directory (+{}ms)",
+        Instant::now().duration_since(s).as_millis()
+    );
+
     Ok(())
 }
 
@@ -235,10 +254,14 @@ fn init_clone_static() -> Result<(), HauchiwaError> {
             .progress_chars("#>-"),
     );
 
+    let s = Instant::now();
     copy_rec(Utf8Path::new("public"), Utf8Path::new("dist"), &pb)
         .map_err(|e| HauchiwaError::CloneStatic(e))?;
 
-    pb.finish_with_message("Finished copying static files!");
+    pb.finish_with_message(format!(
+        "Finished copying static files! (+{}ms)",
+        Instant::now().duration_since(s).as_millis()
+    ));
 
     Ok(())
 }
@@ -262,6 +285,7 @@ fn build_hooks<G>(website: &Website<G>, scheduler: &Scheduler<G>) -> Result<(), 
 where
     G: Send + Sync,
 {
+    let s = Instant::now();
     for hook in &website.hooks {
         let pages: Vec<_> = scheduler
             .tracked
@@ -273,6 +297,11 @@ where
             Hook::PostBuild(fun) => fun(&pages)?,
         }
     }
+
+    eprintln!(
+        "Ran user hooks (+{}ms)",
+        Instant::now().duration_since(s).as_millis()
+    );
 
     Ok(())
 }
@@ -289,6 +318,7 @@ where
 }
 
 fn css_load_paths(paths: &[Utf8PathBuf]) -> Result<Vec<InputItem>, StylesheetError> {
+    let s = Instant::now();
     let mut items = Vec::new();
 
     for path in paths {
@@ -300,6 +330,11 @@ fn css_load_paths(paths: &[Utf8PathBuf]) -> Result<Vec<InputItem>, StylesheetErr
             items.push(item);
         }
     }
+
+    eprintln!(
+        "Loaded global CSS stylesheets! (+{}ms)",
+        Instant::now().duration_since(s).as_millis()
+    );
 
     Ok(items)
 }
@@ -330,7 +365,8 @@ fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
 
     let path_scripts = Utf8Path::new(".cache/scripts/");
 
-    let res = cmd
+    let s = Instant::now();
+    let _ = cmd
         .arg("--format=esm")
         .arg("--bundle")
         .arg("--minify")
@@ -338,8 +374,10 @@ fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
         .output()
         .unwrap();
 
-    let stderr = String::from_utf8(res.stderr).unwrap();
-    println!("{}", stderr);
+    eprintln!(
+        "Loaded global JS scripts! (+{}ms)",
+        Instant::now().duration_since(s).as_millis()
+    );
 
     entrypoints
         .keys()
@@ -1047,13 +1085,17 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
                 .progress_chars("#>-"),
         );
 
+        let s = Instant::now();
         self.tracked = traces
             .into_par_iter()
             .progress_with(pb.clone())
             .map(|trace| self.rebuild_trace(trace))
             .collect::<Result<_, _>>()?;
 
-        pb.finish_with_message("Finished running build tasks!");
+        pb.finish_with_message(format!(
+            "Finished running build tasks! (+{}ms)",
+            Instant::now().duration_since(s).as_millis()
+        ));
 
         Ok(())
     }
@@ -1095,6 +1137,7 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
                 .progress_chars("#>-"),
         );
 
+        let s = Instant::now();
         paths
             .into_iter()
             .progress_with(pb.clone())
@@ -1117,7 +1160,10 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
                 Ok(())
             })?;
 
-        pb.finish_with_message("Finished writing generated pages!");
+        pb.finish_with_message(format!(
+            "Finished writing generated pages! (+{}ms)",
+            Instant::now().duration_since(s).as_millis()
+        ));
 
         self.cache_pages.extend(temp.into_iter());
 
@@ -1136,6 +1182,7 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
                 .progress_chars("#>-"),
         );
 
+        let s = Instant::now();
         queue
             .into_par_iter()
             .progress_with(pb.clone())
@@ -1162,7 +1209,10 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
                 Ok(())
             })?;
 
-        pb.finish_with_message("Finished building requested assets!");
+        pb.finish_with_message(format!(
+            "Finished building requested assets! (+{}ms)",
+            Instant::now().duration_since(s).as_millis()
+        ));
 
         Ok(())
     }
