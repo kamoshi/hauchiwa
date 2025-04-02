@@ -6,8 +6,8 @@ pub enum HauchiwaError {
     #[error(transparent)]
     Loader(#[from] LoaderError),
 
-    #[error("Error while cleaning dist: {0}")]
-    Clean(#[from] CleanError),
+    #[error("Encountered an error while clearing the dist directory:\n{0}")]
+    Clear(#[from] ClearError),
 
     #[error("Error while cloning static content: {0}")]
     CloneStatic(std::io::Error),
@@ -75,7 +75,7 @@ pub enum LoaderError {
 }
 
 #[derive(Debug, Error)]
-pub enum CleanError {
+pub enum ClearError {
     #[error(transparent)]
     RemoveError(std::io::Error),
 

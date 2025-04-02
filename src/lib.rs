@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 mod error;
 mod gitmap;
+mod io;
 mod watch;
 
 use std::any::Any;
@@ -148,24 +149,29 @@ impl<G: Send + Sync + 'static> Website<G> {
     }
 
     fn init<'a>(&'a self, context: &'a Global<G>) -> Result<Scheduler<'a, G>, HauchiwaError> {
-        init_clean_dist()?;
-        init_clone_static()?;
+        let s = Instant::now();
+
+        crate::io::clear_dist()?;
+        crate::io::clone_static()?;
 
         let repo = {
             let s = Instant::now();
-            let x = gitmap::map(gitmap::Options {
+
+            let repo = crate::gitmap::map(crate::gitmap::Options {
                 repository: ".".to_string(),
                 revision: "HEAD".to_string(),
             })
             .unwrap();
-            eprintln!(
-                "Loaded git repository data (+{}ms)",
-                Instant::now().duration_since(s).as_millis()
-            );
-            x
+
+            eprintln!("Loaded git repository data {}", crate::io::as_overhead(s));
+
+            repo
         };
 
-        let mut items = {
+        let mut items = vec![];
+        items.extend(css_load_paths(&self.global_styles)?);
+        items.extend(load_scripts(&self.global_scripts));
+        items.extend({
             let pb = ProgressBar::new(self.collections.len() as u64);
             pb.set_message("Loading content items...");
             pb.set_style(
@@ -188,14 +194,11 @@ impl<G: Send + Sync + 'static> Website<G> {
                 .collect::<Vec<_>>();
 
             pb.finish_with_message(format!(
-                "Finished loading content items! (+{}ms)",
-                Instant::now().duration_since(s).as_millis()
+                "Finished loading content items! {}",
+                crate::io::as_overhead(s)
             ));
             data
-        };
-
-        items.extend(css_load_paths(&self.global_styles)?);
-        items.extend(load_scripts(&self.global_scripts));
+        });
 
         let mut scheduler = Scheduler::new(self, context, items);
         scheduler.refresh()?;
@@ -203,6 +206,11 @@ impl<G: Send + Sync + 'static> Website<G> {
 
         build_hooks(self, &scheduler)?;
         build_sitemap(self, &scheduler)?;
+
+        eprintln!(
+            "Successfully built website in {}",
+            format!("{}ms", Instant::now().duration_since(s).as_millis())
+        );
 
         Ok(scheduler)
     }
@@ -228,59 +236,6 @@ impl<G: Send + Sync + 'static> Website<G> {
     }
 }
 
-fn init_clean_dist() -> Result<(), CleanError> {
-    let s = Instant::now();
-
-    if fs::metadata("dist").is_ok() {
-        fs::remove_dir_all("dist").map_err(|e| CleanError::RemoveError(e))?;
-    }
-    fs::create_dir("dist").map_err(|e| CleanError::CreateError(e))?;
-
-    eprintln!(
-        "Cleaned the dist directory (+{}ms)",
-        Instant::now().duration_since(s).as_millis()
-    );
-
-    Ok(())
-}
-
-fn init_clone_static() -> Result<(), HauchiwaError> {
-    let pb = ProgressBar::no_length();
-    pb.set_message("Copying static files...");
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos} {msg}")
-            .expect("Error setting progress bar template")
-            .progress_chars("#>-"),
-    );
-
-    let s = Instant::now();
-    copy_rec(Utf8Path::new("public"), Utf8Path::new("dist"), &pb)
-        .map_err(|e| HauchiwaError::CloneStatic(e))?;
-
-    pb.finish_with_message(format!(
-        "Finished copying static files! (+{}ms)",
-        Instant::now().duration_since(s).as_millis()
-    ));
-
-    Ok(())
-}
-
-fn copy_rec(src: impl AsRef<Path>, dst: impl AsRef<Path>, pb: &ProgressBar) -> std::io::Result<()> {
-    fs::create_dir_all(&dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let filetype = entry.file_type()?;
-        if filetype.is_dir() {
-            copy_rec(entry.path(), dst.as_ref().join(entry.file_name()), pb)?;
-        } else {
-            fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
-            pb.inc(1);
-        }
-    }
-    Ok(())
-}
-
 fn build_hooks<G>(website: &Website<G>, scheduler: &Scheduler<G>) -> Result<(), HookError>
 where
     G: Send + Sync,
@@ -298,10 +253,7 @@ where
         }
     }
 
-    eprintln!(
-        "Ran user hooks (+{}ms)",
-        Instant::now().duration_since(s).as_millis()
-    );
+    eprintln!("Ran user hooks {}", crate::io::as_overhead(s));
 
     Ok(())
 }
@@ -332,8 +284,8 @@ fn css_load_paths(paths: &[Utf8PathBuf]) -> Result<Vec<InputItem>, StylesheetErr
     }
 
     eprintln!(
-        "Loaded global CSS stylesheets! (+{}ms)",
-        Instant::now().duration_since(s).as_millis()
+        "Loaded global CSS stylesheets! {}",
+        crate::io::as_overhead(s)
     );
 
     Ok(items)
@@ -374,10 +326,7 @@ fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
         .output()
         .unwrap();
 
-    eprintln!(
-        "Loaded global JS scripts! (+{}ms)",
-        Instant::now().duration_since(s).as_millis()
-    );
+    eprintln!("Loaded global JS scripts! {}", crate::io::as_overhead(s));
 
     entrypoints
         .keys()
@@ -1093,8 +1042,8 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
             .collect::<Result<_, _>>()?;
 
         pb.finish_with_message(format!(
-            "Finished running build tasks! (+{}ms)",
-            Instant::now().duration_since(s).as_millis()
+            "Finished running build tasks! {}",
+            crate::io::as_overhead(s)
         ));
 
         Ok(())
@@ -1161,8 +1110,8 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
             })?;
 
         pb.finish_with_message(format!(
-            "Finished writing generated pages! (+{}ms)",
-            Instant::now().duration_since(s).as_millis()
+            "Finished writing generated pages! {}",
+            crate::io::as_overhead(s)
         ));
 
         self.cache_pages.extend(temp.into_iter());
@@ -1210,8 +1159,8 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
             })?;
 
         pb.finish_with_message(format!(
-            "Finished building requested assets! (+{}ms)",
-            Instant::now().duration_since(s).as_millis()
+            "Finished building requested assets! {}",
+            crate::io::as_overhead(s)
         ));
 
         Ok(())
