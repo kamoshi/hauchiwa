@@ -20,7 +20,10 @@ impl<G> Scheduler<'_, G>
 where
     G: Send + Sync + 'static,
 {
-    pub(crate) fn watch(&mut self, website: &Website<G>) -> Result<(), WatchError> {
+    pub fn watch(&mut self, website: &Website<G>) -> Result<(), WatchError> {
+        #[cfg(feature = "server")]
+        let thread_http = server::start();
+
         let root = env::current_dir().unwrap();
         let server = TcpListener::bind("127.0.0.1:1337").map_err(|e| WatchError::Bind(e))?;
         let client = Arc::new(Mutex::new(vec![]));
@@ -133,6 +136,9 @@ where
         thread_i.join().unwrap();
         thread_o.join().unwrap();
 
+        #[cfg(feature = "server")]
+        thread_http.join().unwrap().unwrap();
+
         Ok(())
     }
 }
@@ -188,4 +194,39 @@ fn new_thread_ws_reload(
     });
 
     (tx, thread)
+}
+
+#[cfg(feature = "server")]
+mod server {
+    use std::{net::SocketAddr, thread};
+
+    use axum::Router;
+    use console::style;
+    use tower_http::services::ServeDir;
+
+    pub fn start() -> thread::JoinHandle<Result<(), anyhow::Error>> {
+        let port = 8080;
+        let url = style(format!("http://localhost:{}/", port)).yellow();
+        eprintln!("Starting a HTTP server on {}", url);
+
+        thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(serve(port))
+        })
+    }
+
+    async fn serve(port: u16) -> Result<(), anyhow::Error> {
+        let address = SocketAddr::from(([127, 0, 0, 1], port));
+        let address = tokio::net::TcpListener::bind(address).await?;
+
+        let router = Router::new()
+            // path to the dist directory with generated website
+            .fallback_service(ServeDir::new("dist"));
+
+        axum::serve(address, router).await?;
+
+        Ok(())
+    }
 }

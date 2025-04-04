@@ -8,6 +8,10 @@ license     = "GPL-2.0-or-later"
 description = "Incredibly flexible static site generator library with incremental rebuilds and cached image optimization"
 repository  = "https://github.com/kamoshi/hauchiwa"
 
+[features]
+default = ["server"]
+server = ["axum", "tokio", "tower-http"]
+
 [dependencies]
 camino                  = "1.1"
 chrono                  = "0.4"
@@ -32,3 +36,8 @@ thiserror               = "2.0"
 notify                  = "8.0"
 notify-debouncer-full   = { version = "0.5", default-features = false }
 tungstenite             = "0.26"
+
+# Server
+axum                    = { version = "0.8", optional = true, default-features = false, features = ["tokio", "http1"] }
+tokio                   = { version = "1.44", optional = true, default-features = false, features = ["rt"] }
+tower-http              = { version = "0.6", optional = true, default-features = false, features = ["fs"] }
