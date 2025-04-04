@@ -8,6 +8,21 @@ static site generator, it can handle all the mundane work:
 - optimizing images and caching the work
 - compiling SCSS and CSS stylesheets
 - compiling JavaScript applications via ESBuild
+- watching for changes and incremental rebuilds
+
+## Feature flags
+
+- `server` - add a HTTP server for the generated website's files in watch mode
+
+## Get started
+
+To get started add the following snippet to your `Cargo.toml` file.
+
+```toml
+[dependencies.hauchiwa]
+version = "*" # change this version to the latest
+features = ["server"]
+```
 
 ## Declarative configuration
 
