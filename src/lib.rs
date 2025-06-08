@@ -54,10 +54,24 @@ pub struct Global<G: Send + Sync = ()> {
     pub data: G,
 }
 
+/// 32 bytes length generic hash
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Hash32([u8; 32]);
 
+impl<T> From<T> for Hash32
+where
+    T: Into<[u8; 32]>,
+{
+    fn from(value: T) -> Self {
+        Hash32(value.into())
+    }
+}
+
 impl Hash32 {
+    fn hash(buffer: impl AsRef<[u8]>) -> Self {
+        Sha256::digest(buffer).into()
+    }
+
     fn to_hex(self) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut acc = vec![0u8; 64];
@@ -69,15 +83,6 @@ impl Hash32 {
 
         // SAFETY: `acc` contains only valid ASCII bytes.
         unsafe { String::from_utf8_unchecked(acc) }
-    }
-}
-
-impl<T> From<T> for Hash32
-where
-    T: Into<[u8; 32]>,
-{
-    fn from(value: T) -> Self {
-        Hash32(value.into())
     }
 }
 
@@ -300,7 +305,7 @@ fn css_compile(file: PathBuf) -> Result<InputItem, StylesheetError> {
         grass::from_path(&file, &opts).map_err(|e| StylesheetError::Compiler(e.to_string()))?;
 
     Ok(InputItem {
-        hash: Sha256::digest(&stylesheet).into(),
+        hash: Hash32::hash(&stylesheet),
         file: file.clone(),
         slug: file,
         data: Input::Stylesheet(InputStylesheet { stylesheet }),
@@ -333,7 +338,7 @@ fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
         .map(|key| {
             let file = path_scripts.join(key).with_extension("js");
             let buffer = fs::read(&file).unwrap();
-            let hash = Sha256::digest(buffer).into();
+            let hash = Hash32::hash(buffer);
 
             InputItem {
                 slug: file.clone(),
@@ -543,7 +548,7 @@ impl LoaderGlob {
         for processor in processors {
             if processor.exts.contains(ext) {
                 let bytes = fs::read(&file)?;
-                let hash = Sha256::digest(&bytes).into();
+                let hash = Hash32::hash(&bytes);
 
                 let input = match &processor.kind {
                     ProcessorKind::Asset(fun) => {
@@ -581,7 +586,7 @@ impl LoaderGlob {
             }
 
             let bytes = fs::read(&file)?;
-            let hash = Sha256::digest(&bytes).into();
+            let hash = Hash32::hash(&bytes);
             let text = String::from_utf8_lossy(&bytes);
             let (meta, text) = init.call(&text)?;
 
@@ -1057,7 +1062,7 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
             .iter()
             .flat_map(|trace| &trace.path)
             .filter_map(|(path, data)| {
-                let hash = Sha256::digest(&data).into();
+                let hash = Hash32::hash(data);
                 let path = Utf8Path::new("dist").join(path);
 
                 if Some(hash) == self.cache_pages.get(&path).copied() {
