@@ -1,6 +1,6 @@
 [package]
 name        = "hauchiwa"
-version     = "0.4.0"
+version     = "0.5.0"
 edition     = "2024"
 authors     = ["Maciej Jur <maciej@kamoshi.org>"]
 keywords    = ["ssg"]
@@ -39,5 +39,5 @@ tungstenite             = "0.26"
 
 # Server
 axum                    = { version = "0.8", optional = true, default-features = false, features = ["tokio", "http1"] }
-tokio                   = { version = "1.44", optional = true, default-features = false, features = ["rt"] }
+tokio                   = { version = "1.45", optional = true, default-features = false, features = ["rt"] }
 tower-http              = { version = "0.6", optional = true, default-features = false, features = ["fs"] }
