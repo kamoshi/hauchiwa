@@ -99,9 +99,9 @@ impl Hash32 {
 pub struct Website<G: Send + Sync> {
     /// Rendered assets and content are outputted to this directory.
     /// All collections added to this website.
-    collections: Vec<Collection>,
+    loaders_content: Vec<Content>,
     /// Preprocessors for files
-    processors: Vec<Processor>,
+    loaders_assets: Vec<Assets>,
     /// Build tasks which can be used to generate pages.
     tasks: Vec<Task<G>>,
     /// Global scripts
@@ -177,7 +177,7 @@ impl<G: Send + Sync + 'static> Website<G> {
         items.extend(css_load_paths(&self.global_styles)?);
         items.extend(load_scripts(&self.global_scripts));
         items.extend({
-            let pb = ProgressBar::new(self.collections.len() as u64);
+            let pb = ProgressBar::new(self.loaders_content.len() as u64);
             pb.set_message("Loading content items...");
             pb.set_style(
                 ProgressStyle::default_bar()
@@ -187,12 +187,11 @@ impl<G: Send + Sync + 'static> Website<G> {
             );
 
             let s = Instant::now();
-            let proc = &self.processors;
             let data = self
-                .collections
+                .loaders_content
                 .par_iter()
                 .progress_with(pb.clone())
-                .map(|collection| collection.load(proc, &repo))
+                .map(|collection| collection.load(&repo))
                 .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
                 .flatten()
@@ -204,6 +203,8 @@ impl<G: Send + Sync + 'static> Website<G> {
             ));
             data
         });
+
+        items.extend(self.loaders_assets.iter().map(|e| e.load()).flatten());
 
         let mut scheduler = Scheduler::new(self, context, items);
         scheduler.refresh()?;
@@ -224,14 +225,13 @@ impl<G: Send + Sync + 'static> Website<G> {
     fn load_set(
         &self,
         paths: &HashSet<Utf8PathBuf>,
-        proc: &[Processor],
         repo: &GitRepo,
     ) -> Result<Vec<InputItem>, LoaderError> {
         let mut items = vec![];
 
         for path in paths {
-            for collection in &self.collections {
-                if let Some(item) = collection.load_single(path, proc, repo)? {
+            for collection in &self.loaders_content {
+                if let Some(item) = collection.load_single(path, repo)? {
                     items.push(item);
                 }
             }
@@ -358,8 +358,8 @@ fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
 /// A builder struct for creating a `Website` with specified settings.
 #[derive(Debug)]
 pub struct WebsiteConfiguration<G: Send + Sync> {
-    collections: Vec<Collection>,
-    processors: Vec<Processor>,
+    collections: Vec<Content>,
+    processors: Vec<Assets>,
     tasks: Vec<Task<G>>,
     global_scripts: HashMap<&'static str, &'static str>,
     global_styles: Vec<Utf8PathBuf>,
@@ -380,12 +380,12 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
         }
     }
 
-    pub fn add_collections(mut self, collections: impl IntoIterator<Item = Collection>) -> Self {
+    pub fn add_content(mut self, collections: impl IntoIterator<Item = Content>) -> Self {
         self.collections.extend(collections);
         self
     }
 
-    pub fn add_processors(mut self, processors: impl IntoIterator<Item = Processor>) -> Self {
+    pub fn add_assets(mut self, processors: impl IntoIterator<Item = Assets>) -> Self {
         self.processors.extend(processors);
         self
     }
@@ -415,8 +415,8 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
 
     pub fn finish(self) -> Website<G> {
         Website {
-            collections: self.collections,
-            processors: self.processors,
+            loaders_content: self.collections,
+            loaders_assets: self.processors,
             tasks: self.tasks,
             global_scripts: self.global_scripts,
             global_styles: self.global_styles,
@@ -478,16 +478,10 @@ enum Loader {
 struct LoaderGlob {
     base: &'static str,
     glob: &'static str,
-    exts: HashSet<&'static str>,
 }
 
 impl LoaderGlob {
-    fn read(
-        &self,
-        init: InitFn,
-        processors: &[Processor],
-        repo: &GitRepo,
-    ) -> Result<Vec<InputItem>, LoaderError> {
+    fn read(&self, init: InitFn, repo: &GitRepo) -> Result<Vec<InputItem>, LoaderError> {
         let pattern = Utf8Path::new(self.base).join(self.glob);
         let iter = glob::glob(pattern.as_str())?;
         let mut vec = vec![];
@@ -495,7 +489,7 @@ impl LoaderGlob {
         for path in iter {
             let path = Utf8PathBuf::try_from(path?)?;
             if let Some(item) = self
-                .read_file(path.clone(), init.clone(), processors, repo)
+                .read_file(path.clone(), init.clone(), repo)
                 .map_err(|e| LoaderError::LoaderGlobFile(path, e))?
             {
                 vec.push(item);
@@ -509,7 +503,6 @@ impl LoaderGlob {
         &self,
         path: &Utf8Path,
         init: &InitFn,
-        proc: &[Processor],
         repo: &GitRepo,
     ) -> Result<Option<InputItem>, LoaderError> {
         let pattern = Utf8Path::new(self.base).join(self.glob);
@@ -521,7 +514,7 @@ impl LoaderGlob {
 
         let path = path.to_owned();
         let item = self
-            .read_file(path.clone(), init.clone(), proc, repo)
+            .read_file(path.clone(), init.clone(), repo)
             .map_err(|e| LoaderError::LoaderGlobFile(path, e))?;
 
         Ok(item)
@@ -531,60 +524,13 @@ impl LoaderGlob {
         &self,
         file: Utf8PathBuf,
         init: InitFn,
-        processors: &'a [Processor],
         repo: &GitRepo,
     ) -> Result<Option<InputItem>, LoaderFileError> {
         if file.is_dir() {
             return Ok(None);
         }
 
-        let ext = match file.extension() {
-            Some(ext) => ext,
-            None => return Ok(None),
-        };
-
-        // We check if any of the assigned processors capture and transform this
-        // file. If we match anything we can exit early.
-        for processor in processors {
-            if processor.exts.contains(ext) {
-                let bytes = fs::read(&file)?;
-                let hash = Hash32::hash(&bytes);
-
-                let input = match &processor.kind {
-                    ProcessorKind::Asset(fun) => {
-                        let asset = fun(&bytes);
-                        let slug = file.strip_prefix(self.base).unwrap_or(&file).to_owned();
-
-                        InputItem {
-                            hash,
-                            info: repo.files.get(file.as_str()).cloned(),
-                            file,
-                            slug,
-                            data: Input::Asset(asset),
-                        }
-                    }
-                    ProcessorKind::Image => {
-                        let slug = file.strip_prefix(self.base).unwrap_or(&file).to_owned();
-
-                        InputItem {
-                            hash,
-                            info: repo.files.get(file.as_str()).cloned(),
-                            file,
-                            slug,
-                            data: Input::Picture,
-                        }
-                    }
-                };
-
-                return Ok(Some(input));
-            }
-        }
-
         let item = {
-            if !self.exts.contains(ext) {
-                return Ok(None);
-            }
-
             let bytes = fs::read(&file)?;
             let hash = Hash32::hash(&bytes);
             let text = String::from_utf8_lossy(&bytes);
@@ -626,14 +572,14 @@ impl LoaderGlob {
 /// the articles. A common use case is to directly reference the images relative
 /// to the markdown file.
 #[derive(Debug)]
-pub struct Collection {
+pub struct Content {
     /// Content loader.
     loader: Loader,
     /// Content initialization function.
     init: InitFn,
 }
 
-impl Collection {
+impl Content {
     /// Create a new collection which draws content from the filesystem files
     /// via a glob pattern. Usually used to collect articles written as markdown
     /// files, however it is completely format agnostic.
@@ -649,10 +595,9 @@ impl Collection {
     /// ```rust
     /// Collection::glob_with("content", "posts/**/*", ["md"], parse_matter_yaml::<Post>);
     /// ```
-    pub fn glob_with<D>(
+    pub fn glob<D>(
         path_base: &'static str,
         path_glob: &'static str,
-        exts_content: impl IntoIterator<Item = &'static str>,
         parse_matter: fn(&str) -> Result<(D, String), anyhow::Error>,
     ) -> Self
     where
@@ -662,30 +607,24 @@ impl Collection {
             loader: Loader::Glob(LoaderGlob {
                 base: path_base,
                 glob: path_glob,
-                exts: HashSet::from_iter(exts_content),
             }),
             init: InitFn::new(parse_matter),
         }
     }
 
-    fn load(
-        &self,
-        processors: &[Processor],
-        repo: &GitRepo,
-    ) -> Result<Vec<InputItem>, LoaderError> {
+    fn load(&self, repo: &GitRepo) -> Result<Vec<InputItem>, LoaderError> {
         match &self.loader {
-            Loader::Glob(loader) => loader.read(self.init.clone(), processors, repo),
+            Loader::Glob(loader) => loader.read(self.init.clone(), repo),
         }
     }
 
     fn load_single(
         &self,
         path: &Utf8Path,
-        proc: &[Processor],
         repo: &GitRepo,
     ) -> Result<Option<InputItem>, LoaderError> {
         match &self.loader {
-            Loader::Glob(loader) => loader.read_once(path, &self.init, proc, repo),
+            Loader::Glob(loader) => loader.read_once(path, &self.init, repo),
         }
     }
 }
@@ -710,27 +649,123 @@ impl Debug for ProcessorKind {
     }
 }
 
-#[derive(Debug)]
-pub struct Processor {
-    exts: HashSet<&'static str>,
-    kind: ProcessorKind,
+struct FnU8(Box<dyn Fn(&[u8]) -> AnyAsset + Send + Sync>);
+
+impl Debug for FnU8 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Fn(*)")
+    }
 }
 
-impl Processor {
-    pub fn process_assets<T: Send + Sync + 'static>(
-        exts: impl IntoIterator<Item = &'static str>,
-        call: fn(&[u8]) -> T,
+#[derive(Debug)]
+pub struct Assets(AssetsLoader);
+
+#[derive(Debug)]
+enum AssetsLoader {
+    Glob {
+        path_base: &'static str,
+        path_glob: &'static str,
+        func: FnU8,
+    },
+    GlobOd {
+        path_base: &'static str,
+        path_glob: &'static str,
+        func: fn(&[u8]) -> Vec<u8>,
+    },
+    Images {
+        exts: HashSet<&'static str>,
+        kind: ProcessorKind,
+    },
+}
+
+impl Assets {
+    pub fn glob<T>(path_base: &'static str, path_glob: &'static str, call: fn(&[u8]) -> T) -> Self
+    where
+        T: Send + Sync + 'static,
+    {
+        Self(AssetsLoader::Glob {
+            path_base,
+            path_glob,
+            func: FnU8(Box::new(move |data| Box::new(call(data)))),
+        })
+    }
+
+    pub fn glob_defer(
+        path_base: &'static str,
+        path_glob: &'static str,
+        func: fn(&[u8]) -> Vec<u8>,
     ) -> Self {
-        Self {
-            exts: HashSet::from_iter(exts),
-            kind: ProcessorKind::Asset(Box::new(move |data| Box::new(call(data)))),
-        }
+        Self(AssetsLoader::GlobOd {
+            path_base,
+            path_glob,
+            func,
+        })
     }
 
     pub fn process_images(exts: impl IntoIterator<Item = &'static str>) -> Self {
-        Self {
+        Self(AssetsLoader::Images {
             exts: HashSet::from_iter(exts),
             kind: ProcessorKind::Image,
+        })
+    }
+
+    /// Load all assets which are matched by the defined glob.
+    fn load(&self) -> Vec<InputItem> {
+        match &self.0 {
+            AssetsLoader::Glob {
+                path_base,
+                path_glob,
+                func: FnU8(func),
+            } => {
+                let pattern = Utf8Path::new(path_base).join(path_glob);
+                let iter = glob::glob(pattern.as_str()).unwrap();
+
+                let mut out = vec![];
+                for entry in iter {
+                    let entry = Utf8PathBuf::try_from(entry.unwrap()).unwrap();
+                    let bytes = fs::read(&entry).unwrap();
+
+                    let hash = Hash32::hash(&bytes);
+                    let data = func(&bytes);
+
+                    out.push(InputItem {
+                        hash,
+                        file: entry.to_owned(),
+                        slug: entry.strip_prefix(path_base).unwrap_or(&entry).to_owned(),
+                        data: Input::InMemory(data),
+                        info: None,
+                    });
+                }
+
+                out
+            }
+            AssetsLoader::GlobOd {
+                path_base,
+                path_glob,
+                func,
+            } => {
+                let pattern = Utf8Path::new(path_base).join(path_glob);
+                let iter = glob::glob(pattern.as_str()).unwrap();
+
+                let mut out = vec![];
+                for entry in iter {
+                    let entry = Utf8PathBuf::try_from(entry.unwrap()).unwrap();
+                    let bytes = fs::read(&entry).unwrap();
+
+                    let hash = Hash32::hash(&bytes);
+
+                    out.push(InputItem {
+                        hash,
+                        file: entry.to_owned(),
+                        slug: entry.strip_prefix(path_base).unwrap_or(&entry).to_owned(),
+                        data: Input::OnDisk(*func),
+                        info: None,
+                    });
+                }
+
+                out
+            }
+            AssetsLoader::Images { exts, kind } => vec![],
         }
     }
 }
@@ -767,8 +802,8 @@ macro_rules! matter_parser {
 	};
 }
 
-matter_parser!(parse_matter_yaml, YAML);
-matter_parser!(parse_matter_json, JSON);
+matter_parser!(yaml, YAML);
+matter_parser!(json, JSON);
 
 // ******************************
 // *           Tasks            *
@@ -860,8 +895,8 @@ struct InputStylesheet {
 #[derive(Debug)]
 enum Input {
     Content(InputContent),
-    Asset(Box<dyn Any + Send + Sync>),
-    Picture,
+    InMemory(Box<dyn Any + Send + Sync>),
+    OnDisk(fn(&[u8]) -> Vec<u8>),
     Stylesheet(InputStylesheet),
     Script,
 }
@@ -1141,23 +1176,28 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
             .into_par_iter()
             .progress_with(pb.clone())
             .try_for_each::<_, Result<_, BuilderError>>(|item| {
-                let BuildRequest::Image(path_image, path_cache, path_dist) = item;
+                let BuildRequest {
+                    path_file,
+                    path_temp,
+                    path_dist,
+                    call,
+                } = item;
 
-                if !path_cache.exists() {
-                    let buffer = fs::read(&path_image)
-                        .map_err(|e| BuilderError::FileReadError(path_image, e))?;
-                    let buffer = optimize_image(&buffer);
+                if !path_temp.exists() {
+                    let buffer = fs::read(&path_file)
+                        .map_err(|e| BuilderError::FileReadError(path_file, e))?;
+                    let buffer = call(&buffer);
                     fs::create_dir_all(".cache/hash")
                         .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
-                    fs::write(&path_cache, buffer)
-                        .map_err(|e| BuilderError::FileWriteError(path_cache.clone(), e))?;
+                    fs::write(&path_temp, buffer)
+                        .map_err(|e| BuilderError::FileWriteError(path_temp.clone(), e))?;
                 }
 
                 let dir = path_dist.parent().unwrap_or(&path_dist);
                 fs::create_dir_all(dir) //
                     .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
-                fs::copy(&path_cache, &path_dist).map_err(|e| {
-                    BuilderError::FileCopyError(path_cache.clone(), path_dist.clone(), e)
+                fs::copy(&path_temp, &path_dist).map_err(|e| {
+                    BuilderError::FileCopyError(path_temp.clone(), path_dist.clone(), e)
                 })?;
 
                 Ok(())
@@ -1177,8 +1217,11 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
 // ******************************
 
 #[derive(Debug)]
-enum BuildRequest {
-    Image(Utf8PathBuf, Utf8PathBuf, Utf8PathBuf),
+struct BuildRequest {
+    path_file: Utf8PathBuf,
+    path_temp: Utf8PathBuf,
+    path_dist: Utf8PathBuf,
+    call: fn(&[u8]) -> Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -1205,22 +1248,20 @@ impl Builder {
         &mut self,
         hash: Hash32,
         path_image: &Utf8Path,
+        call: fn(&[u8]) -> Vec<u8>,
     ) -> Result<Utf8PathBuf, BuilderError> {
         let hash_hex = hash.to_hex();
 
-        let path_temp = Utf8Path::new(".cache/hash")
-            .join(&hash_hex)
-            .with_extension("webp");
+        let path_temp = Utf8Path::new(".cache/hash").join(&hash_hex);
+        let path_dist = Utf8Path::new("dist/hash").join(&hash_hex);
+        let path_root = Utf8Path::new("/hash/").join(&hash_hex);
 
-        let path_dist = Utf8Path::new("dist/hash")
-            .join(&hash_hex)
-            .with_extension("webp");
-
-        let path_root = Utf8Path::new("/hash/")
-            .join(&hash_hex)
-            .with_extension("webp");
-
-        let request = BuildRequest::Image(path_image.to_owned(), path_temp, path_dist);
+        let request = BuildRequest {
+            path_file: path_image.to_owned(),
+            path_temp,
+            path_dist,
+            call,
+        };
 
         self.queue.push(request);
         self.dist.insert(hash, path_root.clone());
@@ -1268,21 +1309,6 @@ impl Builder {
         self.dist.insert(hash, path_root.clone());
         Ok(path_root)
     }
-}
-
-fn optimize_image(buffer: &[u8]) -> Vec<u8> {
-    let img = image::load_from_memory(buffer).expect("Couldn't load image");
-    let w = img.width();
-    let h = img.height();
-
-    let mut out = Vec::new();
-    let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
-
-    encoder
-        .encode(&img.to_rgba8(), w, h, image::ExtendedColorType::Rgba8)
-        .expect("Encoding error");
-
-    out
 }
 
 // ******************************
@@ -1458,7 +1484,7 @@ where
             .find(|item| item.file == path)
             .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
 
-        if let Input::Picture = &input.data {
+        if let Input::OnDisk(call) = &input.data {
             let res = self
                 .builder
                 .read()
@@ -1472,7 +1498,7 @@ where
                 .builder
                 .write()
                 .map_err(|_| HauchiwaError::LockWrite)?
-                .request_image(input.hash, &input.file)?;
+                .request_image(input.hash, &input.file, *call)?;
 
             self.tracker
                 .borrow_mut()
@@ -1541,7 +1567,7 @@ where
             .values()
             .filter(|item| glob.matches_path_with(item.file.as_std_path(), opts))
             .find_map(|item| match &item.data {
-                Input::Asset(any) => {
+                Input::InMemory(any) => {
                     let data = any.downcast_ref::<T>()?;
                     let file = item.file.clone();
                     let hash = item.hash.clone();

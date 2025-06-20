@@ -96,7 +96,7 @@ where
                 })
                 .unwrap();
 
-                let items = match website.load_set(&paths, &website.processors, &repo) {
+                let items = match website.load_set(&paths, &repo) {
                     Ok(items) => items,
                     Err(e) => {
                         eprintln!("Failed to load resource: {e}");
