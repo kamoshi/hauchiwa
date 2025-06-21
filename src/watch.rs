@@ -96,7 +96,7 @@ where
                 })
                 .unwrap();
 
-                let items = match website.load_set(&paths, &repo) {
+                match website.load_set(&paths, &repo) {
                     Ok(items) => items,
                     Err(e) => {
                         eprintln!("Failed to load resource: {e}");
@@ -104,10 +104,10 @@ where
                     }
                 };
 
-                if items.len() > 0 {
-                    self.update(items);
-                    dirty = true;
-                }
+                // if items.len() > 0 {
+                //     self.update(items);
+                //     dirty = true;
+                // }
             }
 
             if paths.iter().any(|path| path.starts_with("js")) {

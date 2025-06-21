@@ -1,7 +1,10 @@
+#![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
+
 mod error;
 mod gitmap;
 mod io;
+pub mod md;
 mod watch;
 
 use std::any::Any;
@@ -11,16 +14,16 @@ use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use std::{fs, mem};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use console::style;
-use gray_matter::Matter;
-use gray_matter::engine::{JSON, YAML};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressIterator, ProgressStyle};
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{
+    IntoParallelIterator, IntoParallelRefIterator, ParallelExtend, ParallelIterator,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sitemap_rs::url::{ChangeFrequency, Url};
@@ -47,7 +50,7 @@ pub enum Mode {
 /// the HTML rendering process. If no such data is needed, it can be substituted
 /// with `()`.
 #[derive(Debug, Clone)]
-pub struct Global<G: Send + Sync = ()> {
+pub struct Globals<G: Send + Sync = ()> {
     /// Generator mode.
     pub mode: Mode,
     /// Any additional data.
@@ -77,17 +80,16 @@ impl Hash32 {
         let mut acc = vec![0u8; 64];
 
         for (i, &byte) in self.0.iter().enumerate() {
-            acc[i * 2 + 0] = HEX[(byte >> 04) as usize];
+            acc[i * 2] = HEX[(byte >> 4) as usize];
             acc[i * 2 + 1] = HEX[(byte & 0xF) as usize];
         }
 
-        // SAFETY: `acc` contains only valid ASCII bytes.
-        unsafe { String::from_utf8_unchecked(acc) }
+        String::from_utf8(acc).unwrap()
     }
 }
 
 // ******************************
-// *       Website data         *
+// *    Website Configuration   *
 // ******************************
 
 /// This struct represents the website which will be built by the generator. The individual
@@ -126,7 +128,7 @@ impl<G: Send + Sync + 'static> Website<G> {
             style("build").blue()
         );
 
-        let context = Global {
+        let context = Globals {
             mode: Mode::Build,
             data,
         };
@@ -143,17 +145,17 @@ impl<G: Send + Sync + 'static> Website<G> {
             style("watch").blue()
         );
 
-        let context = Global {
+        let context = Globals {
             mode: Mode::Watch,
             data,
         };
 
-        let _ = self.init(&context)?.watch(self)?;
+        self.init(&context)?.watch(self)?;
 
         Ok(())
     }
 
-    fn init<'a>(&'a self, context: &'a Global<G>) -> Result<Scheduler<'a, G>, HauchiwaError> {
+    fn init<'a>(&'a self, context: &'a Globals<G>) -> Result<Scheduler<'a, G>, HauchiwaError> {
         let s = Instant::now();
 
         crate::io::clear_dist()?;
@@ -176,35 +178,26 @@ impl<G: Send + Sync + 'static> Website<G> {
         let mut items = vec![];
         items.extend(css_load_paths(&self.global_styles)?);
         items.extend(load_scripts(&self.global_scripts));
-        items.extend({
-            let pb = ProgressBar::new(self.loaders_content.len() as u64);
-            pb.set_message("Loading content items...");
-            pb.set_style(
-                ProgressStyle::default_bar()
-                    .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-                    .expect("Error setting progress bar template")
-                    .progress_chars("#>-"),
-            );
 
-            let s = Instant::now();
-            let data = self
-                .loaders_content
+        self.loaders_content
+            .par_iter()
+            .map(|loader| loader.load(&repo))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        items.extend(self.loaders_content.iter().flat_map(|xd| {
+            xd.cached
+                .lock()
+                .unwrap()
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
+        }));
+
+        items.par_extend(
+            self.loaders_assets
                 .par_iter()
-                .progress_with(pb.clone())
-                .map(|collection| collection.load(&repo))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>();
-
-            pb.finish_with_message(format!(
-                "Finished loading content items! {}",
-                crate::io::as_overhead(s)
-            ));
-            data
-        });
-
-        items.extend(self.loaders_assets.iter().map(|e| e.load()).flatten());
+                .flat_map(|loader| loader.load()),
+        );
 
         let mut scheduler = Scheduler::new(self, context, items);
         scheduler.refresh()?;
@@ -222,22 +215,14 @@ impl<G: Send + Sync + 'static> Website<G> {
     }
 
     /// Load items by a set of paths.
-    fn load_set(
-        &self,
-        paths: &HashSet<Utf8PathBuf>,
-        repo: &GitRepo,
-    ) -> Result<Vec<InputItem>, LoaderError> {
-        let mut items = vec![];
-
+    fn load_set(&self, paths: &HashSet<Utf8PathBuf>, repo: &GitRepo) -> Result<(), LoaderError> {
         for path in paths {
             for collection in &self.loaders_content {
-                if let Some(item) = collection.load_single(path, repo)? {
-                    items.push(item);
-                }
+                collection.load_once(repo, path)?
             }
         }
 
-        Ok(items)
+        Ok(())
     }
 }
 
@@ -351,15 +336,11 @@ fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
         .collect()
 }
 
-// ******************************
-// *       Configuration        *
-// ******************************
-
 /// A builder struct for creating a `Website` with specified settings.
 #[derive(Debug)]
 pub struct WebsiteConfiguration<G: Send + Sync> {
-    collections: Vec<Content>,
-    processors: Vec<Assets>,
+    loaders_content: Vec<Content>,
+    loaders_assets: Vec<Assets>,
     tasks: Vec<Task<G>>,
     global_scripts: HashMap<&'static str, &'static str>,
     global_styles: Vec<Utf8PathBuf>,
@@ -370,8 +351,8 @@ pub struct WebsiteConfiguration<G: Send + Sync> {
 impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
     fn new() -> Self {
         Self {
-            collections: Vec::default(),
-            processors: Vec::default(),
+            loaders_content: Vec::default(),
+            loaders_assets: Vec::default(),
             tasks: Vec::default(),
             global_scripts: HashMap::default(),
             global_styles: Vec::default(),
@@ -381,12 +362,12 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
     }
 
     pub fn add_content(mut self, collections: impl IntoIterator<Item = Content>) -> Self {
-        self.collections.extend(collections);
+        self.loaders_content.extend(collections);
         self
     }
 
     pub fn add_assets(mut self, processors: impl IntoIterator<Item = Assets>) -> Self {
-        self.processors.extend(processors);
+        self.loaders_assets.extend(processors);
         self
     }
 
@@ -403,7 +384,7 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
         self
     }
 
-    pub fn add_task(mut self, fun: fn(Sack<G>) -> TaskResult<TaskPaths>) -> Self {
+    pub fn add_task(mut self, fun: fn(Context<G>) -> TaskResult<TaskPaths>) -> Self {
         self.tasks.push(Task::new(fun));
         self
     }
@@ -415,8 +396,8 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
 
     pub fn finish(self) -> Website<G> {
         Website {
-            loaders_content: self.collections,
-            loaders_assets: self.processors,
+            loaders_content: self.loaders_content,
+            loaders_assets: self.loaders_assets,
             tasks: self.tasks,
             global_scripts: self.global_scripts,
             global_styles: self.global_styles,
@@ -432,45 +413,42 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
 }
 
 // ******************************
-// *         Loader             *
+// *       Content Loader       *
 // ******************************
 
-/// Erased frontmatter container.
-type AnyMatter = Arc<dyn Any + Send + Sync>;
+type ArcAny = Arc<dyn Any + Send + Sync>;
 
-/// Init pointer used to dynamically retrieve front matter.
-type InitFnPtr =
-    Arc<dyn Fn(&str) -> Result<(AnyMatter, String), LoaderFileCallbackError> + Send + Sync>;
+type ContentFnPtr =
+    Arc<dyn Fn(&str) -> Result<(ArcAny, String), LoaderFileCallbackError> + Send + Sync>;
 
-/// Wraps `InitFnPtr` and implements `Debug` trait for function pointer.
 #[derive(Clone)]
-struct InitFn(InitFnPtr);
+struct ContentFn(ContentFnPtr);
 
-impl InitFn {
+impl ContentFn {
     fn new<D>(parse_matter: fn(&str) -> Result<(D, String), anyhow::Error>) -> Self
     where
         D: for<'de> Deserialize<'de> + Send + Sync + 'static,
     {
         Self(Arc::new(move |content| {
-            let (meta, data) = parse_matter(content).map_err(|e| LoaderFileCallbackError(e))?;
+            let (meta, data) = parse_matter(content).map_err(LoaderFileCallbackError)?;
             Ok((Arc::new(meta), data))
         }))
     }
 
-    /// Call the contained `InitFn` pointer.
-    fn call(&self, data: &str) -> Result<(AnyMatter, String), LoaderFileCallbackError> {
+    fn call(&self, data: &str) -> Result<(ArcAny, String), LoaderFileCallbackError> {
         (self.0)(data)
     }
 }
 
-impl Debug for InitFn {
+impl Debug for ContentFn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "InitFn(*)")
     }
 }
 
+/// How to load data?
 #[derive(Debug)]
-enum Loader {
+enum ContentStrategy {
     Glob(LoaderGlob),
 }
 
@@ -478,18 +456,19 @@ enum Loader {
 struct LoaderGlob {
     base: &'static str,
     glob: &'static str,
+    init: ContentFn,
 }
 
 impl LoaderGlob {
-    fn read(&self, init: InitFn, repo: &GitRepo) -> Result<Vec<InputItem>, LoaderError> {
+    /// Read many files into InputItem
+    fn read(&self, repo: &GitRepo) -> Result<Vec<InputItem>, LoaderError> {
         let pattern = Utf8Path::new(self.base).join(self.glob);
-        let iter = glob::glob(pattern.as_str())?;
         let mut vec = vec![];
 
-        for path in iter {
+        for path in glob::glob(pattern.as_str())? {
             let path = Utf8PathBuf::try_from(path?)?;
             if let Some(item) = self
-                .read_file(path.clone(), init.clone(), repo)
+                .read_file(path.clone(), repo)
                 .map_err(|e| LoaderError::LoaderGlobFile(path, e))?
             {
                 vec.push(item);
@@ -499,12 +478,8 @@ impl LoaderGlob {
         Ok(vec)
     }
 
-    fn read_once(
-        &self,
-        path: &Utf8Path,
-        init: &InitFn,
-        repo: &GitRepo,
-    ) -> Result<Option<InputItem>, LoaderError> {
+    /// Read single file into InputItem
+    fn read_once(&self, path: &Utf8Path, repo: &GitRepo) -> Result<Option<InputItem>, LoaderError> {
         let pattern = Utf8Path::new(self.base).join(self.glob);
         let pattern = glob::Pattern::new(pattern.as_str())?;
 
@@ -514,54 +489,49 @@ impl LoaderGlob {
 
         let path = path.to_owned();
         let item = self
-            .read_file(path.clone(), init.clone(), repo)
+            .read_file(path.clone(), repo)
             .map_err(|e| LoaderError::LoaderGlobFile(path, e))?;
 
         Ok(item)
     }
 
-    fn read_file<'a>(
+    /// Helper function, convert file into InputItem
+    /// TODO: based on loader cache, here we can use Hash32 to check if the
+    /// previously loaded content item already exists, and *if* we have it, we
+    /// can skip the `init.call`, because we can just reuse the old one.
+    fn read_file(
         &self,
-        file: Utf8PathBuf,
-        init: InitFn,
+        path: Utf8PathBuf,
         repo: &GitRepo,
     ) -> Result<Option<InputItem>, LoaderFileError> {
-        if file.is_dir() {
+        if path.is_dir() {
             return Ok(None);
         }
 
-        let item = {
-            let bytes = fs::read(&file)?;
-            let hash = Hash32::hash(&bytes);
-            let text = String::from_utf8_lossy(&bytes);
-            let (meta, text) = init.call(&text)?;
+        let bytes = fs::read(&path)?;
+        let hash = Hash32::hash(&bytes);
+        let text = String::from_utf8_lossy(&bytes);
+        let (meta, text) = self.init.call(&text)?;
 
-            let area = match file.file_stem() {
-                Some("index") => file
-                    .parent()
-                    .map(ToOwned::to_owned)
-                    .unwrap_or(file.with_extension("")),
-                _ => file.with_extension(""),
-            };
-
-            let slug = area.strip_prefix(self.base).unwrap_or(&file).to_owned();
-
-            InputItem {
-                hash,
-                info: repo.files.get(file.as_str()).cloned(),
-                file,
-                slug,
-                data: Input::Content(InputContent { area, meta, text }),
-            }
+        let area = match path.file_stem() {
+            Some("index") => path
+                .parent()
+                .map(ToOwned::to_owned)
+                .unwrap_or(path.with_extension("")),
+            _ => path.with_extension(""),
         };
 
-        Ok(Some(item))
+        let slug = area.strip_prefix(self.base).unwrap_or(&path).to_owned();
+
+        Ok(Some(InputItem {
+            hash,
+            info: repo.files.get(path.as_str()).cloned(),
+            file: path,
+            slug,
+            data: Input::Content(InputContent { area, meta, text }),
+        }))
     }
 }
-
-// ******************************
-// *        Collection          *
-// ******************************
 
 /// An opaque representation of a source of inputs loaded into the generator.
 /// You can think of a single collection as a set of written articles with
@@ -573,10 +543,10 @@ impl LoaderGlob {
 /// to the markdown file.
 #[derive(Debug)]
 pub struct Content {
-    /// Content loader.
-    loader: Loader,
-    /// Content initialization function.
-    init: InitFn,
+    /// Data loading strategy
+    loader: ContentStrategy,
+    /// Content loaded and saved between multiple loads.
+    cached: Mutex<HashMap<String, InputItem>>,
 }
 
 impl Content {
@@ -604,54 +574,54 @@ impl Content {
         D: for<'de> Deserialize<'de> + Send + Sync + 'static,
     {
         Self {
-            loader: Loader::Glob(LoaderGlob {
+            loader: ContentStrategy::Glob(LoaderGlob {
                 base: path_base,
                 glob: path_glob,
+                init: ContentFn::new(parse_matter),
             }),
-            init: InitFn::new(parse_matter),
+            cached: Mutex::new(HashMap::new()),
         }
     }
 
-    fn load(&self, repo: &GitRepo) -> Result<Vec<InputItem>, LoaderError> {
-        match &self.loader {
-            Loader::Glob(loader) => loader.read(self.init.clone(), repo),
+    /// TODO: Here we want to save the data in `self.cached`, but we also wan to
+    /// reuse the old cached data, so we can do less work if the file is in fact
+    /// identical.
+    fn load(&self, repo: &GitRepo) -> Result<(), LoaderError> {
+        let items = match &self.loader {
+            ContentStrategy::Glob(glob) => glob.read(repo)?,
+        };
+
+        let mut cached = self.cached.lock().unwrap();
+        for item in items {
+            cached.insert(item.file.to_string(), item);
         }
+
+        Ok(())
     }
 
-    fn load_single(
-        &self,
-        path: &Utf8Path,
-        repo: &GitRepo,
-    ) -> Result<Option<InputItem>, LoaderError> {
-        match &self.loader {
-            Loader::Glob(loader) => loader.read_once(path, &self.init, repo),
+    fn load_once(&self, repo: &GitRepo, path: &Utf8Path) -> Result<(), LoaderError> {
+        let item = match &self.loader {
+            ContentStrategy::Glob(loader) => loader.read_once(path, repo)?,
+        };
+
+        let mut cached = self.cached.lock().unwrap();
+        if let Some(item) = item {
+            cached.insert(item.file.to_string(), item);
         }
-    }
-}
 
-// ******************************
-// *        Processor           *
-// ******************************
-
-type AnyAsset = Box<dyn Any + Send + Sync>;
-
-enum ProcessorKind {
-    Asset(Box<dyn Fn(&[u8]) -> AnyAsset + Send + Sync>),
-    Image,
-}
-
-impl Debug for ProcessorKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProcessorKind::Asset(_) => write!(f, "ProcessorKind::Asset(*)"),
-            ProcessorKind::Image => write!(f, "ProcessorKind::Image"),
-        }
+        Ok(())
     }
 }
 
-struct FnU8(Box<dyn Fn(&[u8]) -> AnyAsset + Send + Sync>);
+// ASSETS LOADER
+// =============
 
-impl Debug for FnU8 {
+type BoxAny = Box<dyn Any + Send + Sync>;
+type BoxFn8 = Box<dyn Fn(&[u8]) -> ArcAny + Send + Sync>;
+
+struct AssetsGlobFn(BoxFn8);
+
+impl Debug for AssetsGlobFn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Fn(*)")
     }
@@ -665,16 +635,12 @@ enum AssetsLoader {
     Glob {
         path_base: &'static str,
         path_glob: &'static str,
-        func: FnU8,
+        func: AssetsGlobFn,
     },
-    GlobOd {
+    GlobDefer {
         path_base: &'static str,
         path_glob: &'static str,
         func: fn(&[u8]) -> Vec<u8>,
-    },
-    Images {
-        exts: HashSet<&'static str>,
-        kind: ProcessorKind,
     },
 }
 
@@ -686,7 +652,7 @@ impl Assets {
         Self(AssetsLoader::Glob {
             path_base,
             path_glob,
-            func: FnU8(Box::new(move |data| Box::new(call(data)))),
+            func: AssetsGlobFn(Box::new(move |data| Arc::new(call(data)))),
         })
     }
 
@@ -695,17 +661,10 @@ impl Assets {
         path_glob: &'static str,
         func: fn(&[u8]) -> Vec<u8>,
     ) -> Self {
-        Self(AssetsLoader::GlobOd {
+        Self(AssetsLoader::GlobDefer {
             path_base,
             path_glob,
             func,
-        })
-    }
-
-    pub fn process_images(exts: impl IntoIterator<Item = &'static str>) -> Self {
-        Self(AssetsLoader::Images {
-            exts: HashSet::from_iter(exts),
-            kind: ProcessorKind::Image,
         })
     }
 
@@ -715,7 +674,7 @@ impl Assets {
             AssetsLoader::Glob {
                 path_base,
                 path_glob,
-                func: FnU8(func),
+                func: AssetsGlobFn(func),
             } => {
                 let pattern = Utf8Path::new(path_base).join(path_glob);
                 let iter = glob::glob(pattern.as_str()).unwrap();
@@ -739,7 +698,7 @@ impl Assets {
 
                 out
             }
-            AssetsLoader::GlobOd {
+            AssetsLoader::GlobDefer {
                 path_base,
                 path_glob,
                 func,
@@ -765,45 +724,9 @@ impl Assets {
 
                 out
             }
-            AssetsLoader::Images { exts, kind } => vec![],
         }
     }
 }
-
-/// Generate the functions used to initialize content files. These functions can
-/// be used to parse the front matter using engines from crate `gray_matter`.
-macro_rules! matter_parser {
-	($name:ident, $engine:path) => {
-		#[doc = concat!(
-			"This function can be used to extract metadata from a document with `D` as the frontmatter shape.\n",
-			"Configured to use [`", stringify!($engine), "`] as the engine of the parser."
-		)]
-		pub fn $name<D>(content: &str) -> Result<(D, String), anyhow::Error>
-		where
-			D: for<'de> serde::Deserialize<'de> + Send + Sync + 'static,
-		{
-			// We can cache the creation of the parser
-			static PARSER: LazyLock<Matter<$engine>> = LazyLock::new(Matter::<$engine>::new);
-
-			let entity = PARSER.parse(content);
-            let object = entity
-                .data
-                .unwrap_or_else(|| gray_matter::Pod::new_array())
-                .deserialize::<D>()
-                .map_err(|e| anyhow::anyhow!("Malformed frontmatter:\n{e}"))?;
-
-			Ok((
-				// Just the front matter
-				object,
-				// The rest of the content
-				entity.content,
-			))
-		}
-	};
-}
-
-matter_parser!(yaml, YAML);
-matter_parser!(json, JSON);
 
 // ******************************
 // *           Tasks            *
@@ -818,7 +741,7 @@ pub type TaskResult<T> = anyhow::Result<T, anyhow::Error>;
 /// Task function pointer used to dynamically generate a website page. This
 /// function is provided by the user from the userland, but it is used
 /// internally during the build process.
-type TaskFnPtr<D> = Arc<dyn Fn(Sack<D>) -> TaskResult<TaskPaths> + Send + Sync>;
+type TaskFnPtr<D> = Arc<dyn Fn(Context<D>) -> TaskResult<TaskPaths> + Send + Sync>;
 
 /// Wraps `TaskFnPtr` and implements `Debug` trait for function pointer.
 struct Task<D: Send + Sync>(TaskFnPtr<D>);
@@ -828,13 +751,13 @@ impl<D: Send + Sync> Task<D> {
     fn new<F>(func: F) -> Self
     where
         D: Send + Sync,
-        F: Fn(Sack<D>) -> TaskResult<TaskPaths> + Send + Sync + 'static,
+        F: Fn(Context<D>) -> TaskResult<TaskPaths> + Send + Sync + 'static,
     {
         Self(Arc::new(func))
     }
 
     /// Run the task to generate a page.
-    fn call(&self, sack: Sack<D>) -> TaskResult<TaskPaths> {
+    fn call(&self, sack: Context<D>) -> TaskResult<TaskPaths> {
         (self.0)(sack)
     }
 }
@@ -880,28 +803,28 @@ impl Debug for Hook {
 // *         Scheduler          *
 // ******************************
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct InputContent {
     area: Utf8PathBuf,
     meta: Arc<dyn Any + Send + Sync>,
     text: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct InputStylesheet {
     stylesheet: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Input {
     Content(InputContent),
-    InMemory(Box<dyn Any + Send + Sync>),
+    InMemory(Arc<dyn Any + Send + Sync>),
     OnDisk(fn(&[u8]) -> Vec<u8>),
     Stylesheet(InputStylesheet),
     Script,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct InputItem {
     hash: Hash32,
     file: Utf8PathBuf,
@@ -979,7 +902,7 @@ struct Scheduler<'a, D>
 where
     D: Send + Sync,
 {
-    context: &'a Global<D>,
+    context: &'a Globals<D>,
     builder: Arc<RwLock<Builder>>,
     tracked: Vec<Trace<D>>,
     items: HashMap<Utf8PathBuf, InputItem>,
@@ -987,7 +910,7 @@ where
 }
 
 impl<'a, D: Send + Sync> Scheduler<'a, D> {
-    pub fn new(website: &'a Website<D>, context: &'a Global<D>, items: Vec<InputItem>) -> Self {
+    pub fn new(website: &'a Website<D>, context: &'a Globals<D>, items: Vec<InputItem>) -> Self {
         Self {
             context,
             builder: Arc::new(RwLock::new(Builder::new())),
@@ -1036,8 +959,8 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
 
         let tracker = Rc::new(RefCell::new(tracker));
 
-        let paths = trace.task.call(Sack {
-            context: self.context,
+        let paths = trace.task.call(Context {
+            globals: self.context,
             builder: self.builder.clone(),
             tracker: tracker.clone(),
             items: &self.items,
@@ -1154,7 +1077,7 @@ impl<'a, D: Send + Sync> Scheduler<'a, D> {
             crate::io::as_overhead(s)
         ));
 
-        self.cache_pages.extend(temp.into_iter());
+        self.cache_pages.extend(temp);
 
         Ok(())
     }
@@ -1244,10 +1167,10 @@ impl Builder {
         self.dist.get(&hash).cloned()
     }
 
-    fn request_image(
+    fn request_deferred(
         &mut self,
         hash: Hash32,
-        path_image: &Utf8Path,
+        path: &Utf8Path,
         call: fn(&[u8]) -> Vec<u8>,
     ) -> Result<Utf8PathBuf, BuilderError> {
         let hash_hex = hash.to_hex();
@@ -1257,7 +1180,7 @@ impl Builder {
         let path_root = Utf8Path::new("/hash/").join(&hash_hex);
 
         let request = BuildRequest {
-            path_file: path_image.to_owned(),
+            path_file: path.to_owned(),
             path_temp,
             path_dist,
             call,
@@ -1315,14 +1238,14 @@ impl Builder {
 // *          Runtime           *
 // ******************************
 
-/// This struct allows for querying the website hierarchy. It is passed to each rendered website
-/// page, so that it can easily access the website metadata.
-pub struct Sack<'a, G>
+/// A simple wrapper for all context data passed at runtime to tasks defined for
+/// the website. Use this struct's methods to query required data.
+pub struct Context<'a, G>
 where
     G: Send + Sync,
 {
-    /// Global `Context` for the current build.
-    context: &'a Global<G>,
+    /// Global data for the current build.
+    globals: &'a Globals<G>,
     /// Builder allows scheduling build requests.
     builder: Arc<RwLock<Builder>>,
     /// Tracked dependencies for current instantation.
@@ -1347,16 +1270,17 @@ struct Tracker {
     glob: Vec<glob::Pattern>,
 }
 
-impl<'a, G> Sack<'a, G>
+impl<'a, G> Context<'a, G>
 where
     G: Send + Sync,
 {
-    /// Retrieve global context
-    pub fn get_metadata(&self) -> &Global<G> {
-        self.context
+    /// Retrieve the globals.
+    pub fn get_globals(&self) -> &Globals<G> {
+        self.globals
     }
 
-    pub fn get_content<D>(&self, pattern: &str) -> Result<QueryContent<'_, D>, HauchiwaError>
+    /// Retrieve a single page by glob pattern and metadata shape.
+    pub fn get_page<D>(&self, pattern: &str) -> Result<QueryContent<'_, D>, HauchiwaError>
     where
         D: 'static,
     {
@@ -1380,7 +1304,7 @@ where
             self.tracker
                 .borrow_mut()
                 .hash
-                .insert(item.file.clone(), item.hash.clone());
+                .insert(item.file.clone(), item.hash);
 
             Ok(QueryContent {
                 file: &item.file,
@@ -1396,7 +1320,7 @@ where
     }
 
     /// Retrieve many possible content items.
-    pub fn query_content<D>(&self, pattern: &str) -> Result<Vec<QueryContent<'_, D>>, HauchiwaError>
+    pub fn get_pages<D>(&self, pattern: &str) -> Result<Vec<QueryContent<'_, D>>, HauchiwaError>
     where
         D: 'static,
     {
@@ -1476,8 +1400,8 @@ where
         }
     }
 
-    /// Get optimized image path by original path.
-    pub fn get_picture(&self, path: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaError> {
+    /// Get path to a generated asset file.
+    pub fn get_asset_deferred(&self, path: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaError> {
         let input = self
             .items
             .values()
@@ -1498,7 +1422,7 @@ where
                 .builder
                 .write()
                 .map_err(|_| HauchiwaError::LockWrite)?
-                .request_image(input.hash, &input.file, *call)?;
+                .request_deferred(input.hash, &input.file, *call)?;
 
             self.tracker
                 .borrow_mut()
@@ -1570,7 +1494,7 @@ where
                 Input::InMemory(any) => {
                     let data = any.downcast_ref::<T>()?;
                     let file = item.file.clone();
-                    let hash = item.hash.clone();
+                    let hash = item.hash;
                     Some((data, file, hash))
                 }
                 _ => None,
