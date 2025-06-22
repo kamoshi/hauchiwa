@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::{ArcAny, Hash32, Input, InputItem};
+use crate::{ArcAny, Hash32, Input, InputItem, InputStylesheet};
 
 type BoxFn8 = Box<dyn Fn(&[u8]) -> ArcAny + Send + Sync>;
 
@@ -57,6 +57,11 @@ enum AssetsLoader {
         cached: HashMap<Utf8PathBuf, InputItem>,
         bookkeeping: Arc<Bookkeeping>,
     },
+    GlobStyle {
+        path_base: &'static str,
+        path_glob: &'static str,
+        cached: Vec<InputItem>,
+    },
 }
 
 impl Assets {
@@ -82,6 +87,14 @@ impl Assets {
             path_glob,
             cached: HashMap::new(),
             bookkeeping: Arc::new(Bookkeeping::new(func)),
+        })
+    }
+
+    pub fn glob_style(path_base: &'static str, path_glob: &'static str) -> Self {
+        Self(AssetsLoader::GlobStyle {
+            path_base,
+            path_glob,
+            cached: Vec::new(),
         })
     }
 
@@ -125,6 +138,7 @@ impl Assets {
                 let pattern = Utf8Path::new(path_base).join(path_glob);
                 let iter = glob::glob(pattern.as_str()).unwrap();
 
+                cached.clear();
                 for entry in iter {
                     let entry = Utf8PathBuf::try_from(entry.unwrap()).unwrap();
                     let bytes = fs::read(&entry).unwrap();
@@ -143,6 +157,29 @@ impl Assets {
                     );
                 }
             }
+            AssetsLoader::GlobStyle {
+                path_base,
+                path_glob,
+                cached,
+            } => {
+                let pattern = Utf8Path::new(path_base).join(path_glob);
+                let iter = glob::glob(pattern.as_str()).unwrap();
+
+                for entry in iter {
+                    let entry = Utf8PathBuf::try_from(entry.unwrap()).unwrap();
+
+                    let opts = grass::Options::default().style(grass::OutputStyle::Compressed);
+                    let stylesheet = grass::from_path(&entry, &opts).unwrap();
+
+                    cached.push(InputItem {
+                        hash: Hash32::hash(&stylesheet),
+                        file: entry.to_owned(),
+                        slug: entry.strip_prefix(&path_base).unwrap_or(&entry).to_owned(),
+                        data: Input::Stylesheet(InputStylesheet { stylesheet }),
+                        info: None,
+                    });
+                }
+            }
         }
     }
 
@@ -151,6 +188,7 @@ impl Assets {
             AssetsLoader::Glob { cached, .. } | AssetsLoader::GlobDefer { cached, .. } => {
                 cached.values().collect()
             }
+            AssetsLoader::GlobStyle { cached, .. } => cached.iter().collect(),
         }
     }
 }

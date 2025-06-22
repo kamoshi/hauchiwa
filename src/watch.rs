@@ -94,20 +94,20 @@ where
             })
             .collect();
 
-        if paths.iter().any(|path| path.starts_with("styles")) {
-            println!("\nRecompiling styles...");
+        // if paths.iter().any(|path| path.starts_with("styles")) {
+        //     println!("\nRecompiling styles...");
 
-            match crate::css_load_paths(&website.global_styles) {
-                Ok(items) => {
-                    // self.update(items);
-                    dirty = true;
-                }
-                Err(err) => {
-                    eprintln!("{err}");
-                    continue;
-                }
-            };
-        }
+        //     match crate::css_load_paths(&website.global_styles) {
+        //         Ok(items) => {
+        //             // self.update(items);
+        //             dirty = true;
+        //         }
+        //         Err(err) => {
+        //             eprintln!("{err}");
+        //             continue;
+        //         }
+        //     };
+        // }
 
         if paths.iter().any(|path| path.starts_with("content")) {
             let repo = gitmap::map(gitmap::Options {

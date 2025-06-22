@@ -13,8 +13,6 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs;
-use std::ops::Deref;
-use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -117,7 +115,7 @@ where
     let repo = load_repo();
 
     let mut other = vec![];
-    other.extend(css_load_paths(&website.global_styles)?);
+    // other.extend(css_load_paths(&website.global_styles)?);
     other.extend(load_scripts(&website.global_scripts));
 
     website.load_items(&repo)?;
@@ -197,8 +195,6 @@ pub struct Website<G: Send + Sync> {
     tasks: Vec<Task<G>>,
     /// Global scripts
     global_scripts: HashMap<&'static str, &'static str>,
-    /// Global styles
-    global_styles: Vec<Utf8PathBuf>,
     /// Sitemap options
     opts_sitemap: Option<Utf8PathBuf>,
     /// Hooks
@@ -289,45 +285,6 @@ impl<G: Send + Sync + 'static> Website<G> {
 //     Ok(())
 // }
 
-fn css_load_paths(paths: &[Utf8PathBuf]) -> Result<Vec<InputItem>, StylesheetError> {
-    let s = Instant::now();
-    let mut items = Vec::new();
-
-    for path in paths {
-        let pattern = path.join("**/[!_]*.scss");
-        let results = glob::glob(pattern.as_str())?;
-
-        for path in results {
-            let item = css_compile(path?)?;
-            items.push(item);
-        }
-    }
-
-    eprintln!(
-        "Loaded global CSS stylesheets! {}",
-        crate::io::as_overhead(s)
-    );
-
-    Ok(items)
-}
-
-fn css_compile(file: PathBuf) -> Result<InputItem, StylesheetError> {
-    let opts = grass::Options::default().style(grass::OutputStyle::Compressed);
-
-    let file =
-        Utf8PathBuf::try_from(file).map_err(|e| StylesheetError::InvalidFileName(e.to_string()))?;
-    let stylesheet =
-        grass::from_path(&file, &opts).map_err(|e| StylesheetError::Compiler(e.to_string()))?;
-
-    Ok(InputItem {
-        hash: Hash32::hash(&stylesheet),
-        file: file.clone(),
-        slug: file,
-        data: Input::Stylesheet(InputStylesheet { stylesheet }),
-        info: None,
-    })
-}
-
 fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
     let mut cmd = Command::new("esbuild");
 
@@ -373,7 +330,6 @@ pub struct WebsiteConfiguration<G: Send + Sync> {
     loaders_assets: Vec<Assets>,
     tasks: Vec<Task<G>>,
     global_scripts: HashMap<&'static str, &'static str>,
-    global_styles: Vec<Utf8PathBuf>,
     opts_sitemap: Option<Utf8PathBuf>,
     hooks: Vec<Hook>,
 }
@@ -385,7 +341,6 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
             loaders_assets: Vec::default(),
             tasks: Vec::default(),
             global_scripts: HashMap::default(),
-            global_styles: Vec::default(),
             opts_sitemap: None,
             hooks: Vec::new(),
         }
@@ -409,11 +364,6 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
         self
     }
 
-    pub fn add_styles(mut self, paths: impl IntoIterator<Item = Utf8PathBuf>) -> Self {
-        self.global_styles.extend(paths);
-        self
-    }
-
     pub fn add_task(mut self, fun: fn(Context<G>) -> TaskResult<TaskPaths>) -> Self {
         self.tasks.push(Task::new(fun));
         self
@@ -430,7 +380,6 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
             loaders_assets: self.loaders_assets,
             tasks: self.tasks,
             global_scripts: self.global_scripts,
-            global_styles: self.global_styles,
             opts_sitemap: self.opts_sitemap,
             hooks: self.hooks,
         }
