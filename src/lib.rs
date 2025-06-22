@@ -61,7 +61,7 @@ pub struct Globals<G: Send + Sync = ()> {
 }
 
 /// 32 bytes length generic hash
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Hash32([u8; 32]);
 
 impl<T> From<T> for Hash32
@@ -91,6 +91,12 @@ impl Hash32 {
     }
 }
 
+impl Debug for Hash32 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Hash32({})", self.to_hex())
+    }
+}
+
 fn load_repo() -> GitRepo {
     let s = Instant::now();
 
@@ -105,7 +111,7 @@ fn load_repo() -> GitRepo {
     repo
 }
 
-fn init<G>(website: &mut Website<G>) -> Result<Vec<InputItem>, HauchiwaError>
+fn init<G>(website: &mut Website<G>) -> Result<(), HauchiwaError>
 where
     G: Send + Sync + 'static,
 {
@@ -114,24 +120,16 @@ where
 
     let repo = load_repo();
 
-    let mut other = vec![];
-    // other.extend(css_load_paths(&website.global_styles)?);
-    other.extend(load_scripts(&website.global_scripts));
-
     website.load_items(&repo)?;
 
-    Ok(other)
+    Ok(())
 }
 
-fn build<G>(
-    website: &Website<G>,
-    globals: &Globals<G>,
-    other: Vec<&InputItem>,
-) -> Result<(), HauchiwaError>
+fn build<G>(website: &Website<G>, globals: &Globals<G>) -> Result<(), HauchiwaError>
 where
     G: Send + Sync,
 {
-    let items = other
+    let items = []
         .into_iter()
         .chain(
             website
@@ -153,8 +151,13 @@ where
     for task in &website.tasks {
         let res = task.call(Context::new(globals, builder.clone(), &items));
 
-        if let Ok(xs) = res {
-            pages.extend(xs);
+        match res {
+            Ok(ok) => {
+                pages.extend(ok);
+            }
+            Err(e) => {
+                eprintln!("{e}");
+            }
         }
     }
 
@@ -193,8 +196,6 @@ pub struct Website<G: Send + Sync> {
     loaders_assets: Vec<Assets>,
     /// Build tasks which can be used to generate pages.
     tasks: Vec<Task<G>>,
-    /// Global scripts
-    global_scripts: HashMap<&'static str, &'static str>,
     /// Sitemap options
     opts_sitemap: Option<Utf8PathBuf>,
     /// Hooks
@@ -219,8 +220,8 @@ impl<G: Send + Sync + 'static> Website<G> {
             data,
         };
 
-        let other = init(self)?;
-        build(self, &globals, other.iter().collect())?;
+        init(self)?;
+        build(self, &globals)?;
 
         Ok(())
     }
@@ -285,51 +286,12 @@ impl<G: Send + Sync + 'static> Website<G> {
 //     Ok(())
 // }
 
-fn load_scripts(entrypoints: &HashMap<&str, &str>) -> Vec<InputItem> {
-    let mut cmd = Command::new("esbuild");
-
-    for (alias, path) in entrypoints.iter() {
-        cmd.arg(format!("{}={}", alias, path));
-    }
-
-    let path_scripts = Utf8Path::new(".cache/scripts/");
-
-    let s = Instant::now();
-    let _ = cmd
-        .arg("--format=esm")
-        .arg("--bundle")
-        .arg("--minify")
-        .arg(format!("--outdir={}", path_scripts))
-        .output()
-        .unwrap();
-
-    eprintln!("Loaded global JS scripts! {}", crate::io::as_overhead(s));
-
-    entrypoints
-        .keys()
-        .map(|key| {
-            let file = path_scripts.join(key).with_extension("js");
-            let buffer = fs::read(&file).unwrap();
-            let hash = Hash32::hash(buffer);
-
-            InputItem {
-                slug: file.clone(),
-                file,
-                hash,
-                data: Input::Script,
-                info: None,
-            }
-        })
-        .collect()
-}
-
 /// A builder struct for creating a `Website` with specified settings.
 #[derive(Debug)]
 pub struct WebsiteConfiguration<G: Send + Sync> {
     loaders_content: Vec<Content>,
     loaders_assets: Vec<Assets>,
     tasks: Vec<Task<G>>,
-    global_scripts: HashMap<&'static str, &'static str>,
     opts_sitemap: Option<Utf8PathBuf>,
     hooks: Vec<Hook>,
 }
@@ -340,7 +302,6 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
             loaders_content: Vec::default(),
             loaders_assets: Vec::default(),
             tasks: Vec::default(),
-            global_scripts: HashMap::default(),
             opts_sitemap: None,
             hooks: Vec::new(),
         }
@@ -353,14 +314,6 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
 
     pub fn add_assets(mut self, processors: impl IntoIterator<Item = Assets>) -> Self {
         self.loaders_assets.extend(processors);
-        self
-    }
-
-    pub fn add_scripts(
-        mut self,
-        scripts: impl IntoIterator<Item = (&'static str, &'static str)>,
-    ) -> Self {
-        self.global_scripts.extend(scripts);
         self
     }
 
@@ -379,7 +332,6 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
             loaders_content: self.loaders_content,
             loaders_assets: self.loaders_assets,
             tasks: self.tasks,
-            global_scripts: self.global_scripts,
             opts_sitemap: self.opts_sitemap,
             hooks: self.hooks,
         }
@@ -554,27 +506,6 @@ impl Builder {
             .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
         fs::write(&path_dist, &style.stylesheet)
             .map_err(|e| BuilderError::FileWriteError(path_dist.clone(), e))?;
-
-        self.dist.insert(hash, path_root.clone());
-        Ok(path_root)
-    }
-
-    fn request_script(
-        &mut self,
-        hash: Hash32,
-        file: &Utf8Path,
-    ) -> Result<Utf8PathBuf, BuilderError> {
-        let hash_hex = hash.to_hex();
-        let path = Utf8Path::new("hash").join(&hash_hex).with_extension("js");
-
-        let path_root = Utf8Path::new("/").join(&path);
-        let path_dist = Utf8Path::new("dist").join(&path);
-
-        let dir = path_dist.parent().unwrap_or(&path_dist);
-        fs::create_dir_all(dir) //
-            .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
-        fs::copy(file, &path_dist)
-            .map_err(|e| BuilderError::FileCopyError(file.to_owned(), path_dist.clone(), e))?;
 
         self.dist.insert(hash, path_root.clone());
         Ok(path_root)

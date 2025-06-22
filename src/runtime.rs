@@ -197,8 +197,8 @@ socket.addEventListener("message", event => {{
         Ok(Some(path))
     }
 
-    /// Get compiled CSS style by alias.
-    pub fn get_styles(&self, path: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaError> {
+    /// Get style by absolute file path
+    pub fn get_style(&self, path: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaError> {
         let item = self
             .items
             .iter()
@@ -244,10 +244,6 @@ socket.addEventListener("message", event => {{
     }
 
     pub fn get_script(&self, path: &str) -> Result<Utf8PathBuf, HauchiwaError> {
-        let path = Utf8Path::new(".cache/scripts/")
-            .join(path)
-            .with_extension("js");
-
         let input = self
             .items
             .iter()
@@ -255,23 +251,19 @@ socket.addEventListener("message", event => {{
             .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
 
         if let Input::Script = &input.data {
-            let res = self
-                .builder
-                .read()
-                .map_err(|_| HauchiwaError::LockRead)?
-                .check(input.hash);
+            let hash = input.hash.to_hex();
+            let path_hash = Utf8Path::new(".cache/hash/").join(&hash);
+            let path_dist = Utf8Path::new("dist/hash/").join(&hash).with_extension("js");
+            let path_root = Utf8Path::new("/hash/").join(&hash).with_extension("js");
 
-            if let Some(res) = res {
-                return Ok(res);
-            }
+            let dir = path_dist.parent().unwrap_or(&path_dist);
+            fs::create_dir_all(dir) //
+                .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
+            fs::copy(&path_hash, &path_dist).map_err(|e| {
+                BuilderError::FileCopyError(path_hash.to_owned(), path_dist.clone(), e)
+            })?;
 
-            let res = self
-                .builder
-                .write()
-                .map_err(|_| HauchiwaError::LockWrite)?
-                .request_script(input.hash, &input.file)?;
-
-            Ok(res)
+            Ok(path_root)
         } else {
             Err(HauchiwaError::AssetNotFound(path.to_string()))
         }

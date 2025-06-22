@@ -62,9 +62,8 @@ where
         data,
     };
 
-    let other = init(website)?;
-
-    build(website, &globals, other.iter().collect())?;
+    init(website)?;
+    build(website, &globals)?;
 
     while let Ok(events) = rx.recv().unwrap() {
         let mut dirty = false;
@@ -140,18 +139,11 @@ where
             // }
         }
 
-        if paths.iter().any(|path| path.starts_with("js")) {
-            let new_items = crate::load_scripts(&website.global_scripts);
-
-            // self.update(new_items);
-            dirty = true;
-        }
-
         if dirty {
             println!("\nStarting rebuild...");
             let start = Instant::now();
 
-            match build(website, &globals, other.iter().collect()) {
+            match build(website, &globals) {
                 Ok(()) => tx_reload.send(()).unwrap(),
                 Err(e) => {
                     eprintln!("Encountered an error while rebuilding: {e}")

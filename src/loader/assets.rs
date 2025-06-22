@@ -1,6 +1,8 @@
 use std::fmt::Debug;
 use std::fs;
+use std::process::{Command, Stdio};
 use std::sync::RwLock;
+use std::time::Instant;
 use std::{collections::HashMap, sync::Arc};
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -62,6 +64,11 @@ enum AssetsLoader {
         path_glob: &'static str,
         cached: Vec<InputItem>,
     },
+    GlobScripts {
+        path_base: &'static str,
+        path_glob: &'static str,
+        cached: Vec<InputItem>,
+    },
 }
 
 impl Assets {
@@ -92,6 +99,14 @@ impl Assets {
 
     pub fn glob_style(path_base: &'static str, path_glob: &'static str) -> Self {
         Self(AssetsLoader::GlobStyle {
+            path_base,
+            path_glob,
+            cached: Vec::new(),
+        })
+    }
+
+    pub fn glob_scripts(path_base: &'static str, path_glob: &'static str) -> Self {
+        Self(AssetsLoader::GlobScripts {
             path_base,
             path_glob,
             cached: Vec::new(),
@@ -180,6 +195,54 @@ impl Assets {
                     });
                 }
             }
+            AssetsLoader::GlobScripts {
+                path_base,
+                path_glob,
+                cached,
+            } => {
+                let pattern = Utf8Path::new(path_base).join(path_glob);
+                let iter = glob::glob(pattern.as_str()).unwrap();
+
+                let mut arr = vec![];
+                for entry in iter {
+                    let path = Utf8PathBuf::try_from(entry.unwrap()).unwrap();
+                    arr.push(path);
+                }
+
+                if arr.is_empty() {
+                    return;
+                }
+
+                for file_path in arr {
+                    let output = Command::new("esbuild")
+                        .arg(file_path.as_str())
+                        .arg("--format=esm")
+                        .arg("--bundle")
+                        .arg("--minify")
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::inherit())
+                        .output()
+                        .expect("esbuild invocation failed");
+
+                    let result = output.stdout;
+                    let result_hash = Hash32::hash(&result);
+                    let result_hash_hex = result_hash.to_hex();
+
+                    let path_dist = Utf8Path::new(".cache/hash").join(&result_hash_hex);
+
+                    let dir = path_dist.parent().unwrap_or(&path_dist);
+                    fs::create_dir_all(dir).unwrap();
+                    fs::write(&path_dist, result).unwrap();
+
+                    cached.push(InputItem {
+                        slug: file_path.clone(),
+                        file: file_path.clone(),
+                        hash: result_hash,
+                        data: Input::Script,
+                        info: None,
+                    });
+                }
+            }
         }
     }
 
@@ -188,7 +251,9 @@ impl Assets {
             AssetsLoader::Glob { cached, .. } | AssetsLoader::GlobDefer { cached, .. } => {
                 cached.values().collect()
             }
-            AssetsLoader::GlobStyle { cached, .. } => cached.iter().collect(),
+            AssetsLoader::GlobStyle { cached, .. } | AssetsLoader::GlobScripts { cached, .. } => {
+                cached.iter().collect()
+            }
         }
     }
 }
