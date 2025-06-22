@@ -13,134 +13,170 @@ use notify_debouncer_full::new_debouncer;
 use tungstenite::WebSocket;
 
 use crate::error::WatchError;
-use crate::gitmap;
-use crate::{Scheduler, Website};
+use crate::{Globals, HauchiwaError, Mode, Website, init};
+use crate::{build, gitmap};
 
-impl<G> Scheduler<'_, G>
+fn reserve_port() -> Result<(TcpListener, u16), WatchError> {
+    let listener = match TcpListener::bind("127.0.0.1:1337") {
+        Ok(sock) => sock,
+        Err(_) => TcpListener::bind("127.0.0.1:0").map_err(WatchError::Bind)?,
+    };
+
+    let addr = listener.local_addr().map_err(WatchError::Bind)?;
+    let port = addr.port();
+    Ok((listener, port))
+}
+
+pub fn watch<G>(website: &mut Website<G>, data: G) -> Result<(), HauchiwaError>
 where
     G: Send + Sync + 'static,
 {
-    pub fn watch(&mut self, website: &Website<G>) -> Result<(), WatchError> {
-        #[cfg(feature = "server")]
-        let thread_http = server::start();
+    #[cfg(feature = "server")]
+    let thread_http = server::start();
 
-        let root = env::current_dir().unwrap();
-        let server = TcpListener::bind("127.0.0.1:1337").map_err(|e| WatchError::Bind(e))?;
-        let client = Arc::new(Mutex::new(vec![]));
+    let root = env::current_dir().unwrap();
+    let (tcp, port) = reserve_port()?;
+    let client = Arc::new(Mutex::new(vec![]));
 
-        let (tx, rx) = std::sync::mpsc::channel();
-        let mut debouncer = new_debouncer(Duration::from_millis(250), None, tx).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut debouncer = new_debouncer(Duration::from_millis(250), None, tx).unwrap();
 
-        debouncer
-            .watch(Path::new("styles"), RecursiveMode::Recursive)
-            .unwrap();
+    debouncer
+        .watch(Path::new("styles"), RecursiveMode::Recursive)
+        .unwrap();
 
-        debouncer
-            .watch(Path::new("content"), RecursiveMode::Recursive)
-            .unwrap();
+    debouncer
+        .watch(Path::new("content"), RecursiveMode::Recursive)
+        .unwrap();
 
-        debouncer
-            .watch(Path::new("js"), RecursiveMode::Recursive)
-            .unwrap();
+    debouncer
+        .watch(Path::new("js"), RecursiveMode::Recursive)
+        .unwrap();
 
-        let thread_i = new_thread_ws_incoming(server, client.clone());
-        let (tx_reload, thread_o) = new_thread_ws_reload(client.clone());
+    let thread_i = new_thread_ws_incoming(tcp, client.clone());
+    let (tx_reload, thread_o) = new_thread_ws_reload(client.clone());
 
-        while let Ok(events) = rx.recv().unwrap() {
-            let mut dirty = false;
+    let globals = Globals {
+        mode: Mode::Watch,
+        port: Some(port),
+        data,
+    };
 
-            let obsolete: HashSet<_> = events
-                .iter()
-                .flat_map(|debounced| &debounced.event.paths)
-                .filter(|path| !path.exists())
-                .map(|path| path.strip_prefix(&root).unwrap())
-                .collect();
+    let other = init(website)?;
 
-            if obsolete.len() > 0 {
-                self.remove(obsolete);
-                dirty = true;
-            }
+    build(website, &globals, other.iter().collect())?;
 
-            let paths: HashSet<Utf8PathBuf> = events
-                .into_iter()
-                .filter(|event| matches!(event.kind, EventKind::Create(..) | EventKind::Modify(..)))
-                .map(|debounced| debounced.event.paths)
-                .flat_map(HashSet::<PathBuf>::from_iter)
-                .filter(|path| path.exists())
-                .filter_map(|event| {
-                    Utf8PathBuf::from_path_buf(event)
-                        .ok()
-                        .and_then(|path| path.strip_prefix(&root).ok().map(ToOwned::to_owned))
-                })
-                .collect();
+    while let Ok(events) = rx.recv().unwrap() {
+        let mut dirty = false;
 
-            if paths.iter().any(|path| path.starts_with("styles")) {
-                println!("\nRecompiling styles...");
+        let obsolete: HashSet<_> = events
+            .iter()
+            .flat_map(|debounced| &debounced.event.paths)
+            .filter(|path| !path.exists())
+            .map(|path| path.strip_prefix(&root).unwrap())
+            .collect();
 
-                match crate::css_load_paths(&website.global_styles) {
-                    Ok(items) => {
-                        self.update(items);
-                        dirty = true;
-                    }
-                    Err(err) => {
-                        eprintln!("{err}");
-                        continue;
-                    }
-                };
-            }
-
-            if paths.iter().any(|path| path.starts_with("content")) {
-                let repo = gitmap::map(gitmap::Options {
-                    repository: ".".to_string(),
-                    revision: "HEAD".to_string(),
-                })
-                .unwrap();
-
-                match website.load_set(&paths, &repo) {
-                    Ok(items) => items,
-                    Err(e) => {
-                        eprintln!("Failed to load resource: {e}");
-                        continue;
-                    }
-                };
-
-                // if items.len() > 0 {
-                //     self.update(items);
-                //     dirty = true;
-                // }
-            }
-
-            if paths.iter().any(|path| path.starts_with("js")) {
-                let new_items = crate::load_scripts(&website.global_scripts);
-
-                self.update(new_items);
-                dirty = true;
-            }
-
-            if dirty {
-                println!("\nStarting rebuild...");
-                let start = Instant::now();
-
-                match self.refresh() {
-                    Ok(()) => tx_reload.send(()).unwrap(),
-                    Err(e) => {
-                        eprintln!("Encountered an error while rebuilding: {e}")
-                    }
-                };
-
-                let duration = start.elapsed();
-                println!("Finished rebuild in {duration:?}");
-            }
+        if obsolete.len() > 0 {
+            // self.remove(obsolete);
+            dirty = true;
         }
 
-        thread_i.join().unwrap();
-        thread_o.join().unwrap();
+        let paths: HashSet<Utf8PathBuf> = events
+            .into_iter()
+            .filter(|event| matches!(event.kind, EventKind::Create(..) | EventKind::Modify(..)))
+            .map(|debounced| debounced.event.paths)
+            .flat_map(HashSet::<PathBuf>::from_iter)
+            .filter(|path| path.exists())
+            .filter_map(|event| {
+                Utf8PathBuf::from_path_buf(event)
+                    .ok()
+                    .and_then(|path| path.strip_prefix(&root).ok().map(ToOwned::to_owned))
+            })
+            .collect();
 
-        #[cfg(feature = "server")]
-        thread_http.join().unwrap().unwrap();
+        if paths.iter().any(|path| path.starts_with("styles")) {
+            println!("\nRecompiling styles...");
 
-        Ok(())
+            match crate::css_load_paths(&website.global_styles) {
+                Ok(items) => {
+                    // self.update(items);
+                    dirty = true;
+                }
+                Err(err) => {
+                    eprintln!("{err}");
+                    continue;
+                }
+            };
+        }
+
+        if paths.iter().any(|path| path.starts_with("content")) {
+            let repo = gitmap::map(gitmap::Options {
+                repository: ".".to_string(),
+                revision: "HEAD".to_string(),
+            })
+            .unwrap();
+
+            match website.load_items(&repo) {
+                Ok(()) => (),
+                Err(e) => {
+                    eprintln!("Failed to load resource: {e}");
+                    continue;
+                }
+            };
+
+            dirty = true;
+
+            // match website.load_set(&paths, &repo) {
+            //     Ok(items) => items,
+            //     Err(e) => {
+            //         eprintln!("Failed to load resource: {e}");
+            //         continue;
+            //     }
+            // };
+
+            // if items.len() > 0 {
+            //     self.update(items);
+            //     dirty = true;
+            // }
+        }
+
+        if paths.iter().any(|path| path.starts_with("js")) {
+            let new_items = crate::load_scripts(&website.global_scripts);
+
+            // self.update(new_items);
+            dirty = true;
+        }
+
+        if dirty {
+            println!("\nStarting rebuild...");
+            let start = Instant::now();
+
+            match build(website, &globals, other.iter().collect()) {
+                Ok(()) => tx_reload.send(()).unwrap(),
+                Err(e) => {
+                    eprintln!("Encountered an error while rebuilding: {e}")
+                }
+            };
+
+            // match self.refresh() {
+            //     Ok(()) => tx_reload.send(()).unwrap(),
+            //     Err(e) => {
+            //         eprintln!("Encountered an error while rebuilding: {e}")
+            //     }
+            // };
+
+            let duration = start.elapsed();
+            println!("Finished rebuild in {duration:?}");
+        }
     }
+
+    thread_i.join().unwrap();
+    thread_o.join().unwrap();
+
+    #[cfg(feature = "server")]
+    thread_http.join().unwrap().unwrap();
+
+    Ok(())
 }
 
 fn new_thread_ws_incoming(

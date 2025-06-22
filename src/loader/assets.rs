@@ -1,0 +1,156 @@
+use std::fmt::Debug;
+use std::fs;
+use std::sync::RwLock;
+use std::{collections::HashMap, sync::Arc};
+
+use camino::{Utf8Path, Utf8PathBuf};
+
+use crate::{ArcAny, Hash32, Input, InputItem};
+
+type BoxFn8 = Box<dyn Fn(&[u8]) -> ArcAny + Send + Sync>;
+
+struct AssetsGlobFn(BoxFn8);
+
+impl Debug for AssetsGlobFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Fn(*)")
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct Bookkeeping {
+    pub(crate) func: fn(&[u8]) -> Vec<u8>,
+    pub(crate) done: RwLock<HashMap<Hash32, Hash32>>,
+}
+
+impl Bookkeeping {
+    fn new(func: fn(&[u8]) -> Vec<u8>) -> Self {
+        Self {
+            func,
+            done: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub(crate) fn read(&self, i: Hash32) -> Option<Hash32> {
+        self.done.read().unwrap().get(&i).copied()
+    }
+
+    pub(crate) fn save(&self, i: Hash32, o: Hash32) {
+        self.done.write().unwrap().insert(i, o);
+    }
+}
+
+#[derive(Debug)]
+pub struct Assets(AssetsLoader);
+
+#[derive(Debug)]
+enum AssetsLoader {
+    Glob {
+        path_base: &'static str,
+        path_glob: &'static str,
+        func: AssetsGlobFn,
+        cached: HashMap<Utf8PathBuf, InputItem>,
+    },
+    GlobDefer {
+        path_base: &'static str,
+        path_glob: &'static str,
+        cached: HashMap<Utf8PathBuf, InputItem>,
+        bookkeeping: Arc<Bookkeeping>,
+    },
+}
+
+impl Assets {
+    pub fn glob<T>(path_base: &'static str, path_glob: &'static str, call: fn(&[u8]) -> T) -> Self
+    where
+        T: Send + Sync + 'static,
+    {
+        Self(AssetsLoader::Glob {
+            path_base,
+            path_glob,
+            func: AssetsGlobFn(Box::new(move |data| Arc::new(call(data)))),
+            cached: HashMap::new(),
+        })
+    }
+
+    pub fn glob_defer(
+        path_base: &'static str,
+        path_glob: &'static str,
+        func: fn(&[u8]) -> Vec<u8>,
+    ) -> Self {
+        Self(AssetsLoader::GlobDefer {
+            path_base,
+            path_glob,
+            cached: HashMap::new(),
+            bookkeeping: Arc::new(Bookkeeping::new(func)),
+        })
+    }
+
+    /// Load all assets which are matched by the defined glob.
+    pub(crate) fn load(&mut self) {
+        match &mut self.0 {
+            AssetsLoader::Glob {
+                path_base,
+                path_glob,
+                func: AssetsGlobFn(func),
+                cached,
+            } => {
+                let pattern = Utf8Path::new(path_base).join(path_glob);
+                let iter = glob::glob(pattern.as_str()).unwrap();
+
+                for entry in iter {
+                    let entry = Utf8PathBuf::try_from(entry.unwrap()).unwrap();
+                    let bytes = fs::read(&entry).unwrap();
+
+                    let hash = Hash32::hash(&bytes);
+                    let data = func(&bytes);
+
+                    cached.insert(
+                        entry.to_owned(),
+                        InputItem {
+                            hash,
+                            file: entry.to_owned(),
+                            slug: entry.strip_prefix(&path_base).unwrap_or(&entry).to_owned(),
+                            data: Input::InMemory(data),
+                            info: None,
+                        },
+                    );
+                }
+            }
+            AssetsLoader::GlobDefer {
+                path_base,
+                path_glob,
+                cached,
+                bookkeeping,
+            } => {
+                let pattern = Utf8Path::new(path_base).join(path_glob);
+                let iter = glob::glob(pattern.as_str()).unwrap();
+
+                for entry in iter {
+                    let entry = Utf8PathBuf::try_from(entry.unwrap()).unwrap();
+                    let bytes = fs::read(&entry).unwrap();
+
+                    let hash = Hash32::hash(&bytes);
+
+                    cached.insert(
+                        entry.to_owned(),
+                        InputItem {
+                            hash,
+                            file: entry.to_owned(),
+                            slug: entry.strip_prefix(&path_base).unwrap_or(&entry).to_owned(),
+                            data: Input::OnDisk(bookkeeping.clone()),
+                            info: None,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    pub(crate) fn items(&self) -> Vec<&InputItem> {
+        match &self.0 {
+            AssetsLoader::Glob { cached, .. } | AssetsLoader::GlobDefer { cached, .. } => {
+                cached.values().collect()
+            }
+        }
+    }
+}

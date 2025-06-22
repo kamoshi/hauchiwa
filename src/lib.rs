@@ -4,33 +4,36 @@
 mod error;
 mod gitmap;
 mod io;
+mod loader;
 pub mod md;
+mod runtime;
 mod watch;
 
 use std::any::Any;
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Debug;
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::ops::Deref;
+use std::path::PathBuf;
 use std::process::Command;
-use std::rc::Rc;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
-use std::{fs, mem};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use console::style;
-use indicatif::{ParallelProgressIterator, ProgressBar, ProgressIterator, ProgressStyle};
-use rayon::iter::{
-    IntoParallelIterator, IntoParallelRefIterator, ParallelExtend, ParallelIterator,
-};
-use serde::Deserialize;
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use sha2::{Digest, Sha256};
-use sitemap_rs::url::{ChangeFrequency, Url};
-use sitemap_rs::url_set::UrlSet;
+// use sitemap_rs::url::{ChangeFrequency, Url};
+// use sitemap_rs::url_set::UrlSet;
 
 pub use crate::error::*;
 pub use crate::gitmap::{GitInfo, GitRepo};
+pub use crate::loader::assets::Assets;
+use crate::loader::assets::Bookkeeping;
+pub use crate::loader::content::Content;
+pub use crate::runtime::{Context, ViewPage};
+
+type ArcAny = Arc<dyn Any + Send + Sync>;
 
 /// This value controls whether the library should run in the `Build` or the
 /// `Watch` mode. In `Build` mode, the library builds every page of the website
@@ -53,6 +56,8 @@ pub enum Mode {
 pub struct Globals<G: Send + Sync = ()> {
     /// Generator mode.
     pub mode: Mode,
+    /// Watch port
+    pub port: Option<u16>,
     /// Any additional data.
     pub data: G,
 }
@@ -88,6 +93,90 @@ impl Hash32 {
     }
 }
 
+fn load_repo() -> GitRepo {
+    let s = Instant::now();
+
+    let repo = crate::gitmap::map(crate::gitmap::Options {
+        repository: ".".to_string(),
+        revision: "HEAD".to_string(),
+    })
+    .unwrap();
+
+    eprintln!("Loaded git repository data {}", crate::io::as_overhead(s));
+
+    repo
+}
+
+fn init<G>(website: &mut Website<G>) -> Result<Vec<InputItem>, HauchiwaError>
+where
+    G: Send + Sync + 'static,
+{
+    crate::io::clear_dist()?;
+    crate::io::clone_static()?;
+
+    let repo = load_repo();
+
+    let mut other = vec![];
+    other.extend(css_load_paths(&website.global_styles)?);
+    other.extend(load_scripts(&website.global_scripts));
+
+    website.load_items(&repo)?;
+
+    Ok(other)
+}
+
+fn build<G>(
+    website: &Website<G>,
+    globals: &Globals<G>,
+    other: Vec<&InputItem>,
+) -> Result<(), HauchiwaError>
+where
+    G: Send + Sync,
+{
+    let items = other
+        .into_iter()
+        .chain(
+            website
+                .loaders_content
+                .iter()
+                .flat_map(|loader| loader.items()),
+        )
+        .chain(
+            website
+                .loaders_assets
+                .iter()
+                .flat_map(|loader| loader.items()),
+        )
+        .collect::<Vec<_>>();
+
+    let builder = Arc::new(RwLock::new(Builder::new()));
+
+    let mut pages = vec![];
+    for task in &website.tasks {
+        let res = task.call(Context::new(globals, builder.clone(), &items));
+
+        if let Ok(xs) = res {
+            pages.extend(xs);
+        }
+    }
+
+    // let builder = Arc::into_inner(builder).unwrap().into_inner().unwrap();
+
+    for (path, data) in pages {
+        let path = Utf8Path::new("dist").join(path);
+
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
+        }
+        let mut file = fs::File::create(&path)
+            .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
+        std::io::Write::write_all(&mut file, data.as_bytes())
+            .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
+    }
+
+    Ok(())
+}
+
 // ******************************
 // *    Website Configuration   *
 // ******************************
@@ -121,143 +210,84 @@ impl<G: Send + Sync + 'static> Website<G> {
         WebsiteConfiguration::new()
     }
 
-    pub fn build(&self, data: G) -> Result<(), HauchiwaError> {
+    pub fn build(&mut self, data: G) -> Result<(), HauchiwaError> {
         eprintln!(
             "Running {} in {} mode.",
             style("Hauchiwa").red(),
             style("build").blue()
         );
 
-        let context = Globals {
+        let globals = Globals {
             mode: Mode::Build,
+            port: None,
             data,
         };
 
-        let _ = self.init(&context)?;
+        let other = init(self)?;
+        build(self, &globals, other.iter().collect())?;
 
         Ok(())
     }
 
-    pub fn watch(&self, data: G) -> Result<(), HauchiwaError> {
+    pub fn watch(&mut self, data: G) -> Result<(), HauchiwaError> {
         eprintln!(
             "Running {} in {} mode.",
             style("Hauchiwa").red(),
             style("watch").blue()
         );
 
-        let context = Globals {
-            mode: Mode::Watch,
-            data,
-        };
-
-        self.init(&context)?.watch(self)?;
+        watch::watch(self, data)?;
 
         Ok(())
     }
 
-    fn init<'a>(&'a self, context: &'a Globals<G>) -> Result<Scheduler<'a, G>, HauchiwaError> {
-        let s = Instant::now();
-
-        crate::io::clear_dist()?;
-        crate::io::clone_static()?;
-
-        let repo = {
-            let s = Instant::now();
-
-            let repo = crate::gitmap::map(crate::gitmap::Options {
-                repository: ".".to_string(),
-                revision: "HEAD".to_string(),
-            })
-            .unwrap();
-
-            eprintln!("Loaded git repository data {}", crate::io::as_overhead(s));
-
-            repo
-        };
-
-        let mut items = vec![];
-        items.extend(css_load_paths(&self.global_styles)?);
-        items.extend(load_scripts(&self.global_scripts));
-
+    fn load_items(&mut self, repo: &GitRepo) -> Result<(), HauchiwaError> {
         self.loaders_content
-            .par_iter()
-            .map(|loader| loader.load(&repo))
+            .par_iter_mut()
+            .map(|loader| loader.load(repo))
             .collect::<Result<Vec<_>, _>>()?;
 
-        items.extend(self.loaders_content.iter().flat_map(|xd| {
-            xd.cached
-                .lock()
-                .unwrap()
-                .values()
-                .cloned()
-                .collect::<Vec<_>>()
-        }));
-
-        items.par_extend(
-            self.loaders_assets
-                .par_iter()
-                .flat_map(|loader| loader.load()),
-        );
-
-        let mut scheduler = Scheduler::new(self, context, items);
-        scheduler.refresh()?;
-        scheduler.fulfill_build_requests()?;
-
-        build_hooks(self, &scheduler)?;
-        build_sitemap(self, &scheduler)?;
-
-        eprintln!(
-            "Successfully built website in {}",
-            format!("{}ms", Instant::now().duration_since(s).as_millis())
-        );
-
-        Ok(scheduler)
-    }
-
-    /// Load items by a set of paths.
-    fn load_set(&self, paths: &HashSet<Utf8PathBuf>, repo: &GitRepo) -> Result<(), LoaderError> {
-        for path in paths {
-            for collection in &self.loaders_content {
-                collection.load_once(repo, path)?
-            }
-        }
+        self.loaders_assets
+            .par_iter_mut()
+            .map(|loader| loader.load())
+            .collect::<Vec<_>>();
 
         Ok(())
     }
 }
 
-fn build_hooks<G>(website: &Website<G>, scheduler: &Scheduler<G>) -> Result<(), HookError>
-where
-    G: Send + Sync,
-{
-    let s = Instant::now();
-    for hook in &website.hooks {
-        let pages: Vec<_> = scheduler
-            .tracked
-            .iter()
-            .flat_map(|trace| &trace.path)
-            .collect();
+// fn build_hooks<G>(website: &Website<G>, scheduler: &Scheduler<G>) -> Result<(), HookError>
+// where
+//     G: Send + Sync,
+// {
+//     let s = Instant::now();
+//     for hook in &website.hooks {
+//         let pages: Vec<_> = scheduler
+//             .tracked
+//             .iter()
+//             .flat_map(|trace| &trace.path)
+//             .collect();
 
-        match hook {
-            Hook::PostBuild(fun) => fun(&pages)?,
-        }
-    }
+//         match hook {
+//             Hook::PostBuild(fun) => fun(&pages)?,
+//         }
+//     }
 
-    eprintln!("Ran user hooks {}", crate::io::as_overhead(s));
+//     eprintln!("Ran user hooks {}", crate::io::as_overhead(s));
 
-    Ok(())
-}
+//     Ok(())
+// }
 
-fn build_sitemap<G>(website: &Website<G>, scheduler: &Scheduler<G>) -> Result<(), SitemapError>
-where
-    G: Send + Sync,
-{
-    if let Some(ref opts) = website.opts_sitemap {
-        let sitemap = scheduler.build_sitemap(opts);
-        fs::write("dist/sitemap.xml", sitemap)?;
-    }
-    Ok(())
-}
+// fn build_sitemap<G>(website: &Website<G>, scheduler: &Scheduler<G>) -> Result<(), SitemapError>
+// where
+//     G: Send + Sync,
+// {
+//     if let Some(ref opts) = website.opts_sitemap {
+//         let sitemap = scheduler.build_sitemap(opts);
+//         fs::write("dist/sitemap.xml", sitemap)?;
+//     }
+//     Ok(())
+// }
 
 fn css_load_paths(paths: &[Utf8PathBuf]) -> Result<Vec<InputItem>, StylesheetError> {
     let s = Instant::now();
@@ -413,322 +443,6 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
 }
 
 // ******************************
-// *       Content Loader       *
-// ******************************
-
-type ArcAny = Arc<dyn Any + Send + Sync>;
-
-type ContentFnPtr =
-    Arc<dyn Fn(&str) -> Result<(ArcAny, String), LoaderFileCallbackError> + Send + Sync>;
-
-#[derive(Clone)]
-struct ContentFn(ContentFnPtr);
-
-impl ContentFn {
-    fn new<D>(parse_matter: fn(&str) -> Result<(D, String), anyhow::Error>) -> Self
-    where
-        D: for<'de> Deserialize<'de> + Send + Sync + 'static,
-    {
-        Self(Arc::new(move |content| {
-            let (meta, data) = parse_matter(content).map_err(LoaderFileCallbackError)?;
-            Ok((Arc::new(meta), data))
-        }))
-    }
-
-    fn call(&self, data: &str) -> Result<(ArcAny, String), LoaderFileCallbackError> {
-        (self.0)(data)
-    }
-}
-
-impl Debug for ContentFn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "InitFn(*)")
-    }
-}
-
-/// How to load data?
-#[derive(Debug)]
-enum ContentStrategy {
-    Glob(LoaderGlob),
-}
-
-#[derive(Debug)]
-struct LoaderGlob {
-    base: &'static str,
-    glob: &'static str,
-    init: ContentFn,
-}
-
-impl LoaderGlob {
-    /// Read many files into InputItem
-    fn read(&self, repo: &GitRepo) -> Result<Vec<InputItem>, LoaderError> {
-        let pattern = Utf8Path::new(self.base).join(self.glob);
-        let mut vec = vec![];
-
-        for path in glob::glob(pattern.as_str())? {
-            let path = Utf8PathBuf::try_from(path?)?;
-            if let Some(item) = self
-                .read_file(path.clone(), repo)
-                .map_err(|e| LoaderError::LoaderGlobFile(path, e))?
-            {
-                vec.push(item);
-            }
-        }
-
-        Ok(vec)
-    }
-
-    /// Read single file into InputItem
-    fn read_once(&self, path: &Utf8Path, repo: &GitRepo) -> Result<Option<InputItem>, LoaderError> {
-        let pattern = Utf8Path::new(self.base).join(self.glob);
-        let pattern = glob::Pattern::new(pattern.as_str())?;
-
-        if !pattern.matches_path(path.as_std_path()) {
-            return Ok(None);
-        };
-
-        let path = path.to_owned();
-        let item = self
-            .read_file(path.clone(), repo)
-            .map_err(|e| LoaderError::LoaderGlobFile(path, e))?;
-
-        Ok(item)
-    }
-
-    /// Helper function, convert file into InputItem
-    /// TODO: based on loader cache, here we can use Hash32 to check if the
-    /// previously loaded content item already exists, and *if* we have it, we
-    /// can skip the `init.call`, because we can just reuse the old one.
-    fn read_file(
-        &self,
-        path: Utf8PathBuf,
-        repo: &GitRepo,
-    ) -> Result<Option<InputItem>, LoaderFileError> {
-        if path.is_dir() {
-            return Ok(None);
-        }
-
-        let bytes = fs::read(&path)?;
-        let hash = Hash32::hash(&bytes);
-        let text = String::from_utf8_lossy(&bytes);
-        let (meta, text) = self.init.call(&text)?;
-
-        let area = match path.file_stem() {
-            Some("index") => path
-                .parent()
-                .map(ToOwned::to_owned)
-                .unwrap_or(path.with_extension("")),
-            _ => path.with_extension(""),
-        };
-
-        let slug = area.strip_prefix(self.base).unwrap_or(&path).to_owned();
-
-        Ok(Some(InputItem {
-            hash,
-            info: repo.files.get(path.as_str()).cloned(),
-            file: path,
-            slug,
-            data: Input::Content(InputContent { area, meta, text }),
-        }))
-    }
-}
-
-/// An opaque representation of a source of inputs loaded into the generator.
-/// You can think of a single collection as a set of written articles with
-/// shared frontmatter shape, for example your blog posts.
-///
-/// Hovewer, a collection can also load additional files like images or custom
-/// assets. This is useful when you want to colocate assets and images next to
-/// the articles. A common use case is to directly reference the images relative
-/// to the markdown file.
-#[derive(Debug)]
-pub struct Content {
-    /// Data loading strategy
-    loader: ContentStrategy,
-    /// Content loaded and saved between multiple loads.
-    cached: Mutex<HashMap<String, InputItem>>,
-}
-
-impl Content {
-    /// Create a new collection which draws content from the filesystem files
-    /// via a glob pattern. Usually used to collect articles written as markdown
-    /// files, however it is completely format agnostic.
-    ///
-    /// The parameter `parse_matter` allows you to customize how the metadata
-    /// should be parsed. Default functions for the most common formats are
-    /// provided by library:
-    /// * [`parse_matter_json`](`crate::parse_matter_json`) - parse JSON metadata
-    /// * [`parse_matter_yaml`](`crate::parse_matter_yaml`) - parse YAML metadata
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// Collection::glob_with("content", "posts/**/*", ["md"], parse_matter_yaml::<Post>);
-    /// ```
-    pub fn glob<D>(
-        path_base: &'static str,
-        path_glob: &'static str,
-        parse_matter: fn(&str) -> Result<(D, String), anyhow::Error>,
-    ) -> Self
-    where
-        D: for<'de> Deserialize<'de> + Send + Sync + 'static,
-    {
-        Self {
-            loader: ContentStrategy::Glob(LoaderGlob {
-                base: path_base,
-                glob: path_glob,
-                init: ContentFn::new(parse_matter),
-            }),
-            cached: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// TODO: Here we want to save the data in `self.cached`, but we also wan to
-    /// reuse the old cached data, so we can do less work if the file is in fact
-    /// identical.
-    fn load(&self, repo: &GitRepo) -> Result<(), LoaderError> {
-        let items = match &self.loader {
-            ContentStrategy::Glob(glob) => glob.read(repo)?,
-        };
-
-        let mut cached = self.cached.lock().unwrap();
-        for item in items {
-            cached.insert(item.file.to_string(), item);
-        }
-
-        Ok(())
-    }
-
-    fn load_once(&self, repo: &GitRepo, path: &Utf8Path) -> Result<(), LoaderError> {
-        let item = match &self.loader {
-            ContentStrategy::Glob(loader) => loader.read_once(path, repo)?,
-        };
-
-        let mut cached = self.cached.lock().unwrap();
-        if let Some(item) = item {
-            cached.insert(item.file.to_string(), item);
-        }
-
-        Ok(())
-    }
-}
-
-// ASSETS LOADER
-// =============
-
-type BoxAny = Box<dyn Any + Send + Sync>;
-type BoxFn8 = Box<dyn Fn(&[u8]) -> ArcAny + Send + Sync>;
-
-struct AssetsGlobFn(BoxFn8);
-
-impl Debug for AssetsGlobFn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Fn(*)")
-    }
-}
-
-#[derive(Debug)]
-pub struct Assets(AssetsLoader);
-
-#[derive(Debug)]
-enum AssetsLoader {
-    Glob {
-        path_base: &'static str,
-        path_glob: &'static str,
-        func: AssetsGlobFn,
-    },
-    GlobDefer {
-        path_base: &'static str,
-        path_glob: &'static str,
-        func: fn(&[u8]) -> Vec<u8>,
-    },
-}
-
-impl Assets {
-    pub fn glob<T>(path_base: &'static str, path_glob: &'static str, call: fn(&[u8]) -> T) -> Self
-    where
-        T: Send + Sync + 'static,
-    {
-        Self(AssetsLoader::Glob {
-            path_base,
-            path_glob,
-            func: AssetsGlobFn(Box::new(move |data| Arc::new(call(data)))),
-        })
-    }
-
-    pub fn glob_defer(
-        path_base: &'static str,
-        path_glob: &'static str,
-        func: fn(&[u8]) -> Vec<u8>,
-    ) -> Self {
-        Self(AssetsLoader::GlobDefer {
-            path_base,
-            path_glob,
-            func,
-        })
-    }
-
-    /// Load all assets which are matched by the defined glob.
-    fn load(&self) -> Vec<InputItem> {
-        match &self.0 {
-            AssetsLoader::Glob {
-                path_base,
-                path_glob,
-                func: AssetsGlobFn(func),
-            } => {
-                let pattern = Utf8Path::new(path_base).join(path_glob);
-                let iter = glob::glob(pattern.as_str()).unwrap();
-
-                let mut out = vec![];
-                for entry in iter {
-                    let entry = Utf8PathBuf::try_from(entry.unwrap()).unwrap();
-                    let bytes = fs::read(&entry).unwrap();
-
-                    let hash = Hash32::hash(&bytes);
-                    let data = func(&bytes);
-
-                    out.push(InputItem {
-                        hash,
-                        file: entry.to_owned(),
-                        slug: entry.strip_prefix(path_base).unwrap_or(&entry).to_owned(),
-                        data: Input::InMemory(data),
-                        info: None,
-                    });
-                }
-
-                out
-            }
-            AssetsLoader::GlobDefer {
-                path_base,
-                path_glob,
-                func,
-            } => {
-                let pattern = Utf8Path::new(path_base).join(path_glob);
-                let iter = glob::glob(pattern.as_str()).unwrap();
-
-                let mut out = vec![];
-                for entry in iter {
-                    let entry = Utf8PathBuf::try_from(entry.unwrap()).unwrap();
-                    let bytes = fs::read(&entry).unwrap();
-
-                    let hash = Hash32::hash(&bytes);
-
-                    out.push(InputItem {
-                        hash,
-                        file: entry.to_owned(),
-                        slug: entry.strip_prefix(path_base).unwrap_or(&entry).to_owned(),
-                        data: Input::OnDisk(*func),
-                        info: None,
-                    });
-                }
-
-                out
-            }
-        }
-    }
-}
-
-// ******************************
 // *           Tasks            *
 // ******************************
 
@@ -819,7 +533,7 @@ struct InputStylesheet {
 enum Input {
     Content(InputContent),
     InMemory(Arc<dyn Any + Send + Sync>),
-    OnDisk(fn(&[u8]) -> Vec<u8>),
+    OnDisk(Arc<Bookkeeping>),
     Stylesheet(InputStylesheet),
     Script,
 }
@@ -833,362 +547,46 @@ struct InputItem {
     info: Option<gitmap::GitInfo>,
 }
 
-#[derive(Debug)]
-struct Trace<D>
-where
-    D: Send + Sync,
-{
-    task: Task<D>,
-    init: bool,
-    deps: HashMap<Utf8PathBuf, Hash32>,
-    glob: Vec<glob::Pattern>,
-    path: Vec<(Utf8PathBuf, String)>,
-}
-
-impl<G: Send + Sync> Trace<G> {
-    fn new(task: Task<G>) -> Self {
-        Self {
-            task,
-            init: true,
-            deps: HashMap::new(),
-            glob: Vec::new(),
-            path: Vec::new(),
-        }
-    }
-
-    fn new_with(&self, deps: Tracker, path: Vec<(Utf8PathBuf, String)>) -> Self {
-        Self {
-            task: self.task.clone(),
-            init: false,
-            deps: deps.hash,
-            glob: deps.glob,
-            path,
-        }
-    }
-
-    fn is_outdated(&self, inputs: &HashMap<Utf8PathBuf, InputItem>) -> bool {
-        if self.init {
-            return true;
-        }
-
-        let mut cache_hits = 0;
-        for item in inputs.values() {
-            if let Some(hash_old) = self.deps.get(&item.file) {
-                if item.hash == *hash_old {
-                    cache_hits += 1;
-                    continue;
-                } else {
-                    return true;
-                }
-            }
-
-            // If we haven't had a file dependency, but it matches, it means it
-            // was recently added by the user.
-            for pattern in &self.glob {
-                if pattern.matches_path(item.slug.as_ref()) {
-                    return true;
-                }
-            }
-        }
-
-        // If any file dependency is physically removed, the cache hit count
-        // will not match the old dependency count
-        cache_hits != self.deps.len()
-    }
-}
-
-#[derive(Debug)]
-struct Scheduler<'a, D>
-where
-    D: Send + Sync,
-{
-    context: &'a Globals<D>,
-    builder: Arc<RwLock<Builder>>,
-    tracked: Vec<Trace<D>>,
-    items: HashMap<Utf8PathBuf, InputItem>,
-    cache_pages: HashMap<Utf8PathBuf, Hash32>,
-}
-
-impl<'a, D: Send + Sync> Scheduler<'a, D> {
-    pub fn new(website: &'a Website<D>, context: &'a Globals<D>, items: Vec<InputItem>) -> Self {
-        Self {
-            context,
-            builder: Arc::new(RwLock::new(Builder::new())),
-            tracked: website.tasks.iter().cloned().map(Trace::new).collect(),
-            items: HashMap::from_iter(items.into_iter().map(|item| (item.file.clone(), item))),
-            cache_pages: HashMap::new(),
-        }
-    }
-
-    pub fn update(&mut self, inputs: Vec<InputItem>) {
-        for input in inputs {
-            self.items.insert(input.file.clone(), input);
-        }
-    }
-
-    pub fn build_sitemap(&self, opts: &Utf8Path) -> Vec<u8> {
-        let urls = self
-            .tracked
-            .iter()
-            .flat_map(|x| &x.path)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .map(|path| {
-                Url::builder(opts.join(&path.0).parent().unwrap().to_string())
-                    .change_frequency(ChangeFrequency::Monthly)
-                    .priority(0.8)
-                    .build()
-                    .expect("failed a <url> validation")
-            })
-            .collect::<Vec<_>>();
-        let urls = UrlSet::new(urls).expect("failed a <urlset> validation");
-        let mut buf = Vec::<u8>::new();
-        urls.write(&mut buf).expect("failed to write XML");
-        buf
-    }
-
-    fn rebuild_trace(&self, trace: Trace<D>) -> Result<Trace<D>, BuilderError> {
-        if !trace.is_outdated(&self.items) {
-            return Ok(trace);
-        }
-
-        let tracker = Tracker {
-            hash: HashMap::new(),
-            glob: Vec::new(),
-        };
-
-        let tracker = Rc::new(RefCell::new(tracker));
-
-        let paths = trace.task.call(Context {
-            globals: self.context,
-            builder: self.builder.clone(),
-            tracker: tracker.clone(),
-            items: &self.items,
-        })?;
-
-        let tracker = Rc::unwrap_or_clone(tracker).into_inner();
-
-        Ok(trace.new_with(tracker, paths))
-    }
-
-    fn remove(&mut self, paths: HashSet<&Path>) {
-        self.items = mem::take(&mut self.items)
-            .into_iter()
-            .filter(|p| !paths.contains(p.1.file.as_std_path()))
-            .collect();
-    }
-
-    fn refresh(&mut self) -> Result<(), HauchiwaError> {
-        self.build_pages()?;
-        self.write_pages()?;
-
-        Ok(())
-    }
-
-    fn build_pages(&mut self) -> Result<(), BuilderError> {
-        let traces = mem::take(&mut self.tracked);
-
-        let pb = ProgressBar::new(traces.len() as u64);
-        pb.set_message("Running build tasks...");
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-                .expect("Error setting progress bar template")
-                .progress_chars("#>-"),
-        );
-
-        let s = Instant::now();
-        self.tracked = traces
-            .into_par_iter()
-            .progress_with(pb.clone())
-            .map(|trace| self.rebuild_trace(trace))
-            .collect::<Result<_, _>>()?;
-
-        pb.finish_with_message(format!(
-            "Finished running build tasks! {}",
-            crate::io::as_overhead(s)
-        ));
-
-        Ok(())
-    }
-
-    fn write_pages(&mut self) -> Result<(), HauchiwaError> {
-        let mut temp = HashMap::new();
-
-        let paths: Vec<_> = self
-            .tracked
-            .iter()
-            .flat_map(|trace| &trace.path)
-            .filter_map(|(path, data)| {
-                let hash = Hash32::hash(data);
-                let path = Utf8Path::new("dist").join(path);
-
-                if Some(hash) == self.cache_pages.get(&path).copied() {
-                    None
-                } else {
-                    self.cache_pages.insert(path.clone(), hash);
-                    Some((path, data, hash))
-                }
-            })
-            .collect();
-
-        if paths.is_empty() {
-            println!(
-                "{}",
-                style("No generated pages to write. Skipping.").green()
-            );
-            return Ok(());
-        }
-
-        let pb = ProgressBar::new(paths.len() as u64);
-        pb.set_message("Writing generated pages...");
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-                .expect("Error setting progress bar template")
-                .progress_chars("#>-"),
-        );
-
-        let s = Instant::now();
-        paths
-            .into_iter()
-            .progress_with(pb.clone())
-            .try_for_each::<_, Result<_, BuilderError>>(|(path, data, hash)| {
-                if temp.contains_key(&path) {
-                    println!("Warning, overwriting path {path}")
-                }
-
-                if let Some(dir) = path.parent() {
-                    fs::create_dir_all(dir)
-                        .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
-                }
-                let mut file = fs::File::create(&path)
-                    .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
-                std::io::Write::write_all(&mut file, data.as_bytes())
-                    .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
-
-                temp.insert(path.clone(), hash);
-
-                Ok(())
-            })?;
-
-        pb.finish_with_message(format!(
-            "Finished writing generated pages! {}",
-            crate::io::as_overhead(s)
-        ));
-
-        self.cache_pages.extend(temp);
-
-        Ok(())
-    }
-
-    fn fulfill_build_requests(&self) -> Result<(), BuilderError> {
-        let queue = mem::take(&mut self.builder.write().unwrap().queue);
-
-        let pb = ProgressBar::new(queue.len() as u64);
-        pb.set_message("Building requested assets...");
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-                .expect("Error setting progress bar template")
-                .progress_chars("#>-"),
-        );
-
-        let s = Instant::now();
-        queue
-            .into_par_iter()
-            .progress_with(pb.clone())
-            .try_for_each::<_, Result<_, BuilderError>>(|item| {
-                let BuildRequest {
-                    path_file,
-                    path_temp,
-                    path_dist,
-                    call,
-                } = item;
-
-                if !path_temp.exists() {
-                    let buffer = fs::read(&path_file)
-                        .map_err(|e| BuilderError::FileReadError(path_file, e))?;
-                    let buffer = call(&buffer);
-                    fs::create_dir_all(".cache/hash")
-                        .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
-                    fs::write(&path_temp, buffer)
-                        .map_err(|e| BuilderError::FileWriteError(path_temp.clone(), e))?;
-                }
-
-                let dir = path_dist.parent().unwrap_or(&path_dist);
-                fs::create_dir_all(dir) //
-                    .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
-                fs::copy(&path_temp, &path_dist).map_err(|e| {
-                    BuilderError::FileCopyError(path_temp.clone(), path_dist.clone(), e)
-                })?;
-
-                Ok(())
-            })?;
-
-        pb.finish_with_message(format!(
-            "Finished building requested assets! {}",
-            crate::io::as_overhead(s)
-        ));
-
-        Ok(())
-    }
-}
+// pub fn build_sitemap(&self, opts: &Utf8Path) -> Vec<u8> {
+//     let urls = self
+//         .tracked
+//         .iter()
+//         .flat_map(|x| &x.path)
+//         .collect::<HashSet<_>>()
+//         .into_iter()
+//         .map(|path| {
+//             Url::builder(opts.join(&path.0).parent().unwrap().to_string())
+//                 .change_frequency(ChangeFrequency::Monthly)
+//                 .priority(0.8)
+//                 .build()
+//                 .expect("failed a <url> validation")
+//         })
+//         .collect::<Vec<_>>();
+//     let urls = UrlSet::new(urls).expect("failed a <urlset> validation");
+//     let mut buf = Vec::<u8>::new();
+//     urls.write(&mut buf).expect("failed to write XML");
+//     buf
+// }
 
 // ******************************
 // *          Builder           *
 // ******************************
 
 #[derive(Debug)]
-struct BuildRequest {
-    path_file: Utf8PathBuf,
-    path_temp: Utf8PathBuf,
-    path_dist: Utf8PathBuf,
-    call: fn(&[u8]) -> Vec<u8>,
-}
-
-#[derive(Debug)]
 struct Builder {
     /// Paths to files in dist
     dist: HashMap<Hash32, Utf8PathBuf>,
-    /// Build queue
-    queue: Vec<BuildRequest>,
 }
 
 impl Builder {
     fn new() -> Self {
         Self {
             dist: HashMap::new(),
-            queue: Vec::new(),
         }
     }
 
     fn check(&self, hash: Hash32) -> Option<Utf8PathBuf> {
         self.dist.get(&hash).cloned()
-    }
-
-    fn request_deferred(
-        &mut self,
-        hash: Hash32,
-        path: &Utf8Path,
-        call: fn(&[u8]) -> Vec<u8>,
-    ) -> Result<Utf8PathBuf, BuilderError> {
-        let hash_hex = hash.to_hex();
-
-        let path_temp = Utf8Path::new(".cache/hash").join(&hash_hex);
-        let path_dist = Utf8Path::new("dist/hash").join(&hash_hex);
-        let path_root = Utf8Path::new("/hash/").join(&hash_hex);
-
-        let request = BuildRequest {
-            path_file: path.to_owned(),
-            path_temp,
-            path_dist,
-            call,
-        };
-
-        self.queue.push(request);
-        self.dist.insert(hash, path_root.clone());
-        Ok(path_root)
     }
 
     fn request_stylesheet(
@@ -1231,280 +629,5 @@ impl Builder {
 
         self.dist.insert(hash, path_root.clone());
         Ok(path_root)
-    }
-}
-
-// ******************************
-// *          Runtime           *
-// ******************************
-
-/// A simple wrapper for all context data passed at runtime to tasks defined for
-/// the website. Use this struct's methods to query required data.
-pub struct Context<'a, G>
-where
-    G: Send + Sync,
-{
-    /// Global data for the current build.
-    globals: &'a Globals<G>,
-    /// Builder allows scheduling build requests.
-    builder: Arc<RwLock<Builder>>,
-    /// Tracked dependencies for current instantation.
-    tracker: Rc<RefCell<Tracker>>,
-    /// Every single input.
-    items: &'a HashMap<Utf8PathBuf, InputItem>,
-}
-
-#[derive(Debug)]
-pub struct QueryContent<'a, D> {
-    pub file: &'a Utf8Path,
-    pub slug: &'a Utf8Path,
-    pub area: &'a Utf8Path,
-    pub meta: &'a D,
-    pub info: Option<&'a GitInfo>,
-    pub content: &'a str,
-}
-
-#[derive(Clone)]
-struct Tracker {
-    hash: HashMap<Utf8PathBuf, Hash32>,
-    glob: Vec<glob::Pattern>,
-}
-
-impl<'a, G> Context<'a, G>
-where
-    G: Send + Sync,
-{
-    /// Retrieve the globals.
-    pub fn get_globals(&self) -> &Globals<G> {
-        self.globals
-    }
-
-    /// Retrieve a single page by glob pattern and metadata shape.
-    pub fn get_page<D>(&self, pattern: &str) -> Result<QueryContent<'_, D>, HauchiwaError>
-    where
-        D: 'static,
-    {
-        let glob = glob::Pattern::new(pattern)?;
-        self.tracker.borrow_mut().glob.push(glob.clone());
-
-        let item = self
-            .items
-            .values()
-            .find(|item| glob.matches_path(item.slug.as_ref()))
-            .ok_or_else(|| HauchiwaError::AssetNotFound(glob.to_string()))?;
-
-        if let Input::Content(content) = &item.data {
-            let meta = content
-                .meta
-                .downcast_ref::<D>()
-                .ok_or_else(|| HauchiwaError::Frontmatter(item.file.to_string()))?;
-            let area = content.area.as_ref();
-            let content = content.text.as_str();
-
-            self.tracker
-                .borrow_mut()
-                .hash
-                .insert(item.file.clone(), item.hash);
-
-            Ok(QueryContent {
-                file: &item.file,
-                slug: &item.slug,
-                area,
-                meta,
-                info: item.info.as_ref(),
-                content,
-            })
-        } else {
-            Err(HauchiwaError::AssetNotFound(glob.to_string()))
-        }
-    }
-
-    /// Retrieve many possible content items.
-    pub fn get_pages<D>(&self, pattern: &str) -> Result<Vec<QueryContent<'_, D>>, HauchiwaError>
-    where
-        D: 'static,
-    {
-        let pattern = glob::Pattern::new(pattern)?;
-        self.tracker.borrow_mut().glob.push(pattern.clone());
-
-        let inputs: Vec<_> = self
-            .items
-            .values()
-            .filter(|item| pattern.matches_path(item.slug.as_ref()))
-            .collect();
-
-        let mut tracked = self.tracker.borrow_mut();
-        for input in inputs.iter() {
-            tracked.hash.insert(input.file.clone(), input.hash);
-        }
-
-        let query = inputs
-            .into_iter()
-            .filter_map(|item| {
-                let (area, meta, content) = match &item.data {
-                    Input::Content(input_content) => {
-                        let area = input_content.area.as_ref();
-                        let meta = input_content.meta.downcast_ref::<D>()?;
-                        let data = input_content.text.as_str();
-                        Some((area, meta, data))
-                    }
-                    _ => None,
-                }?;
-
-                Some(QueryContent {
-                    file: &item.file,
-                    slug: &item.slug,
-                    area,
-                    meta,
-                    info: item.info.as_ref(),
-                    content,
-                })
-            })
-            .collect();
-
-        Ok(query)
-    }
-
-    /// Get compiled CSS style by alias.
-    pub fn get_styles(&self, path: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaError> {
-        let item = self
-            .items
-            .values()
-            .find(|item| item.file == path)
-            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
-
-        if let Input::Stylesheet(style) = &item.data {
-            let path = self
-                .builder
-                .read()
-                .map_err(|_| HauchiwaError::LockRead)?
-                .check(item.hash);
-
-            self.tracker
-                .borrow_mut()
-                .hash
-                .insert(item.file.clone(), item.hash);
-
-            let path = match path {
-                Some(path) => path,
-                None => self
-                    .builder
-                    .write()
-                    .map_err(|_| HauchiwaError::LockWrite)?
-                    .request_stylesheet(item.hash, style)?,
-            };
-
-            Ok(path)
-        } else {
-            Err(HauchiwaError::AssetNotFound(path.to_string()))
-        }
-    }
-
-    /// Get path to a generated asset file.
-    pub fn get_asset_deferred(&self, path: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaError> {
-        let input = self
-            .items
-            .values()
-            .find(|item| item.file == path)
-            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
-
-        if let Input::OnDisk(call) = &input.data {
-            let res = self
-                .builder
-                .read()
-                .map_err(|_| HauchiwaError::LockRead)?
-                .check(input.hash);
-            if let Some(res) = res {
-                return Ok(res);
-            }
-
-            let res = self
-                .builder
-                .write()
-                .map_err(|_| HauchiwaError::LockWrite)?
-                .request_deferred(input.hash, &input.file, *call)?;
-
-            self.tracker
-                .borrow_mut()
-                .hash
-                .insert(input.file.clone(), input.hash);
-
-            Ok(res)
-        } else {
-            Err(HauchiwaError::AssetNotFound(path.to_string()))
-        }
-    }
-
-    pub fn get_script(&self, path: &str) -> Result<Utf8PathBuf, HauchiwaError> {
-        let path = Utf8Path::new(".cache/scripts/")
-            .join(path)
-            .with_extension("js");
-
-        let input = self
-            .items
-            .values()
-            .find(|item| item.file == path)
-            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
-
-        if let Input::Script = &input.data {
-            let res = self
-                .builder
-                .read()
-                .map_err(|_| HauchiwaError::LockRead)?
-                .check(input.hash);
-
-            if let Some(res) = res {
-                return Ok(res);
-            }
-
-            let res = self
-                .builder
-                .write()
-                .map_err(|_| HauchiwaError::LockWrite)?
-                .request_script(input.hash, &input.file)?;
-
-            self.tracker
-                .borrow_mut()
-                .hash
-                .insert(input.file.clone(), input.hash);
-
-            Ok(res)
-        } else {
-            Err(HauchiwaError::AssetNotFound(path.to_string()))
-        }
-    }
-
-    pub fn get_asset_any<T>(&self, area: &Utf8Path) -> Result<Option<&T>, HauchiwaError>
-    where
-        T: 'static,
-    {
-        let glob = format!("{}/*", area);
-        let glob = glob::Pattern::new(&glob)?;
-        let opts = glob::MatchOptions {
-            case_sensitive: true,
-            require_literal_separator: true,
-            require_literal_leading_dot: false,
-        };
-
-        let found = self
-            .items
-            .values()
-            .filter(|item| glob.matches_path_with(item.file.as_std_path(), opts))
-            .find_map(|item| match &item.data {
-                Input::InMemory(any) => {
-                    let data = any.downcast_ref::<T>()?;
-                    let file = item.file.clone();
-                    let hash = item.hash;
-                    Some((data, file, hash))
-                }
-                _ => None,
-            });
-
-        if let Some((data, file, hash)) = found {
-            self.tracker.borrow_mut().hash.insert(file, hash);
-            return Ok(Some(data));
-        }
-
-        Ok(None)
     }
 }
