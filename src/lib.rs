@@ -10,16 +10,16 @@ mod runtime;
 mod watch;
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs;
-use std::process::Command;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use console::style;
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use sha2::{Digest, Sha256};
 // use sitemap_rs::url::{ChangeFrequency, Url};
 // use sitemap_rs::url_set::UrlSet;
@@ -147,19 +147,29 @@ where
 
     let builder = Arc::new(RwLock::new(Builder::new()));
 
-    let mut pages = vec![];
-    for task in &website.tasks {
-        let res = task.call(Context::new(globals, builder.clone(), &items));
+    let total = website.tasks.len();
+    let progress = ProgressBar::new(total as u64);
+    progress.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+            )
+            .expect("invalid progress bar template")
+            .progress_chars("##-"),
+    );
 
-        match res {
-            Ok(ok) => {
-                pages.extend(ok);
-            }
-            Err(e) => {
-                eprintln!("{e}");
-            }
-        }
-    }
+    let pages = website
+        .tasks
+        .par_iter()
+        .map(|task| task.call(Context::new(globals, builder.clone(), &items)))
+        .progress_with(progress.clone())
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+    progress.finish_with_message("Finished all tasks");
 
     // let builder = Arc::into_inner(builder).unwrap().into_inner().unwrap();
 
@@ -250,6 +260,41 @@ impl<G: Send + Sync + 'static> Website<G> {
             .collect::<Vec<_>>();
 
         Ok(())
+    }
+
+    fn remove_paths(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool {
+        let mut changed = false;
+
+        changed |= self
+            .loaders_content
+            .par_iter_mut()
+            .any(|loader| loader.remove(obsolete));
+
+        changed |= self
+            .loaders_assets
+            .par_iter_mut()
+            .any(|loader| loader.remove(obsolete));
+
+        changed
+    }
+
+    fn reload_paths(&mut self, modified: &HashSet<Utf8PathBuf>, repo: &GitRepo) -> bool
+    where
+        G: Send + Sync + 'static,
+    {
+        let mut changed = false;
+
+        changed |= self
+            .loaders_content
+            .par_iter_mut()
+            .any(|loader| loader.reload(modified, repo).unwrap());
+
+        changed |= self
+            .loaders_assets
+            .par_iter_mut()
+            .any(|loader| loader.reload(modified));
+
+        changed
     }
 }
 

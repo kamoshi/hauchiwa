@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs;
 use std::sync::Arc;
@@ -74,6 +74,28 @@ impl LoaderGlob {
         }
 
         Ok(())
+    }
+
+    fn reload(&mut self, set: &HashSet<Utf8PathBuf>, repo: &GitRepo) -> Result<bool, LoaderError> {
+        let pattern = Utf8Path::new(self.base).join(self.glob);
+        let pattern = glob::Pattern::new(pattern.as_str()).unwrap();
+        let mut changed = false;
+
+        for path in set {
+            if !pattern.matches_path(path.as_std_path()) {
+                continue;
+            };
+
+            if let Some(item) = self
+                .read_file(path.clone(), repo)
+                .map_err(|e| LoaderError::LoaderGlobFile(path.to_owned(), e))?
+            {
+                self.cached.insert(item.file.clone(), item);
+                changed |= true;
+            }
+        }
+
+        Ok(changed)
     }
 
     /// Helper function, convert file into InputItem
@@ -170,9 +192,35 @@ impl Content {
         Ok(())
     }
 
+    pub(crate) fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool {
+        match &mut self.loader {
+            ContentStrategy::Glob(loader) => {
+                let before = loader.cached.len();
+                loader.cached.retain(|path, _| !obsolete.contains(path));
+                loader.cached.len() < before
+            }
+        }
+    }
+
+    pub(crate) fn reload(
+        &mut self,
+        set: &HashSet<Utf8PathBuf>,
+        repo: &GitRepo,
+    ) -> Result<bool, LoaderError> {
+        match &mut self.loader {
+            ContentStrategy::Glob(loader) => loader.reload(set, repo),
+        }
+    }
+
     pub(crate) fn items(&self) -> Vec<&InputItem> {
         match &self.loader {
             ContentStrategy::Glob(glob) => glob.cached.values().collect(),
+        }
+    }
+
+    pub(crate) fn path_base(&self) -> &'static str {
+        match &self.loader {
+            ContentStrategy::Glob(glob) => glob.base,
         }
     }
 }

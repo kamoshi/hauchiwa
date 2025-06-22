@@ -1,12 +1,12 @@
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::fs;
-use std::process::{Command, Stdio};
 use std::sync::RwLock;
-use std::time::Instant;
 use std::{collections::HashMap, sync::Arc};
 
 use camino::{Utf8Path, Utf8PathBuf};
 
+use crate::loader::compile_esbuild;
 use crate::{ArcAny, Hash32, Input, InputItem, InputStylesheet};
 
 type BoxFn8 = Box<dyn Fn(&[u8]) -> ArcAny + Send + Sync>;
@@ -62,12 +62,12 @@ enum AssetsLoader {
     GlobStyle {
         path_base: &'static str,
         path_glob: &'static str,
-        cached: Vec<InputItem>,
+        cached: HashMap<Utf8PathBuf, InputItem>,
     },
     GlobScripts {
         path_base: &'static str,
         path_glob: &'static str,
-        cached: Vec<InputItem>,
+        cached: HashMap<Utf8PathBuf, InputItem>,
     },
 }
 
@@ -101,7 +101,7 @@ impl Assets {
         Self(AssetsLoader::GlobStyle {
             path_base,
             path_glob,
-            cached: Vec::new(),
+            cached: HashMap::new(),
         })
     }
 
@@ -109,7 +109,7 @@ impl Assets {
         Self(AssetsLoader::GlobScripts {
             path_base,
             path_glob,
-            cached: Vec::new(),
+            cached: HashMap::new(),
         })
     }
 
@@ -186,13 +186,16 @@ impl Assets {
                     let opts = grass::Options::default().style(grass::OutputStyle::Compressed);
                     let stylesheet = grass::from_path(&entry, &opts).unwrap();
 
-                    cached.push(InputItem {
-                        hash: Hash32::hash(&stylesheet),
-                        file: entry.to_owned(),
-                        slug: entry.strip_prefix(&path_base).unwrap_or(&entry).to_owned(),
-                        data: Input::Stylesheet(InputStylesheet { stylesheet }),
-                        info: None,
-                    });
+                    cached.insert(
+                        entry.to_owned(),
+                        InputItem {
+                            hash: Hash32::hash(&stylesheet),
+                            file: entry.to_owned(),
+                            slug: entry.strip_prefix(&path_base).unwrap_or(&entry).to_owned(),
+                            data: Input::Stylesheet(InputStylesheet { stylesheet }),
+                            info: None,
+                        },
+                    );
                 }
             }
             AssetsLoader::GlobScripts {
@@ -214,17 +217,7 @@ impl Assets {
                 }
 
                 for file_path in arr {
-                    let output = Command::new("esbuild")
-                        .arg(file_path.as_str())
-                        .arg("--format=esm")
-                        .arg("--bundle")
-                        .arg("--minify")
-                        .stdout(Stdio::piped())
-                        .stderr(Stdio::inherit())
-                        .output()
-                        .expect("esbuild invocation failed");
-
-                    let result = output.stdout;
+                    let result = compile_esbuild(&file_path);
                     let result_hash = Hash32::hash(&result);
                     let result_hash_hex = result_hash.to_hex();
 
@@ -234,13 +227,104 @@ impl Assets {
                     fs::create_dir_all(dir).unwrap();
                     fs::write(&path_dist, result).unwrap();
 
-                    cached.push(InputItem {
-                        slug: file_path.clone(),
-                        file: file_path.clone(),
-                        hash: result_hash,
-                        data: Input::Script,
-                        info: None,
-                    });
+                    cached.insert(
+                        file_path.to_owned(),
+                        InputItem {
+                            slug: file_path.clone(),
+                            file: file_path.clone(),
+                            hash: result_hash,
+                            data: Input::Script,
+                            info: None,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    pub(crate) fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> bool {
+        match &mut self.0 {
+            AssetsLoader::Glob {
+                path_base,
+                path_glob,
+                func: AssetsGlobFn(func),
+                cached,
+            } => {
+                let pattern = Utf8Path::new(path_base).join(path_glob);
+                let matcher = glob::Pattern::new(pattern.as_str()).unwrap();
+                let mut changed = false;
+
+                for entry in set {
+                    if !matcher.matches_path(entry.as_std_path()) {
+                        continue;
+                    }
+
+                    let bytes = fs::read(entry).unwrap();
+                    let hash = Hash32::hash(&bytes);
+                    let data = func(&bytes);
+
+                    cached.insert(
+                        entry.to_owned(),
+                        InputItem {
+                            hash,
+                            file: entry.to_owned(),
+                            slug: entry.strip_prefix(&path_base).unwrap_or(entry).to_owned(),
+                            data: Input::InMemory(data),
+                            info: None,
+                        },
+                    );
+                    changed = true;
+                }
+
+                changed
+            }
+            AssetsLoader::GlobDefer {
+                path_base,
+                path_glob,
+                cached,
+                bookkeeping,
+            } => {
+                let pattern = Utf8Path::new(path_base).join(path_glob);
+                let matcher = glob::Pattern::new(pattern.as_str()).unwrap();
+                let mut changed = false;
+
+                for entry in set {
+                    if !matcher.matches_path(entry.as_std_path()) {
+                        continue;
+                    }
+
+                    let bytes = fs::read(entry).unwrap();
+                    let hash = Hash32::hash(&bytes);
+
+                    cached.insert(
+                        entry.to_owned(),
+                        InputItem {
+                            hash,
+                            file: entry.to_owned(),
+                            slug: entry.strip_prefix(&path_base).unwrap_or(entry).to_owned(),
+                            data: Input::OnDisk(bookkeeping.clone()),
+                            info: None,
+                        },
+                    );
+                    changed = true;
+                }
+
+                changed
+            }
+            AssetsLoader::GlobStyle { path_base, .. } => {
+                if set.iter().any(|path| path.starts_with(&path_base)) {
+                    self.load();
+                    true
+                } else {
+                    false
+                }
+            }
+            AssetsLoader::GlobScripts { path_base, .. } => {
+                if set.iter().any(|path| path.starts_with(&path_base)) {
+                    self.load();
+                    true
+                } else {
+                    false
                 }
             }
         }
@@ -248,11 +332,31 @@ impl Assets {
 
     pub(crate) fn items(&self) -> Vec<&InputItem> {
         match &self.0 {
-            AssetsLoader::Glob { cached, .. } | AssetsLoader::GlobDefer { cached, .. } => {
-                cached.values().collect()
-            }
-            AssetsLoader::GlobStyle { cached, .. } | AssetsLoader::GlobScripts { cached, .. } => {
-                cached.iter().collect()
+            AssetsLoader::Glob { cached, .. }
+            | AssetsLoader::GlobDefer { cached, .. }
+            | AssetsLoader::GlobStyle { cached, .. }
+            | AssetsLoader::GlobScripts { cached, .. } => cached.values().collect(),
+        }
+    }
+
+    pub(crate) fn path_base(&self) -> &'static str {
+        match &self.0 {
+            AssetsLoader::Glob { path_base, .. }
+            | AssetsLoader::GlobDefer { path_base, .. }
+            | AssetsLoader::GlobStyle { path_base, .. }
+            | AssetsLoader::GlobScripts { path_base, .. } => path_base,
+        }
+    }
+
+    pub(crate) fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool {
+        match &mut self.0 {
+            AssetsLoader::Glob { cached, .. }
+            | AssetsLoader::GlobDefer { cached, .. }
+            | AssetsLoader::GlobStyle { cached, .. }
+            | AssetsLoader::GlobScripts { cached, .. } => {
+                let before = cached.len();
+                cached.retain(|path, _| !obsolete.contains(path));
+                cached.len() < before
             }
         }
     }
