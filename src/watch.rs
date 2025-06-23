@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::env;
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -12,135 +12,112 @@ use notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::new_debouncer;
 use tungstenite::WebSocket;
 
+use crate::build;
 use crate::error::WatchError;
-use crate::gitmap;
-use crate::{Scheduler, Website};
+use crate::{Globals, HauchiwaError, Mode, Website, init, load_repo};
 
-impl<G> Scheduler<'_, G>
+fn reserve_port() -> Result<(TcpListener, u16), WatchError> {
+    let listener = match TcpListener::bind("127.0.0.1:1337") {
+        Ok(sock) => sock,
+        Err(_) => TcpListener::bind("127.0.0.1:0").map_err(WatchError::Bind)?,
+    };
+
+    let addr = listener.local_addr().map_err(WatchError::Bind)?;
+    let port = addr.port();
+    Ok((listener, port))
+}
+
+pub fn watch<G>(website: &mut Website<G>, data: G) -> Result<(), HauchiwaError>
 where
     G: Send + Sync + 'static,
 {
-    pub fn watch(&mut self, website: &Website<G>) -> Result<(), WatchError> {
-        #[cfg(feature = "server")]
-        let thread_http = server::start();
+    #[cfg(feature = "server")]
+    let thread_http = server::start();
 
-        let root = env::current_dir().unwrap();
-        let server = TcpListener::bind("127.0.0.1:1337").map_err(|e| WatchError::Bind(e))?;
-        let client = Arc::new(Mutex::new(vec![]));
+    let root = env::current_dir().unwrap();
+    let (tcp, port) = reserve_port()?;
+    let client = Arc::new(Mutex::new(vec![]));
 
-        let (tx, rx) = std::sync::mpsc::channel();
-        let mut debouncer = new_debouncer(Duration::from_millis(250), None, tx).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut debouncer = new_debouncer(Duration::from_millis(250), None, tx).unwrap();
 
+    for base in []
+        .into_iter()
+        .chain(website.loaders_content.iter().map(|e| e.path_base()))
+        .chain(website.loaders_assets.iter().map(|e| e.path_base()))
+        .collect::<HashSet<_>>()
+    {
         debouncer
-            .watch(Path::new("styles"), RecursiveMode::Recursive)
+            .watch(Path::new(base), RecursiveMode::Recursive)
             .unwrap();
+    }
 
-        debouncer
-            .watch(Path::new("content"), RecursiveMode::Recursive)
-            .unwrap();
+    let thread_i = new_thread_ws_incoming(tcp, client.clone());
+    let (tx_reload, thread_o) = new_thread_ws_reload(client.clone());
 
-        debouncer
-            .watch(Path::new("js"), RecursiveMode::Recursive)
-            .unwrap();
+    let globals = Globals {
+        mode: Mode::Watch,
+        port: Some(port),
+        data,
+    };
 
-        let thread_i = new_thread_ws_incoming(server, client.clone());
-        let (tx_reload, thread_o) = new_thread_ws_reload(client.clone());
+    init(website)?;
+    build(website, &globals)?;
 
-        while let Ok(events) = rx.recv().unwrap() {
-            let mut dirty = false;
+    while let Ok(events) = rx.recv().unwrap() {
+        let mut dirty = false;
 
-            let obsolete: HashSet<_> = events
-                .iter()
-                .flat_map(|debounced| &debounced.event.paths)
-                .filter(|path| !path.exists())
-                .map(|path| path.strip_prefix(&root).unwrap())
-                .collect();
+        let obsolete: HashSet<_> = events
+            .iter()
+            .filter(|de| matches!(de.event.kind, EventKind::Remove(..)))
+            .flat_map(|de| &de.event.paths)
+            .map(|path| path.strip_prefix(&root).unwrap())
+            .map(|path| Utf8PathBuf::try_from(path.to_path_buf()).unwrap())
+            .collect();
 
-            if obsolete.len() > 0 {
-                self.remove(obsolete);
-                dirty = true;
-            }
+        let modified: HashSet<_> = events
+            .iter()
+            .filter(|de| matches!(de.event.kind, EventKind::Create(..) | EventKind::Modify(..)))
+            .flat_map(|de| &de.event.paths)
+            .map(|path| path.strip_prefix(&root).unwrap())
+            .map(|path| Utf8PathBuf::try_from(path.to_path_buf()).unwrap())
+            .collect();
 
-            let paths: HashSet<Utf8PathBuf> = events
-                .into_iter()
-                .filter(|event| matches!(event.kind, EventKind::Create(..) | EventKind::Modify(..)))
-                .map(|debounced| debounced.event.paths)
-                .flat_map(HashSet::<PathBuf>::from_iter)
-                .filter(|path| path.exists())
-                .filter_map(|event| {
-                    Utf8PathBuf::from_path_buf(event)
-                        .ok()
-                        .and_then(|path| path.strip_prefix(&root).ok().map(ToOwned::to_owned))
-                })
-                .collect();
-
-            if paths.iter().any(|path| path.starts_with("styles")) {
-                println!("\nRecompiling styles...");
-
-                match crate::css_load_paths(&website.global_styles) {
-                    Ok(items) => {
-                        self.update(items);
-                        dirty = true;
-                    }
-                    Err(err) => {
-                        eprintln!("{err}");
-                        continue;
-                    }
-                };
-            }
-
-            if paths.iter().any(|path| path.starts_with("content")) {
-                let repo = gitmap::map(gitmap::Options {
-                    repository: ".".to_string(),
-                    revision: "HEAD".to_string(),
-                })
-                .unwrap();
-
-                let items = match website.load_set(&paths, &website.processors, &repo) {
-                    Ok(items) => items,
-                    Err(e) => {
-                        eprintln!("Failed to load resource: {e}");
-                        continue;
-                    }
-                };
-
-                if items.len() > 0 {
-                    self.update(items);
-                    dirty = true;
-                }
-            }
-
-            if paths.iter().any(|path| path.starts_with("js")) {
-                let new_items = crate::load_scripts(&website.global_scripts);
-
-                self.update(new_items);
-                dirty = true;
-            }
-
-            if dirty {
-                println!("\nStarting rebuild...");
-                let start = Instant::now();
-
-                match self.refresh() {
-                    Ok(()) => tx_reload.send(()).unwrap(),
-                    Err(e) => {
-                        eprintln!("Encountered an error while rebuilding: {e}")
-                    }
-                };
-
-                let duration = start.elapsed();
-                println!("Finished rebuild in {duration:?}");
-            }
+        if obsolete.is_empty() && modified.is_empty() {
+            continue;
         }
 
-        thread_i.join().unwrap();
-        thread_o.join().unwrap();
+        if !obsolete.is_empty() {
+            dirty |= website.remove_paths(&obsolete);
+        }
 
-        #[cfg(feature = "server")]
-        thread_http.join().unwrap().unwrap();
+        if !modified.is_empty() {
+            dirty |= website.reload_paths(&modified, &load_repo())
+        }
 
-        Ok(())
+        if dirty {
+            println!("\nStarting rebuild...");
+            let start = Instant::now();
+
+            match build(website, &globals) {
+                Ok(()) => tx_reload.send(()).unwrap(),
+                Err(e) => {
+                    eprintln!("Encountered an error while rebuilding: {e}")
+                }
+            };
+
+            let duration = start.elapsed();
+            println!("Finished rebuild in {duration:?}");
+        }
     }
+
+    thread_i.join().unwrap();
+    thread_o.join().unwrap();
+
+    #[cfg(feature = "server")]
+    thread_http.join().unwrap().unwrap();
+
+    Ok(())
 }
 
 fn new_thread_ws_incoming(
