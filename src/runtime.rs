@@ -1,3 +1,6 @@
+#[cfg(feature = "images")]
+mod image;
+
 use std::fs;
 use std::sync::{Arc, RwLock};
 
@@ -269,6 +272,7 @@ socket.addEventListener("message", event => {{
         }
     }
 
+    #[cfg(feature = "images")]
     pub fn get_image(&self, path: &str) -> Result<Utf8PathBuf, HauchiwaError> {
         let input = self
             .items
@@ -286,7 +290,7 @@ socket.addEventListener("message", event => {{
             if !path_hash.exists() {
                 let buffer = fs::read(&input.file)
                     .map_err(|e| BuilderError::FileReadError(input.file.to_path_buf(), e))?;
-                let buffer = process_image(&buffer);
+                let buffer = image::process_image(&buffer);
 
                 fs::create_dir_all(".cache/hash/img/")
                     .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
@@ -305,21 +309,6 @@ socket.addEventListener("message", event => {{
             Err(HauchiwaError::AssetNotFound(path.to_string()))
         }
     }
-}
-
-fn process_image(buffer: &[u8]) -> Vec<u8> {
-    let img = image::load_from_memory(buffer).expect("Couldn't load image");
-    let w = img.width();
-    let h = img.height();
-
-    let mut out = Vec::new();
-    let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
-
-    encoder
-        .encode(&img.to_rgba8(), w, h, image::ExtendedColorType::Rgba8)
-        .expect("Encoding error");
-
-    out
 }
 
 fn build_deferred(

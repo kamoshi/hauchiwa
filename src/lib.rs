@@ -482,6 +482,7 @@ enum Input {
     OnDisk(Arc<Bookkeeping>),
     Stylesheet(InputStylesheet),
     Script,
+    #[cfg(feature = "images")]
     Image,
 }
 

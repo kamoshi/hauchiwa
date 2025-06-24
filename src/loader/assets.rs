@@ -69,6 +69,7 @@ enum AssetsLoader {
         path_glob: &'static str,
         cached: HashMap<Utf8PathBuf, InputItem>,
     },
+    #[cfg(feature = "images")]
     GlobImages {
         path_base: &'static str,
         path_glob: &'static str,
@@ -118,6 +119,7 @@ impl Assets {
         })
     }
 
+    #[cfg(feature = "images")]
     pub fn glob_images(path_base: &'static str, path_glob: &'static str) -> Self {
         Self(AssetsLoader::GlobImages {
             path_base,
@@ -252,6 +254,7 @@ impl Assets {
                     );
                 }
             }
+            #[cfg(feature = "images")]
             AssetsLoader::GlobImages {
                 path_base,
                 path_glob,
@@ -365,6 +368,7 @@ impl Assets {
                     false
                 }
             }
+            #[cfg(feature = "images")]
             AssetsLoader::GlobImages {
                 path_base,
                 path_glob,
@@ -405,8 +409,9 @@ impl Assets {
             AssetsLoader::Glob { cached, .. }
             | AssetsLoader::GlobDefer { cached, .. }
             | AssetsLoader::GlobStyles { cached, .. }
-            | AssetsLoader::GlobScripts { cached, .. }
-            | AssetsLoader::GlobImages { cached, .. } => cached.values().collect(),
+            | AssetsLoader::GlobScripts { cached, .. } => cached.values().collect(),
+            #[cfg(feature = "images")]
+            AssetsLoader::GlobImages { cached, .. } => cached.values().collect(),
         }
     }
 
@@ -415,8 +420,9 @@ impl Assets {
             AssetsLoader::Glob { path_base, .. }
             | AssetsLoader::GlobDefer { path_base, .. }
             | AssetsLoader::GlobStyles { path_base, .. }
-            | AssetsLoader::GlobScripts { path_base, .. }
-            | AssetsLoader::GlobImages { path_base, .. } => path_base,
+            | AssetsLoader::GlobScripts { path_base, .. } => path_base,
+            #[cfg(feature = "images")]
+            AssetsLoader::GlobImages { path_base, .. } => path_base,
         }
     }
 
@@ -425,8 +431,13 @@ impl Assets {
             AssetsLoader::Glob { cached, .. }
             | AssetsLoader::GlobDefer { cached, .. }
             | AssetsLoader::GlobStyles { cached, .. }
-            | AssetsLoader::GlobScripts { cached, .. }
-            | AssetsLoader::GlobImages { cached, .. } => {
+            | AssetsLoader::GlobScripts { cached, .. } => {
+                let before = cached.len();
+                cached.retain(|path, _| !obsolete.contains(path));
+                cached.len() < before
+            }
+            #[cfg(feature = "images")]
+            AssetsLoader::GlobImages { cached, .. } => {
                 let before = cached.len();
                 cached.retain(|path, _| !obsolete.contains(path));
                 cached.len() < before
