@@ -5,9 +5,10 @@ use std::sync::RwLock;
 use std::{collections::HashMap, sync::Arc};
 
 use camino::{Utf8Path, Utf8PathBuf};
+use sha2::{Digest, Sha256};
 
-use crate::loader::compile_esbuild;
-use crate::{ArcAny, Hash32, Input, InputItem, InputStylesheet};
+use crate::loader::{compile_esbuild, compile_svelte_html, compile_svelte_init};
+use crate::{ArcAny, Hash32, Input, InputItem, InputStylesheet, Svelte};
 
 type BoxFn8 = Box<dyn Fn(&[u8]) -> ArcAny + Send + Sync>;
 
@@ -75,6 +76,11 @@ enum AssetsLoader {
         path_glob: &'static str,
         cached: HashMap<Utf8PathBuf, InputItem>,
     },
+    GlobSvelte {
+        path_base: &'static str,
+        path_glob: &'static str,
+        cached: HashMap<Utf8PathBuf, InputItem>,
+    },
 }
 
 impl Assets {
@@ -122,6 +128,14 @@ impl Assets {
     #[cfg(feature = "images")]
     pub fn glob_images(path_base: &'static str, path_glob: &'static str) -> Self {
         Self(AssetsLoader::GlobImages {
+            path_base,
+            path_glob,
+            cached: HashMap::new(),
+        })
+    }
+
+    pub fn glob_svelte(path_base: &'static str, path_glob: &'static str) -> Self {
+        Self(AssetsLoader::GlobSvelte {
             path_base,
             path_glob,
             cached: HashMap::new(),
@@ -280,6 +294,46 @@ impl Assets {
                     );
                 }
             }
+            AssetsLoader::GlobSvelte {
+                path_base,
+                path_glob,
+                cached,
+            } => {
+                let pattern = Utf8Path::new(path_base).join(path_glob);
+                let iter = glob::glob(pattern.as_str()).unwrap();
+
+                let mut arr = vec![];
+                for entry in iter {
+                    let path = Utf8PathBuf::try_from(entry.unwrap()).unwrap();
+                    arr.push(path);
+                }
+
+                if arr.is_empty() {
+                    return;
+                }
+
+                for file_path in arr {
+                    let hash_id = Hash32::hash(file_path.as_str());
+                    let html = compile_svelte_html(&file_path, hash_id);
+                    let init = compile_svelte_init(&file_path, hash_id);
+
+                    let mut hasher = Sha256::new();
+                    hasher.update(&html);
+                    hasher.update(&init);
+                    let result_hash: Hash32 = hasher.finalize().into();
+
+                    cached.insert(
+                        file_path.to_owned(),
+                        InputItem {
+                            slug: file_path.clone(),
+                            file: file_path.clone(),
+                            hash: result_hash,
+                            data: Input::InMemory(Arc::new(Svelte(html, init))),
+                            info: None,
+                        },
+                    );
+                }
+            }
         }
     }
 
@@ -401,6 +455,14 @@ impl Assets {
 
                 changed
             }
+            AssetsLoader::GlobSvelte { path_base, .. } => {
+                if set.iter().any(|path| path.starts_with(&path_base)) {
+                    self.load();
+                    true
+                } else {
+                    false
+                }
+            }
         }
     }
 
@@ -409,7 +471,8 @@ impl Assets {
             AssetsLoader::Glob { cached, .. }
             | AssetsLoader::GlobDefer { cached, .. }
             | AssetsLoader::GlobStyles { cached, .. }
-            | AssetsLoader::GlobScripts { cached, .. } => cached.values().collect(),
+            | AssetsLoader::GlobScripts { cached, .. }
+            | AssetsLoader::GlobSvelte { cached, .. } => cached.values().collect(),
             #[cfg(feature = "images")]
             AssetsLoader::GlobImages { cached, .. } => cached.values().collect(),
         }
@@ -420,7 +483,8 @@ impl Assets {
             AssetsLoader::Glob { path_base, .. }
             | AssetsLoader::GlobDefer { path_base, .. }
             | AssetsLoader::GlobStyles { path_base, .. }
-            | AssetsLoader::GlobScripts { path_base, .. } => path_base,
+            | AssetsLoader::GlobScripts { path_base, .. }
+            | AssetsLoader::GlobSvelte { path_base, .. } => path_base,
             #[cfg(feature = "images")]
             AssetsLoader::GlobImages { path_base, .. } => path_base,
         }
@@ -431,7 +495,8 @@ impl Assets {
             AssetsLoader::Glob { cached, .. }
             | AssetsLoader::GlobDefer { cached, .. }
             | AssetsLoader::GlobStyles { cached, .. }
-            | AssetsLoader::GlobScripts { cached, .. } => {
+            | AssetsLoader::GlobScripts { cached, .. }
+            | AssetsLoader::GlobSvelte { cached, .. } => {
                 let before = cached.len();
                 cached.retain(|path, _| !obsolete.contains(path));
                 cached.len() < before

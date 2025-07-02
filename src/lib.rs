@@ -33,6 +33,9 @@ pub use crate::runtime::{Context, ViewPage};
 
 type ArcAny = Arc<dyn Any + Send + Sync>;
 
+#[derive(Debug)]
+pub struct Svelte(pub String, pub String);
+
 /// This value controls whether the library should run in the `Build` or the
 /// `Watch` mode. In `Build` mode, the library builds every page of the website
 /// just once and stops. In `Watch` mode, the library initializes the initial
@@ -170,6 +173,13 @@ where
         .collect::<Vec<_>>();
 
     progress.finish_with_message("Finished all tasks");
+
+    let temp: Vec<_> = pages.iter().collect();
+    for hook in &website.hooks {
+        match hook {
+            Hook::PostBuild(callback) => callback(&temp).unwrap(),
+        }
+    }
 
     // let builder = Arc::into_inner(builder).unwrap().into_inner().unwrap();
 
@@ -362,8 +372,8 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
         self
     }
 
-    pub fn add_task(mut self, fun: fn(Context<G>) -> TaskResult<TaskPaths>) -> Self {
-        self.tasks.push(Task::new(fun));
+    pub fn add_task(mut self, task: fn(Context<G>) -> TaskResult<TaskPaths>) -> Self {
+        self.tasks.push(Task::new(task));
         self
     }
 
