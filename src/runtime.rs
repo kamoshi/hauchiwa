@@ -309,6 +309,40 @@ socket.addEventListener("message", event => {{
             Err(HauchiwaError::AssetNotFound(path.to_string()))
         }
     }
+
+    pub fn get_svelte(&self, path: &str) -> Result<(&str, Utf8PathBuf), HauchiwaError> {
+        let input = self
+            .items
+            .iter()
+            .find(|item| item.file == path)
+            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
+
+        if let Input::Svelte(html, init) = &input.data {
+            let hash = Hash32::hash(init).to_hex();
+            let path_temp = Utf8Path::new(".cache/hash/").join(&hash);
+            let path_dist = Utf8Path::new("dist/hash/").join(&hash).with_extension("js");
+            let path_root = Utf8Path::new("/hash/").join(&hash).with_extension("js");
+
+            if !path_temp.exists() {
+                fs::create_dir_all(".cache/hash")
+                    .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
+                fs::write(&path_temp, init)
+                    .map_err(|e| BuilderError::FileWriteError(path_temp.clone(), e))?;
+            }
+
+            let dir = path_dist.parent().unwrap_or(&path_dist);
+            fs::create_dir_all(dir) //
+                .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
+            fs::copy(&path_temp, &path_dist) //
+                .map_err(|e| {
+                    BuilderError::FileCopyError(path_temp.clone(), path_dist.clone(), e)
+                })?;
+
+            Ok((html, path_root))
+        } else {
+            Err(HauchiwaError::AssetNotFound(path.to_string()))
+        }
+    }
 }
 
 fn build_deferred(

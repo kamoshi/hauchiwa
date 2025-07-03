@@ -8,7 +8,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::loader::{compile_esbuild, compile_svelte_html, compile_svelte_init};
-use crate::{ArcAny, Hash32, Input, InputItem, InputStylesheet, Svelte};
+use crate::{ArcAny, Hash32, Input, InputItem, InputStylesheet};
 
 type BoxFn8 = Box<dyn Fn(&[u8]) -> ArcAny + Send + Sync>;
 
@@ -313,9 +313,9 @@ impl Assets {
                 }
 
                 for file_path in arr {
-                    let hash_id = Hash32::hash(file_path.as_str());
-                    let html = compile_svelte_html(&file_path, hash_id);
-                    let init = compile_svelte_init(&file_path, hash_id);
+                    let hash_class = Hash32::hash(file_path.as_str());
+                    let html = compile_svelte_html(&file_path, hash_class);
+                    let init = compile_svelte_init(&file_path, hash_class);
 
                     let mut hasher = Sha256::new();
                     hasher.update(&html);
@@ -328,7 +328,7 @@ impl Assets {
                             slug: file_path.clone(),
                             file: file_path.clone(),
                             hash: result_hash,
-                            data: Input::InMemory(Arc::new(Svelte(html, init))),
+                            data: Input::Svelte(html, init),
                             info: None,
                         },
                     );

@@ -24,7 +24,7 @@ fn compile_esbuild(file: &Utf8Path) -> Vec<u8> {
     output.stdout
 }
 
-fn compile_svelte_html(file: &Utf8Path, hash_id: Hash32) -> String {
+fn compile_svelte_html(file: &Utf8Path, hash_class: Hash32) -> String {
     const SSR: &str = r#"
         import { build } from "npm:esbuild";
         import svelte from "npm:esbuild-svelte";
@@ -56,7 +56,7 @@ fn compile_svelte_html(file: &Utf8Path, hash_id: Hash32) -> String {
         const data = { out: "" };
         Comp(data);
 
-        const html = new TextEncoder().encode(`<div id="${hash}">${data.out}</div>`);
+        const html = new TextEncoder().encode(`<div class="_${hash}">${data.out}</div>`);
         await Deno.stdout.write(html);
         await Deno.stdout.close();
     "#;
@@ -69,7 +69,7 @@ fn compile_svelte_html(file: &Utf8Path, hash_id: Hash32) -> String {
         .arg("--allow-run")
         .arg("-")
         .arg(file.as_str())
-        .arg(hash_id.to_hex())
+        .arg(hash_class.to_hex())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -94,7 +94,7 @@ fn compile_svelte_html(file: &Utf8Path, hash_id: Hash32) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-fn compile_svelte_init(file: &Utf8Path, hash_id: Hash32) -> String {
+fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> String {
     const SSR: &str = r#"
         import * as path from "node:path";
         import { build } from "npm:esbuild";
@@ -107,9 +107,10 @@ fn compile_svelte_init(file: &Utf8Path, hash_id: Hash32) -> String {
             import { hydrate } from "svelte";
             import App from ${JSON.stringify(file)};
 
-            export default hydrate(App, {
-                target: document.getElementById('${hash}')!
-            });
+            const query = document.querySelectorAll('._${hash}');
+            for (const target of query) {
+                hydrate(App, { target });
+            }
         `;
 
         const ssr = await build({
@@ -120,7 +121,7 @@ fn compile_svelte_init(file: &Utf8Path, hash_id: Hash32) -> String {
                 loader: "ts",
             },
             platform: "browser",
-            format: "iife",
+            format: "esm",
             bundle: true,
             minify: true,
             write: false,
@@ -148,7 +149,7 @@ fn compile_svelte_init(file: &Utf8Path, hash_id: Hash32) -> String {
         .arg("--allow-run")
         .arg("-")
         .arg(file.canonicalize().unwrap())
-        .arg(hash_id.to_hex())
+        .arg(hash_class.to_hex())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

@@ -33,9 +33,6 @@ pub use crate::runtime::{Context, ViewPage};
 
 type ArcAny = Arc<dyn Any + Send + Sync>;
 
-#[derive(Debug)]
-pub struct Svelte(pub String, pub String);
-
 /// This value controls whether the library should run in the `Build` or the
 /// `Watch` mode. In `Build` mode, the library builds every page of the website
 /// just once and stops. In `Watch` mode, the library initializes the initial
@@ -494,6 +491,7 @@ enum Input {
     Script,
     #[cfg(feature = "images")]
     Image,
+    Svelte(String, String),
 }
 
 #[derive(Debug, Clone)]
