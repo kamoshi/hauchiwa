@@ -1,6 +1,3 @@
-#[cfg(feature = "images")]
-mod image;
-
 use std::any::{TypeId, type_name};
 use std::fs;
 use std::ops::Deref;
@@ -193,32 +190,6 @@ socket.addEventListener("message", event => {{
             .find(|item| item.file == path)
             .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))
     }
-}
-
-pub fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaError> {
-    let hash = hash.to_hex();
-    let path_root = Utf8Path::new("/hash/img/").join(&hash);
-    let path_hash = Utf8Path::new(".cache/hash/img/").join(&hash);
-    let path_dist = Utf8Path::new("dist/hash/img/").join(&hash);
-
-    // If this hash exists it means the work is already done.
-    if !path_hash.exists() {
-        let buffer = fs::read(file) //
-            .map_err(|e| BuilderError::FileReadError(file.to_path_buf(), e))?;
-        let buffer = image::process_image(&buffer);
-
-        fs::create_dir_all(".cache/hash/img/")
-            .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
-        fs::write(&path_hash, buffer).unwrap();
-    }
-
-    let dir = path_dist.parent().unwrap_or(&path_dist);
-    fs::create_dir_all(dir) //
-        .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
-    fs::copy(&path_hash, &path_dist)
-        .map_err(|e| BuilderError::FileCopyError(path_hash.to_owned(), path_dist.clone(), e))?;
-
-    Ok(path_root)
 }
 
 pub fn build_deferred(

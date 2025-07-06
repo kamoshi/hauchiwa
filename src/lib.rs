@@ -6,6 +6,7 @@ mod gitmap;
 mod io;
 mod loader;
 pub mod md;
+pub mod plugin;
 mod runtime;
 mod watch;
 
@@ -37,10 +38,6 @@ pub struct Script {
 }
 
 pub struct Stylesheet {
-    pub path: Utf8PathBuf,
-}
-
-pub struct Image {
     pub path: Utf8PathBuf,
 }
 
