@@ -1,14 +1,16 @@
+use std::any::{TypeId, type_name};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::fs;
-use std::sync::RwLock;
+use std::sync::{LazyLock, RwLock};
 use std::{collections::HashMap, sync::Arc};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::loader::{compile_esbuild, compile_svelte_html, compile_svelte_init};
-use crate::{ArcAny, Hash32, Input, InputItem, InputStylesheet};
+use crate::runtime::{build_deferred, write_hashed_data};
+use crate::{ArcAny, Hash32, Input, InputItem, Script, Stylesheet, Svelte};
 
 type BoxFn8 = Box<dyn Fn(&[u8]) -> ArcAny + Send + Sync>;
 
@@ -21,12 +23,12 @@ impl Debug for AssetsGlobFn {
 }
 
 #[derive(Debug)]
-pub(crate) struct Bookkeeping {
+pub(crate) struct BookkeepingDeferred {
     pub(crate) func: fn(&[u8]) -> Vec<u8>,
     pub(crate) done: RwLock<HashMap<Hash32, Hash32>>,
 }
 
-impl Bookkeeping {
+impl BookkeepingDeferred {
     fn new(func: fn(&[u8]) -> Vec<u8>) -> Self {
         Self {
             func,
@@ -43,10 +45,6 @@ impl Bookkeeping {
     }
 }
 
-#[derive(Debug)]
-pub struct Assets(AssetsLoader);
-
-#[derive(Debug)]
 enum AssetsLoader {
     Glob {
         path_base: &'static str,
@@ -58,7 +56,7 @@ enum AssetsLoader {
         path_base: &'static str,
         path_glob: &'static str,
         cached: HashMap<Utf8PathBuf, InputItem>,
-        bookkeeping: Arc<Bookkeeping>,
+        bookkeeping: Arc<BookkeepingDeferred>,
     },
     GlobScripts {
         path_base: &'static str,
@@ -71,7 +69,7 @@ enum AssetsLoader {
         cached: HashMap<Utf8PathBuf, InputItem>,
     },
     #[cfg(feature = "images")]
-    GlobImages {
+    DeferredTwoStage {
         path_base: &'static str,
         path_glob: &'static str,
         cached: HashMap<Utf8PathBuf, InputItem>,
@@ -83,17 +81,27 @@ enum AssetsLoader {
     },
 }
 
+pub struct Assets {
+    refl_type: TypeId,
+    refl_name: &'static str,
+    kind: AssetsLoader,
+}
+
 impl Assets {
     pub fn glob<T>(path_base: &'static str, path_glob: &'static str, call: fn(&[u8]) -> T) -> Self
     where
         T: Send + Sync + 'static,
     {
-        Self(AssetsLoader::Glob {
-            path_base,
-            path_glob,
-            func: AssetsGlobFn(Box::new(move |data| Arc::new(call(data)))),
-            cached: HashMap::new(),
-        })
+        Self {
+            refl_type: TypeId::of::<T>(),
+            refl_name: type_name::<T>(),
+            kind: AssetsLoader::Glob {
+                path_base,
+                path_glob,
+                func: AssetsGlobFn(Box::new(move |data| Arc::new(call(data)))),
+                cached: HashMap::new(),
+            },
+        }
     }
 
     pub fn glob_defer(
@@ -101,50 +109,70 @@ impl Assets {
         path_glob: &'static str,
         func: fn(&[u8]) -> Vec<u8>,
     ) -> Self {
-        Self(AssetsLoader::GlobDefer {
-            path_base,
-            path_glob,
-            cached: HashMap::new(),
-            bookkeeping: Arc::new(Bookkeeping::new(func)),
-        })
+        Self {
+            refl_type: TypeId::of::<Utf8PathBuf>(),
+            refl_name: type_name::<Utf8PathBuf>(),
+            kind: AssetsLoader::GlobDefer {
+                path_base,
+                path_glob,
+                cached: HashMap::new(),
+                bookkeeping: Arc::new(BookkeepingDeferred::new(func)),
+            },
+        }
     }
 
     pub fn glob_style(path_base: &'static str, path_glob: &'static str) -> Self {
-        Self(AssetsLoader::GlobStyles {
-            path_base,
-            path_glob,
-            cached: HashMap::new(),
-        })
+        Self {
+            refl_type: TypeId::of::<Stylesheet>(),
+            refl_name: type_name::<Stylesheet>(),
+            kind: AssetsLoader::GlobStyles {
+                path_base,
+                path_glob,
+                cached: HashMap::new(),
+            },
+        }
     }
 
     pub fn glob_scripts(path_base: &'static str, path_glob: &'static str) -> Self {
-        Self(AssetsLoader::GlobScripts {
-            path_base,
-            path_glob,
-            cached: HashMap::new(),
-        })
+        Self {
+            refl_type: TypeId::of::<Script>(),
+            refl_name: type_name::<Script>(),
+            kind: AssetsLoader::GlobScripts {
+                path_base,
+                path_glob,
+                cached: HashMap::new(),
+            },
+        }
     }
 
     #[cfg(feature = "images")]
     pub fn glob_images(path_base: &'static str, path_glob: &'static str) -> Self {
-        Self(AssetsLoader::GlobImages {
-            path_base,
-            path_glob,
-            cached: HashMap::new(),
-        })
+        Self {
+            refl_type: TypeId::of::<()>(),
+            refl_name: type_name::<()>(),
+            kind: AssetsLoader::DeferredTwoStage {
+                path_base,
+                path_glob,
+                cached: HashMap::new(),
+            },
+        }
     }
 
     pub fn glob_svelte(path_base: &'static str, path_glob: &'static str) -> Self {
-        Self(AssetsLoader::GlobSvelte {
-            path_base,
-            path_glob,
-            cached: HashMap::new(),
-        })
+        Self {
+            refl_type: TypeId::of::<Svelte>(),
+            refl_name: type_name::<Svelte>(),
+            kind: AssetsLoader::GlobSvelte {
+                path_base,
+                path_glob,
+                cached: HashMap::new(),
+            },
+        }
     }
 
     /// Load all assets which are matched by the defined glob.
     pub(crate) fn load(&mut self) {
-        match &mut self.0 {
+        match &mut self.kind {
             AssetsLoader::Glob {
                 path_base,
                 path_glob,
@@ -164,10 +192,12 @@ impl Assets {
                     cached.insert(
                         entry.to_owned(),
                         InputItem {
+                            refl_type: self.refl_type,
+                            refl_name: self.refl_name,
                             hash,
                             file: entry.to_owned(),
                             slug: entry.strip_prefix(&path_base).unwrap_or(&entry).to_owned(),
-                            data: Input::InMemory(data),
+                            data: Input::Just(data),
                             info: None,
                         },
                     );
@@ -192,10 +222,19 @@ impl Assets {
                     cached.insert(
                         entry.to_owned(),
                         InputItem {
+                            refl_type: self.refl_type,
+                            refl_name: self.refl_name,
                             hash,
                             file: entry.to_owned(),
                             slug: entry.strip_prefix(&path_base).unwrap_or(&entry).to_owned(),
-                            data: Input::OnDisk(bookkeeping.clone()),
+                            data: {
+                                let bookkeeping = bookkeeping.clone();
+
+                                Input::Lazy(LazyLock::new(Box::new(move || {
+                                    let path = build_deferred(hash, &entry, bookkeeping).unwrap();
+                                    Arc::new(path)
+                                })))
+                            },
                             info: None,
                         },
                     );
@@ -218,10 +257,18 @@ impl Assets {
                     cached.insert(
                         entry.to_owned(),
                         InputItem {
+                            refl_type: self.refl_type,
+                            refl_name: self.refl_name,
                             hash: Hash32::hash(&stylesheet),
                             file: entry.to_owned(),
                             slug: entry.strip_prefix(&path_base).unwrap_or(&entry).to_owned(),
-                            data: Input::Stylesheet(InputStylesheet { stylesheet }),
+                            data: Input::Lazy(LazyLock::new(Box::new(move || {
+                                let hash = Hash32::hash(&stylesheet);
+                                let path =
+                                    write_hashed_data(stylesheet.as_bytes(), hash, "css").unwrap();
+
+                                Arc::new(Stylesheet { path })
+                            }))),
                             info: None,
                         },
                     );
@@ -248,28 +295,28 @@ impl Assets {
                 for file_path in arr {
                     let result = compile_esbuild(&file_path);
                     let result_hash = Hash32::hash(&result);
-                    let result_hash_hex = result_hash.to_hex();
-
-                    let path_dist = Utf8Path::new(".cache/hash").join(&result_hash_hex);
-
-                    let dir = path_dist.parent().unwrap_or(&path_dist);
-                    fs::create_dir_all(dir).unwrap();
-                    fs::write(&path_dist, result).unwrap();
 
                     cached.insert(
                         file_path.to_owned(),
                         InputItem {
+                            refl_type: self.refl_type,
+                            refl_name: self.refl_name,
                             slug: file_path.clone(),
                             file: file_path.clone(),
                             hash: result_hash,
-                            data: Input::Script,
+                            data: Input::Lazy(LazyLock::new(Box::new(move || {
+                                let hash = Hash32::hash(&result);
+                                let path = write_hashed_data(&result, hash, "js").unwrap();
+
+                                Arc::new(Script { path })
+                            }))),
                             info: None,
                         },
                     );
                 }
             }
             #[cfg(feature = "images")]
-            AssetsLoader::GlobImages {
+            AssetsLoader::DeferredTwoStage {
                 path_base,
                 path_glob,
                 cached,
@@ -285,10 +332,17 @@ impl Assets {
                     cached.insert(
                         entry.to_owned(),
                         InputItem {
+                            refl_type: self.refl_type,
+                            refl_name: self.refl_name,
                             hash,
                             file: entry.to_owned(),
                             slug: entry.strip_prefix(&path_base).unwrap_or(&entry).to_owned(),
-                            data: Input::Image,
+                            data: Input::Lazy(LazyLock::new(Box::new(move || {
+                                use crate::{Image, runtime::build_image};
+
+                                let path = build_image(hash, &entry).unwrap();
+                                Arc::new(Image { path })
+                            }))),
                             info: None,
                         },
                     );
@@ -325,10 +379,18 @@ impl Assets {
                     cached.insert(
                         file_path.to_owned(),
                         InputItem {
+                            refl_type: self.refl_type,
+                            refl_name: self.refl_name,
                             slug: file_path.clone(),
                             file: file_path.clone(),
                             hash: result_hash,
-                            data: Input::Svelte(html, init),
+                            data: Input::Lazy(LazyLock::new(Box::new(move || {
+                                let hash = Hash32::hash(&init);
+                                let init = write_hashed_data(init.as_bytes(), hash, "js").unwrap();
+                                let html = html.to_owned();
+
+                                Arc::new(Svelte { html, init })
+                            }))),
                             info: None,
                         },
                     );
@@ -338,7 +400,7 @@ impl Assets {
     }
 
     pub(crate) fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> bool {
-        match &mut self.0 {
+        match &mut self.kind {
             AssetsLoader::Glob {
                 path_base,
                 path_glob,
@@ -361,10 +423,12 @@ impl Assets {
                     cached.insert(
                         entry.to_owned(),
                         InputItem {
+                            refl_type: self.refl_type,
+                            refl_name: self.refl_name,
                             hash,
                             file: entry.to_owned(),
                             slug: entry.strip_prefix(&path_base).unwrap_or(entry).to_owned(),
-                            data: Input::InMemory(data),
+                            data: Input::Just(data),
                             info: None,
                         },
                     );
@@ -394,10 +458,20 @@ impl Assets {
                     cached.insert(
                         entry.to_owned(),
                         InputItem {
+                            refl_type: self.refl_type,
+                            refl_name: self.refl_name,
                             hash,
                             file: entry.to_owned(),
-                            slug: entry.strip_prefix(&path_base).unwrap_or(entry).to_owned(),
-                            data: Input::OnDisk(bookkeeping.clone()),
+                            slug: entry.strip_prefix(&path_base).unwrap_or(&entry).to_owned(),
+                            data: {
+                                let entry = entry.to_owned();
+                                let bookkeeping = bookkeeping.clone();
+
+                                Input::Lazy(LazyLock::new(Box::new(move || {
+                                    let path = build_deferred(hash, &entry, bookkeeping).unwrap();
+                                    Arc::new(path)
+                                })))
+                            },
                             info: None,
                         },
                     );
@@ -423,7 +497,7 @@ impl Assets {
                 }
             }
             #[cfg(feature = "images")]
-            AssetsLoader::GlobImages {
+            AssetsLoader::DeferredTwoStage {
                 path_base,
                 path_glob,
                 cached,
@@ -443,10 +517,20 @@ impl Assets {
                     cached.insert(
                         entry.to_owned(),
                         InputItem {
+                            refl_type: self.refl_type,
+                            refl_name: self.refl_name,
                             hash,
                             file: entry.to_owned(),
                             slug: entry.strip_prefix(&path_base).unwrap_or(entry).to_owned(),
-                            data: Input::Image,
+                            data: {
+                                use crate::{Image, runtime::build_image};
+
+                                let entry = entry.clone();
+                                Input::Lazy(LazyLock::new(Box::new(move || {
+                                    let path = build_image(hash, &entry).unwrap();
+                                    Arc::new(Image { path })
+                                })))
+                            },
                             info: None,
                         },
                     );
@@ -467,31 +551,31 @@ impl Assets {
     }
 
     pub(crate) fn items(&self) -> Vec<&InputItem> {
-        match &self.0 {
+        match &self.kind {
             AssetsLoader::Glob { cached, .. }
             | AssetsLoader::GlobDefer { cached, .. }
             | AssetsLoader::GlobStyles { cached, .. }
             | AssetsLoader::GlobScripts { cached, .. }
             | AssetsLoader::GlobSvelte { cached, .. } => cached.values().collect(),
             #[cfg(feature = "images")]
-            AssetsLoader::GlobImages { cached, .. } => cached.values().collect(),
+            AssetsLoader::DeferredTwoStage { cached, .. } => cached.values().collect(),
         }
     }
 
     pub(crate) fn path_base(&self) -> &'static str {
-        match &self.0 {
+        match &self.kind {
             AssetsLoader::Glob { path_base, .. }
             | AssetsLoader::GlobDefer { path_base, .. }
             | AssetsLoader::GlobStyles { path_base, .. }
             | AssetsLoader::GlobScripts { path_base, .. }
             | AssetsLoader::GlobSvelte { path_base, .. } => path_base,
             #[cfg(feature = "images")]
-            AssetsLoader::GlobImages { path_base, .. } => path_base,
+            AssetsLoader::DeferredTwoStage { path_base, .. } => path_base,
         }
     }
 
     pub(crate) fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool {
-        match &mut self.0 {
+        match &mut self.kind {
             AssetsLoader::Glob { cached, .. }
             | AssetsLoader::GlobDefer { cached, .. }
             | AssetsLoader::GlobStyles { cached, .. }
@@ -502,7 +586,7 @@ impl Assets {
                 cached.len() < before
             }
             #[cfg(feature = "images")]
-            AssetsLoader::GlobImages { cached, .. } => {
+            AssetsLoader::DeferredTwoStage { cached, .. } => {
                 let before = cached.len();
                 cached.retain(|path, _| !obsolete.contains(path));
                 cached.len() < before

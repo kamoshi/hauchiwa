@@ -42,7 +42,7 @@ fn compile_svelte_html(file: &Utf8Path, hash_class: Hash32) -> String {
             conditions: ["svelte"],
             plugins: [
                 svelte({
-                    compilerOptions: { generate: "ssr" },
+                    compilerOptions: { generate: "server" },
                     css: false,
                     emitCss: false,
                 }),

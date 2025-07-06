@@ -1,10 +1,10 @@
+use std::any::{TypeId, type_name};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs;
 use std::sync::Arc;
 
 use camino::{Utf8Path, Utf8PathBuf};
-use serde::Deserialize;
 
 use crate::{ArcAny, GitRepo, Hash32, Input, InputContent, InputItem, error::*};
 
@@ -17,7 +17,7 @@ struct ContentFn(ContentFnPtr);
 impl ContentFn {
     fn new<D>(parse_matter: fn(&str) -> Result<(D, String), anyhow::Error>) -> Self
     where
-        D: for<'de> Deserialize<'de> + Send + Sync + 'static,
+        D: Send + Sync + 'static,
     {
         Self(Arc::new(move |content| {
             let (meta, data) = parse_matter(content).map_err(LoaderFileCallbackError)?;
@@ -37,13 +37,13 @@ impl Debug for ContentFn {
 }
 
 /// How to load data?
-#[derive(Debug)]
 enum ContentStrategy {
     Glob(LoaderGlob),
 }
 
-#[derive(Debug)]
 struct LoaderGlob {
+    refl_type: TypeId,
+    refl_name: &'static str,
     base: &'static str,
     glob: &'static str,
     init: ContentFn,
@@ -127,6 +127,8 @@ impl LoaderGlob {
         let slug = area.strip_prefix(self.base).unwrap_or(&path).to_owned();
 
         Ok(Some(InputItem {
+            refl_type: self.refl_type,
+            refl_name: self.refl_name,
             hash,
             info: repo.files.get(path.as_str()).cloned(),
             file: path,
@@ -144,7 +146,6 @@ impl LoaderGlob {
 /// assets. This is useful when you want to colocate assets and images next to
 /// the articles. A common use case is to directly reference the images relative
 /// to the markdown file.
-#[derive(Debug)]
 pub struct Content {
     /// Data loading strategy
     loader: ContentStrategy,
@@ -172,10 +173,12 @@ impl Content {
         parse_matter: fn(&str) -> Result<(D, String), anyhow::Error>,
     ) -> Self
     where
-        D: for<'de> Deserialize<'de> + Send + Sync + 'static,
+        D: Send + Sync + 'static,
     {
         Self {
             loader: ContentStrategy::Glob(LoaderGlob {
+                refl_type: TypeId::of::<D>(),
+                refl_name: type_name::<D>(),
                 base: path_base,
                 glob: path_glob,
                 init: ContentFn::new(parse_matter),

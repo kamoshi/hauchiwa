@@ -9,11 +9,11 @@ pub mod md;
 mod runtime;
 mod watch;
 
-use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::any::{Any, TypeId};
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::fs;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -27,11 +27,27 @@ use sha2::{Digest, Sha256};
 pub use crate::error::*;
 pub use crate::gitmap::{GitInfo, GitRepo};
 pub use crate::loader::assets::Assets;
-use crate::loader::assets::Bookkeeping;
 pub use crate::loader::content::Content;
 pub use crate::runtime::{Context, ViewPage};
 
 type ArcAny = Arc<dyn Any + Send + Sync>;
+
+pub struct Script {
+    pub path: Utf8PathBuf,
+}
+
+pub struct Stylesheet {
+    pub path: Utf8PathBuf,
+}
+
+pub struct Image {
+    pub path: Utf8PathBuf,
+}
+
+pub struct Svelte {
+    pub html: String,
+    pub init: Utf8PathBuf,
+}
 
 /// This value controls whether the library should run in the `Build` or the
 /// `Watch` mode. In `Build` mode, the library builds every page of the website
@@ -145,8 +161,6 @@ where
         )
         .collect::<Vec<_>>();
 
-    let builder = Arc::new(RwLock::new(Builder::new()));
-
     let total = website.tasks.len();
     let progress = ProgressBar::new(total as u64);
     progress.set_style(
@@ -161,7 +175,7 @@ where
     let pages = website
         .tasks
         .par_iter()
-        .map(|task| task.call(Context::new(globals, builder.clone(), &items)))
+        .map(|task| task.call(Context::new(globals, &items)))
         .progress_with(progress.clone())
         .collect::<Result<Vec<_>, _>>()
         .unwrap()
@@ -204,7 +218,6 @@ where
 ///
 /// The `G` type parameter is the global data container accessible in every page renderer as `ctx.data`,
 /// though it can be replaced with the `()` Unit if you don't need to pass any data.
-#[derive(Debug)]
 pub struct Website<G: Send + Sync> {
     /// Rendered assets and content are outputted to this directory.
     /// All collections added to this website.
@@ -339,7 +352,6 @@ impl<G: Send + Sync + 'static> Website<G> {
 // }
 
 /// A builder struct for creating a `Website` with specified settings.
-#[derive(Debug)]
 pub struct WebsiteConfiguration<G: Send + Sync> {
     loaders_content: Vec<Content>,
     loaders_assets: Vec<Assets>,
@@ -470,32 +482,26 @@ impl Debug for Hook {
 // *         Scheduler          *
 // ******************************
 
-#[derive(Debug, Clone)]
+type Dynamic = Arc<dyn Any + Send + Sync>;
+
+#[derive(Debug)]
 struct InputContent {
     area: Utf8PathBuf,
-    meta: Arc<dyn Any + Send + Sync>,
+    meta: Dynamic,
     text: String,
 }
 
-#[derive(Debug, Clone)]
-struct InputStylesheet {
-    stylesheet: String,
-}
-
-#[derive(Debug, Clone)]
 enum Input {
     Content(InputContent),
-    InMemory(Arc<dyn Any + Send + Sync>),
-    OnDisk(Arc<Bookkeeping>),
-    Stylesheet(InputStylesheet),
-    Script,
-    #[cfg(feature = "images")]
-    Image,
-    Svelte(String, String),
+    /// Just the item, stored in memory, readily accessible.
+    Just(Dynamic),
+    /// Item computed on demand, cached in memory.
+    Lazy(LazyLock<Dynamic, Box<dyn (FnOnce() -> Dynamic) + Send + Sync>>),
 }
 
-#[derive(Debug, Clone)]
 struct InputItem {
+    refl_type: TypeId,
+    refl_name: &'static str,
     hash: Hash32,
     file: Utf8PathBuf,
     slug: Utf8PathBuf,
@@ -523,46 +529,3 @@ struct InputItem {
 //     urls.write(&mut buf).expect("failed to write XML");
 //     buf
 // }
-
-// ******************************
-// *          Builder           *
-// ******************************
-
-#[derive(Debug)]
-struct Builder {
-    /// Paths to files in dist
-    dist: HashMap<Hash32, Utf8PathBuf>,
-}
-
-impl Builder {
-    fn new() -> Self {
-        Self {
-            dist: HashMap::new(),
-        }
-    }
-
-    fn check(&self, hash: Hash32) -> Option<Utf8PathBuf> {
-        self.dist.get(&hash).cloned()
-    }
-
-    fn request_stylesheet(
-        &mut self,
-        hash: Hash32,
-        style: &InputStylesheet,
-    ) -> Result<Utf8PathBuf, BuilderError> {
-        let hash_hex = hash.to_hex();
-        let path = Utf8Path::new("hash").join(&hash_hex).with_extension("css");
-
-        let path_root = Utf8Path::new("/").join(&path);
-        let path_dist = Utf8Path::new("dist").join(&path);
-
-        let dir = path_dist.parent().unwrap_or(&path_dist);
-        fs::create_dir_all(dir) //
-            .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
-        fs::write(&path_dist, &style.stylesheet)
-            .map_err(|e| BuilderError::FileWriteError(path_dist.clone(), e))?;
-
-        self.dist.insert(hash, path_root.clone());
-        Ok(path_root)
-    }
-}

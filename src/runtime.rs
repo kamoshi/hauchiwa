@@ -1,13 +1,15 @@
 #[cfg(feature = "images")]
 mod image;
 
+use std::any::{TypeId, type_name};
 use std::fs;
-use std::sync::{Arc, RwLock};
+use std::ops::Deref;
+use std::sync::Arc;
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::loader::assets::Bookkeeping;
-use crate::{Builder, GitInfo, Globals, Hash32, InputItem};
+use crate::loader::assets::BookkeepingDeferred;
+use crate::{GitInfo, Globals, Hash32, InputItem};
 use crate::{Input, error::*};
 
 const GLOB_OPTS: glob::MatchOptions = glob::MatchOptions {
@@ -34,8 +36,6 @@ where
 {
     /// Global data for the current build.
     globals: &'a Globals<G>,
-    /// Builder allows scheduling build requests.
-    builder: Arc<RwLock<Builder>>,
     /// Every single input.
     items: &'a Vec<&'a InputItem>,
 }
@@ -44,16 +44,8 @@ impl<'a, G> Context<'a, G>
 where
     G: Send + Sync,
 {
-    pub(crate) fn new(
-        globals: &'a Globals<G>,
-        builder: Arc<RwLock<Builder>>,
-        items: &'a Vec<&'a InputItem>,
-    ) -> Self {
-        Self {
-            globals,
-            builder,
-            items,
-        }
+    pub(crate) fn new(globals: &'a Globals<G>, items: &'a Vec<&'a InputItem>) -> Self {
+        Self { globals, items }
     }
 
     /// Retrieve the globals.
@@ -149,206 +141,90 @@ socket.addEventListener("message", event => {{
         Ok(query)
     }
 
-    pub fn glob_asset<T>(&self, pattern: &str) -> Result<Option<&T>, HauchiwaError>
-    where
-        T: 'static,
-    {
+    /// Find the first on‐disk asset whose path matches `pattern`. This asset
+    /// will be built only on request and cached.
+    pub fn glob<T: 'static>(&self, pattern: &str) -> Result<Option<&T>, HauchiwaError> {
+        let refl_type = TypeId::of::<T>();
         let glob = glob::Pattern::new(pattern)?;
-
-        let found = self
+        let next = self
             .items
             .iter()
-            .filter(|item| glob.matches_path_with(item.file.as_std_path(), GLOB_OPTS))
-            .find_map(|item| match &item.data {
-                Input::InMemory(any) => {
-                    let data = any.downcast_ref::<T>()?;
-                    let file = item.file.clone();
-                    let hash = item.hash;
-                    Some((data, file, hash))
-                }
-                _ => None,
-            });
+            .filter(|item| {
+                item.refl_type == refl_type
+                    && glob.matches_path_with(item.file.as_std_path(), GLOB_OPTS)
+            })
+            .map(Deref::deref)
+            .next();
 
-        if let Some((data, file, hash)) = found {
-            return Ok(Some(data));
-        }
-
-        Ok(None)
+        Ok(match next {
+            Some(item) => match &item.data {
+                Input::Content(content) => content.meta.downcast_ref(),
+                Input::Just(just) => just.downcast_ref(),
+                Input::Lazy(lazy) => lazy.downcast_ref(),
+            },
+            None => None,
+        })
     }
 
-    /// Find the first on‐disk asset whose path matches `pattern`. This asset
-    /// will be built only on request and cached by hash.
-    pub fn glob_asset_deferred(&self, pattern: &str) -> Result<Option<Utf8PathBuf>, HauchiwaError> {
-        let glob = glob::Pattern::new(pattern)?;
-        let found = self.items.iter().find_map(|item| {
-            if !glob.matches_path_with(item.file.as_std_path(), GLOB_OPTS) {
-                return None;
-            }
+    pub fn get<T: 'static>(&self, path: &str) -> Result<&T, HauchiwaError> {
+        let item = self.find_item_by_path(path)?;
 
-            match &item.data {
-                Input::OnDisk(bookkeeping) => Some((item, bookkeeping)),
-                _ => None,
-            }
-        });
-
-        let (item, bookkeeping) = match found {
-            Some(found) => found,
-            None => return Ok(None),
+        let data = match &item.data {
+            Input::Content(content) => content.meta.downcast_ref(),
+            Input::Just(just) => just.downcast_ref(),
+            Input::Lazy(lazy) => lazy.downcast_ref(),
         };
 
-        let path = build_deferred(item.hash, &item.file, bookkeeping.clone())?;
-        Ok(Some(path))
-    }
-
-    /// Get style by absolute file path
-    pub fn get_style(&self, path: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaError> {
-        let item = self
-            .items
-            .iter()
-            .find(|item| item.file == path)
-            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
-
-        if let Input::Stylesheet(style) = &item.data {
-            let path = self
-                .builder
-                .read()
-                .map_err(|_| HauchiwaError::LockRead)?
-                .check(item.hash);
-
-            let path = match path {
-                Some(path) => path,
-                None => self
-                    .builder
-                    .write()
-                    .map_err(|_| HauchiwaError::LockWrite)?
-                    .request_stylesheet(item.hash, style)?,
-            };
-
-            Ok(path)
-        } else {
-            Err(HauchiwaError::AssetNotFound(path.to_string()))
-        }
-    }
-
-    /// Get path to a generated asset file.
-    pub fn get_asset_deferred(&self, path: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaError> {
-        let input = self
-            .items
-            .iter()
-            .find(|item| item.file == path)
-            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
-
-        if let Input::OnDisk(bookkeeping) = &input.data {
-            let res = build_deferred(input.hash, &input.file, bookkeeping.clone())?;
-            Ok(res)
-        } else {
-            Err(HauchiwaError::AssetNotFound(path.to_string()))
-        }
-    }
-
-    pub fn get_script(&self, path: &str) -> Result<Utf8PathBuf, HauchiwaError> {
-        let input = self
-            .items
-            .iter()
-            .find(|item| item.file == path)
-            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
-
-        if let Input::Script = &input.data {
-            let hash = input.hash.to_hex();
-            let path_hash = Utf8Path::new(".cache/hash/").join(&hash);
-            let path_dist = Utf8Path::new("dist/hash/").join(&hash).with_extension("js");
-            let path_root = Utf8Path::new("/hash/").join(&hash).with_extension("js");
-
-            let dir = path_dist.parent().unwrap_or(&path_dist);
-            fs::create_dir_all(dir) //
-                .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
-            fs::copy(&path_hash, &path_dist).map_err(|e| {
-                BuilderError::FileCopyError(path_hash.to_owned(), path_dist.clone(), e)
-            })?;
-
-            Ok(path_root)
-        } else {
-            Err(HauchiwaError::AssetNotFound(path.to_string()))
-        }
-    }
-
-    #[cfg(feature = "images")]
-    pub fn get_image(&self, path: &str) -> Result<Utf8PathBuf, HauchiwaError> {
-        let input = self
-            .items
-            .iter()
-            .find(|item| item.file == path)
-            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
-
-        if let Input::Image = &input.data {
-            let hash = input.hash.to_hex();
-            let path_root = Utf8Path::new("/hash/img/").join(&hash);
-            let path_hash = Utf8Path::new(".cache/hash/img/").join(&hash);
-            let path_dist = Utf8Path::new("dist/hash/img/").join(&hash);
-
-            // If this hash exists it means the work is already done.
-            if !path_hash.exists() {
-                let buffer = fs::read(&input.file)
-                    .map_err(|e| BuilderError::FileReadError(input.file.to_path_buf(), e))?;
-                let buffer = image::process_image(&buffer);
-
-                fs::create_dir_all(".cache/hash/img/")
-                    .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
-                fs::write(&path_hash, buffer).unwrap();
+        match data {
+            Some(data) => Ok(data),
+            None => {
+                let have = item.refl_name;
+                let need = type_name::<T>();
+                eprintln!("Requested {need}, but received {have}");
+                todo!()
             }
-
-            let dir = path_dist.parent().unwrap_or(&path_dist);
-            fs::create_dir_all(dir) //
-                .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
-            fs::copy(&path_hash, &path_dist).map_err(|e| {
-                BuilderError::FileCopyError(path_hash.to_owned(), path_dist.clone(), e)
-            })?;
-
-            Ok(path_root)
-        } else {
-            Err(HauchiwaError::AssetNotFound(path.to_string()))
         }
     }
 
-    pub fn get_svelte(&self, path: &str) -> Result<(&str, Utf8PathBuf), HauchiwaError> {
-        let input = self
-            .items
+    fn find_item_by_path(&self, path: &str) -> Result<&InputItem, HauchiwaError> {
+        self.items
             .iter()
+            .map(Deref::deref)
             .find(|item| item.file == path)
-            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
-
-        if let Input::Svelte(html, init) = &input.data {
-            let hash = Hash32::hash(init).to_hex();
-            let path_temp = Utf8Path::new(".cache/hash/").join(&hash);
-            let path_dist = Utf8Path::new("dist/hash/").join(&hash).with_extension("js");
-            let path_root = Utf8Path::new("/hash/").join(&hash).with_extension("js");
-
-            if !path_temp.exists() {
-                fs::create_dir_all(".cache/hash")
-                    .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
-                fs::write(&path_temp, init)
-                    .map_err(|e| BuilderError::FileWriteError(path_temp.clone(), e))?;
-            }
-
-            let dir = path_dist.parent().unwrap_or(&path_dist);
-            fs::create_dir_all(dir) //
-                .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
-            fs::copy(&path_temp, &path_dist) //
-                .map_err(|e| {
-                    BuilderError::FileCopyError(path_temp.clone(), path_dist.clone(), e)
-                })?;
-
-            Ok((html, path_root))
-        } else {
-            Err(HauchiwaError::AssetNotFound(path.to_string()))
-        }
+            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))
     }
 }
 
-fn build_deferred(
+pub fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaError> {
+    let hash = hash.to_hex();
+    let path_root = Utf8Path::new("/hash/img/").join(&hash);
+    let path_hash = Utf8Path::new(".cache/hash/img/").join(&hash);
+    let path_dist = Utf8Path::new("dist/hash/img/").join(&hash);
+
+    // If this hash exists it means the work is already done.
+    if !path_hash.exists() {
+        let buffer = fs::read(file) //
+            .map_err(|e| BuilderError::FileReadError(file.to_path_buf(), e))?;
+        let buffer = image::process_image(&buffer);
+
+        fs::create_dir_all(".cache/hash/img/")
+            .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
+        fs::write(&path_hash, buffer).unwrap();
+    }
+
+    let dir = path_dist.parent().unwrap_or(&path_dist);
+    fs::create_dir_all(dir) //
+        .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
+    fs::copy(&path_hash, &path_dist)
+        .map_err(|e| BuilderError::FileCopyError(path_hash.to_owned(), path_dist.clone(), e))?;
+
+    Ok(path_root)
+}
+
+pub fn build_deferred(
     hash: Hash32,
     path_file: &Utf8Path,
-    bookkeeping: Arc<Bookkeeping>,
+    bookkeeping: Arc<BookkeepingDeferred>,
 ) -> Result<Utf8PathBuf, BuilderError> {
     // We can check here whether the given file was already built, and we
     // know this, because we keep the original file's content hash, as well
@@ -360,22 +236,32 @@ fn build_deferred(
 
     // If the hash was not saved previously, we proceed normally, build the
     // artifact and then save the hash of the result.
-    let buffer =
-        fs::read(path_file).map_err(|e| BuilderError::FileReadError(path_file.to_path_buf(), e))?;
+    let buffer = fs::read(path_file) //
+        .map_err(|e| BuilderError::FileReadError(path_file.to_path_buf(), e))?;
     let result = (bookkeeping.func)(&buffer);
     let result_hash = Hash32::hash(&result);
-    let result_hash_hex = result_hash.to_hex();
 
     bookkeeping.save(hash, result_hash);
+    let path = write_hashed_data(&buffer, result_hash, "")?;
 
-    let path_temp = Utf8Path::new(".cache/hash").join(&result_hash_hex);
-    let path_dist = Utf8Path::new("dist/hash").join(&result_hash_hex);
-    let path_root = Utf8Path::new("/hash/").join(&result_hash_hex);
+    Ok(path)
+}
+
+pub fn write_hashed_data(
+    data: &[u8],
+    hash: Hash32,
+    ext: &str,
+) -> Result<Utf8PathBuf, BuilderError> {
+    let hash = hash.to_hex();
+
+    let path_temp = Utf8Path::new(".cache/hash").join(&hash);
+    let path_dist = Utf8Path::new("dist/hash").join(&hash).with_extension(ext);
+    let path_root = Utf8Path::new("/hash/").join(&hash).with_extension(ext);
 
     if !path_temp.exists() {
         fs::create_dir_all(".cache/hash")
             .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
-        fs::write(&path_temp, buffer)
+        fs::write(&path_temp, data)
             .map_err(|e| BuilderError::FileWriteError(path_temp.clone(), e))?;
     }
 
