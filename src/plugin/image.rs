@@ -1,124 +1,31 @@
-use std::{
-    any::{TypeId, type_name},
-    collections::{HashMap, HashSet},
-    fs,
-    sync::{Arc, LazyLock},
-};
+use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::{BuilderError, Hash32, HauchiwaError, Input, InputItem};
+use crate::{
+    BuilderError, Hash32, HauchiwaError,
+    plugin::{Loadable, generic::LoaderGeneric},
+};
 
 pub struct Image {
     pub path: Utf8PathBuf,
 }
 
-pub struct LoaderImage {
-    path_base: &'static str,
-    path_glob: &'static str,
-    cached: HashMap<Utf8PathBuf, InputItem>,
-}
-
-impl LoaderImage {
-    pub fn new(path_base: &'static str, path_glob: &'static str) -> Self {
-        Self {
-            path_base,
-            path_glob,
-            cached: HashMap::new(),
-        }
-    }
-}
-
-impl super::Loadable for LoaderImage {
-    fn load(&mut self) {
-        let Self {
-            path_base,
-            path_glob,
-            cached,
-        } = self;
-
-        let pattern = Utf8Path::new(path_base).join(path_glob);
-        let iter = glob::glob(pattern.as_str()).unwrap();
-
-        for entry in iter {
-            let entry = Utf8PathBuf::try_from(entry.unwrap()).unwrap();
-            let bytes = fs::read(&entry).unwrap();
+pub(crate) fn new_loader_image(path_base: &'static str, path_glob: &'static str) -> impl Loadable {
+    LoaderGeneric::new(
+        path_base,
+        path_glob,
+        |path| {
+            let bytes = fs::read(path).unwrap();
             let hash = Hash32::hash(&bytes);
 
-            cached.insert(
-                entry.to_owned(),
-                InputItem {
-                    refl_type: TypeId::of::<Image>(),
-                    refl_name: type_name::<Image>(),
-                    hash,
-                    file: entry.to_owned(),
-                    slug: entry.strip_prefix(&path_base).unwrap_or(&entry).to_owned(),
-                    data: Input::Lazy(LazyLock::new(Box::new(move || {
-                        let path = build_image(hash, &entry).unwrap();
-                        Arc::new(Image { path })
-                    }))),
-                    info: None,
-                },
-            );
-        }
-    }
-
-    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> bool {
-        let Self {
-            path_base,
-            path_glob,
-            cached,
-        } = self;
-
-        let pattern = Utf8Path::new(path_base).join(path_glob);
-        let matcher = glob::Pattern::new(pattern.as_str()).unwrap();
-        let mut changed = false;
-
-        for entry in set {
-            if !matcher.matches_path(entry.as_std_path()) {
-                continue;
-            }
-
-            let bytes = fs::read(entry).unwrap();
-            let hash = Hash32::hash(&bytes);
-
-            cached.insert(
-                entry.to_owned(),
-                InputItem {
-                    refl_type: TypeId::of::<Image>(),
-                    refl_name: type_name::<Image>(),
-                    hash,
-                    file: entry.to_owned(),
-                    slug: entry.strip_prefix(&path_base).unwrap_or(entry).to_owned(),
-                    data: {
-                        let entry = entry.clone();
-                        Input::Lazy(LazyLock::new(Box::new(move || {
-                            let path = build_image(hash, &entry).unwrap();
-                            Arc::new(Image { path })
-                        })))
-                    },
-                    info: None,
-                },
-            );
-            changed = true;
-        }
-
-        changed
-    }
-
-    fn items(&self) -> Vec<&InputItem> {
-        self.cached.values().collect()
-    }
-
-    fn path_base(&self) -> &'static str {
-        self.path_base
-    }
-
-    fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool {
-        let before = self.cached.len();
-        self.cached.retain(|path, _| !obsolete.contains(path));
-        self.cached.len() < before
-    }
+            (hash, (hash, path.to_owned()))
+        },
+        |_, (hash, path)| {
+            let path = build_image(hash, &path).unwrap();
+            Image { path }
+        },
+    )
 }
 
 fn process_image(buffer: &[u8]) -> Vec<u8> {

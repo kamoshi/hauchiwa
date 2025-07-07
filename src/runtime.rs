@@ -1,11 +1,9 @@
 use std::any::{TypeId, type_name};
 use std::fs;
 use std::ops::Deref;
-use std::sync::Arc;
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::loader::assets::BookkeepingDeferred;
 use crate::{GitInfo, Globals, Hash32, InputItem};
 use crate::{Input, error::*};
 
@@ -156,7 +154,6 @@ socket.addEventListener("message", event => {{
         Ok(match next {
             Some(item) => match &item.data {
                 Input::Content(content) => content.meta.downcast_ref(),
-                Input::Just(just) => just.downcast_ref(),
                 Input::Lazy(lazy) => lazy.downcast_ref(),
             },
             None => None,
@@ -168,7 +165,6 @@ socket.addEventListener("message", event => {{
 
         let data = match &item.data {
             Input::Content(content) => content.meta.downcast_ref(),
-            Input::Just(just) => just.downcast_ref(),
             Input::Lazy(lazy) => lazy.downcast_ref(),
         };
 
@@ -190,57 +186,4 @@ socket.addEventListener("message", event => {{
             .find(|item| item.file == path)
             .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))
     }
-}
-
-pub fn build_deferred(
-    hash: Hash32,
-    path_file: &Utf8Path,
-    bookkeeping: Arc<BookkeepingDeferred>,
-) -> Result<Utf8PathBuf, BuilderError> {
-    // We can check here whether the given file was already built, and we
-    // know this, because we keep the original file's content hash, as well
-    // as the resulting file's content hash.
-    if let Some(hash) = bookkeeping.read(hash) {
-        let path_root = Utf8Path::new("/hash/").join(hash.to_hex());
-        return Ok(path_root);
-    };
-
-    // If the hash was not saved previously, we proceed normally, build the
-    // artifact and then save the hash of the result.
-    let buffer = fs::read(path_file) //
-        .map_err(|e| BuilderError::FileReadError(path_file.to_path_buf(), e))?;
-    let result = (bookkeeping.func)(&buffer);
-    let result_hash = Hash32::hash(&result);
-
-    bookkeeping.save(hash, result_hash);
-    let path = write_hashed_data(&buffer, result_hash, "")?;
-
-    Ok(path)
-}
-
-pub fn write_hashed_data(
-    data: &[u8],
-    hash: Hash32,
-    ext: &str,
-) -> Result<Utf8PathBuf, BuilderError> {
-    let hash = hash.to_hex();
-
-    let path_temp = Utf8Path::new(".cache/hash").join(&hash);
-    let path_dist = Utf8Path::new("dist/hash").join(&hash).with_extension(ext);
-    let path_root = Utf8Path::new("/hash/").join(&hash).with_extension(ext);
-
-    if !path_temp.exists() {
-        fs::create_dir_all(".cache/hash")
-            .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
-        fs::write(&path_temp, data)
-            .map_err(|e| BuilderError::FileWriteError(path_temp.clone(), e))?;
-    }
-
-    let dir = path_dist.parent().unwrap_or(&path_dist);
-    fs::create_dir_all(dir) //
-        .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
-    fs::copy(&path_temp, &path_dist)
-        .map_err(|e| BuilderError::FileCopyError(path_temp.clone(), path_dist.clone(), e))?;
-
-    Ok(path_root)
 }

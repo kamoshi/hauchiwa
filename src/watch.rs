@@ -12,9 +12,9 @@ use notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::new_debouncer;
 use tungstenite::WebSocket;
 
-use crate::build;
 use crate::error::WatchError;
 use crate::{Globals, HauchiwaError, Mode, Website, init, load_repo};
+use crate::{Loader, build};
 
 fn reserve_port() -> Result<(TcpListener, u16), WatchError> {
     let listener = match TcpListener::bind("127.0.0.1:1337") {
@@ -31,9 +31,6 @@ pub fn watch<G>(website: &mut Website<G>, data: G) -> Result<(), HauchiwaError>
 where
     G: Send + Sync + 'static,
 {
-    #[cfg(feature = "server")]
-    let thread_http = server::start();
-
     let root = env::current_dir().unwrap();
     let (tcp, port) = reserve_port()?;
     let client = Arc::new(Mutex::new(vec![]));
@@ -41,10 +38,10 @@ where
     let (tx, rx) = std::sync::mpsc::channel();
     let mut debouncer = new_debouncer(Duration::from_millis(250), None, tx).unwrap();
 
-    for base in []
-        .into_iter()
-        .chain(website.loaders_content.iter().map(|e| e.path_base()))
-        .chain(website.loaders_assets.iter().map(|e| e.path_base()))
+    for base in website
+        .loaders
+        .iter()
+        .map(Loader::path_base)
         .collect::<HashSet<_>>()
     {
         debouncer
@@ -63,6 +60,9 @@ where
 
     init(website)?;
     build(website, &globals)?;
+
+    #[cfg(feature = "server")]
+    let thread_http = server::start();
 
     while let Ok(events) = rx.recv().unwrap() {
         let mut dirty = false;
@@ -151,7 +151,7 @@ fn new_thread_ws_reload(
                         }
                     }
                     Err(e) => {
-                        eprintln!("Error: {:?}", e);
+                        eprintln!("Error: {e:?}");
                     }
                 }
             }
@@ -183,8 +183,8 @@ mod server {
 
     pub fn start() -> thread::JoinHandle<Result<(), anyhow::Error>> {
         let port = 8080;
-        let url = style(format!("http://localhost:{}/", port)).yellow();
-        eprintln!("Starting a HTTP server on {}", url);
+        let url = style(format!("http://localhost:{port}/")).yellow();
+        eprintln!("Starting a HTTP server on {url}");
 
         thread::spawn(move || {
             tokio::runtime::Builder::new_current_thread()

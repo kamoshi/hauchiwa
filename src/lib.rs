@@ -27,24 +27,8 @@ use sha2::{Digest, Sha256};
 
 pub use crate::error::*;
 pub use crate::gitmap::{GitInfo, GitRepo};
-pub use crate::loader::assets::Assets;
-pub use crate::loader::content::Content;
+pub use crate::loader::Loader;
 pub use crate::runtime::{Context, ViewPage};
-
-type ArcAny = Arc<dyn Any + Send + Sync>;
-
-pub struct Script {
-    pub path: Utf8PathBuf,
-}
-
-pub struct Stylesheet {
-    pub path: Utf8PathBuf,
-}
-
-pub struct Svelte {
-    pub html: String,
-    pub init: Utf8PathBuf,
-}
 
 /// This value controls whether the library should run in the `Build` or the
 /// `Watch` mode. In `Build` mode, the library builds every page of the website
@@ -142,21 +126,7 @@ fn build<G>(website: &Website<G>, globals: &Globals<G>) -> Result<(), HauchiwaEr
 where
     G: Send + Sync,
 {
-    let items = []
-        .into_iter()
-        .chain(
-            website
-                .loaders_content
-                .iter()
-                .flat_map(|loader| loader.items()),
-        )
-        .chain(
-            website
-                .loaders_assets
-                .iter()
-                .flat_map(|loader| loader.items()),
-        )
-        .collect::<Vec<_>>();
+    let items = website.loaders.iter().flat_map(Loader::items).collect();
 
     let total = website.tasks.len();
     let progress = ProgressBar::new(total as u64);
@@ -216,11 +186,8 @@ where
 /// The `G` type parameter is the global data container accessible in every page renderer as `ctx.data`,
 /// though it can be replaced with the `()` Unit if you don't need to pass any data.
 pub struct Website<G: Send + Sync> {
-    /// Rendered assets and content are outputted to this directory.
-    /// All collections added to this website.
-    loaders_content: Vec<Content>,
     /// Preprocessors for files
-    loaders_assets: Vec<Assets>,
+    loaders: Vec<Loader>,
     /// Build tasks which can be used to generate pages.
     tasks: Vec<Task<G>>,
     /// Sitemap options
@@ -266,12 +233,7 @@ impl<G: Send + Sync + 'static> Website<G> {
     }
 
     fn load_items(&mut self, repo: &GitRepo) -> Result<(), HauchiwaError> {
-        self.loaders_content
-            .par_iter_mut()
-            .map(|loader| loader.load(repo))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        self.loaders_assets
+        self.loaders
             .par_iter_mut()
             .map(|loader| loader.load())
             .collect::<Vec<_>>();
@@ -283,12 +245,7 @@ impl<G: Send + Sync + 'static> Website<G> {
         let mut changed = false;
 
         changed |= self
-            .loaders_content
-            .par_iter_mut()
-            .any(|loader| loader.remove(obsolete));
-
-        changed |= self
-            .loaders_assets
+            .loaders
             .par_iter_mut()
             .any(|loader| loader.remove(obsolete));
 
@@ -302,12 +259,7 @@ impl<G: Send + Sync + 'static> Website<G> {
         let mut changed = false;
 
         changed |= self
-            .loaders_content
-            .par_iter_mut()
-            .any(|loader| loader.reload(modified, repo).unwrap());
-
-        changed |= self
-            .loaders_assets
+            .loaders
             .par_iter_mut()
             .any(|loader| loader.reload(modified));
 
@@ -350,8 +302,7 @@ impl<G: Send + Sync + 'static> Website<G> {
 
 /// A builder struct for creating a `Website` with specified settings.
 pub struct WebsiteConfiguration<G: Send + Sync> {
-    loaders_content: Vec<Content>,
-    loaders_assets: Vec<Assets>,
+    loaders: Vec<Loader>,
     tasks: Vec<Task<G>>,
     opts_sitemap: Option<Utf8PathBuf>,
     hooks: Vec<Hook>,
@@ -360,21 +311,15 @@ pub struct WebsiteConfiguration<G: Send + Sync> {
 impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
     fn new() -> Self {
         Self {
-            loaders_content: Vec::default(),
-            loaders_assets: Vec::default(),
+            loaders: Vec::default(),
             tasks: Vec::default(),
             opts_sitemap: None,
             hooks: Vec::new(),
         }
     }
 
-    pub fn add_content(mut self, collections: impl IntoIterator<Item = Content>) -> Self {
-        self.loaders_content.extend(collections);
-        self
-    }
-
-    pub fn add_assets(mut self, processors: impl IntoIterator<Item = Assets>) -> Self {
-        self.loaders_assets.extend(processors);
+    pub fn add_loaders(mut self, processors: impl IntoIterator<Item = Loader>) -> Self {
+        self.loaders.extend(processors);
         self
     }
 
@@ -390,8 +335,7 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
 
     pub fn finish(self) -> Website<G> {
         Website {
-            loaders_content: self.loaders_content,
-            loaders_assets: self.loaders_assets,
+            loaders: self.loaders,
             tasks: self.tasks,
             opts_sitemap: self.opts_sitemap,
             hooks: self.hooks,
@@ -490,8 +434,6 @@ struct InputContent {
 
 enum Input {
     Content(InputContent),
-    /// Just the item, stored in memory, readily accessible.
-    Just(Dynamic),
     /// Item computed on demand, cached in memory.
     Lazy(LazyLock<Dynamic, Box<dyn (FnOnce() -> Dynamic) + Send + Sync>>),
 }

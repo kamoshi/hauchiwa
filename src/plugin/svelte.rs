@@ -3,25 +3,41 @@ use std::{
     process::{Command, Stdio},
 };
 
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
+use sha2::{Digest, Sha256};
 
-use crate::Hash32;
+use crate::{
+    Hash32,
+    plugin::{Loadable, generic::LoaderGenericMultifile},
+};
 
-pub mod assets;
-pub mod content;
+pub struct Svelte {
+    pub html: String,
+    pub init: Utf8PathBuf,
+}
 
-fn compile_esbuild(file: &Utf8Path) -> Vec<u8> {
-    let output = Command::new("esbuild")
-        .arg(file.as_str())
-        .arg("--format=esm")
-        .arg("--bundle")
-        .arg("--minify")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .output()
-        .expect("esbuild invocation failed");
+pub(crate) fn new_loader_svelte(path_base: &'static str, path_glob: &'static str) -> impl Loadable {
+    LoaderGenericMultifile::new(
+        path_base,
+        path_glob,
+        |path| {
+            let hash = Hash32::hash(path.as_str());
+            let html = compile_svelte_html(path, hash);
+            let init = compile_svelte_init(path, hash);
 
-    output.stdout
+            let mut hasher = Sha256::new();
+            hasher.update(&html);
+            hasher.update(&init);
+            let hash: Hash32 = hasher.finalize().into();
+
+            (hash, (html, init))
+        },
+        |rt, (html, init)| {
+            let init = rt.store(init.as_bytes(), "js").unwrap();
+
+            Svelte { html, init }
+        },
+    )
 }
 
 fn compile_svelte_html(file: &Utf8Path, hash_class: Hash32) -> String {
