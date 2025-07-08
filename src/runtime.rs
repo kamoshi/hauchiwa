@@ -1,10 +1,9 @@
 use std::any::{TypeId, type_name};
-use std::fs;
 use std::ops::Deref;
 
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8Path;
 
-use crate::{GitInfo, Globals, Hash32, InputItem};
+use crate::{GitInfo, Globals, InputItem};
 use crate::{Input, error::*};
 
 const GLOB_OPTS: glob::MatchOptions = glob::MatchOptions {
@@ -14,13 +13,12 @@ const GLOB_OPTS: glob::MatchOptions = glob::MatchOptions {
 };
 
 #[derive(Debug)]
-pub struct ViewPage<'a, D> {
+pub struct WithFile<'a, D> {
     pub file: &'a Utf8Path,
     pub slug: &'a Utf8Path,
     pub area: &'a Utf8Path,
-    pub meta: &'a D,
+    pub data: &'a D,
     pub info: Option<&'a GitInfo>,
-    pub content: &'a str,
 }
 
 /// A simple wrapper for all context data passed at runtime to tasks defined for
@@ -62,78 +60,68 @@ socket.addEventListener("message", event => {{
         })
     }
 
-    /// Retrieve a single page by glob pattern and metadata shape.
-    pub fn glob_page<D>(&self, pattern: &str) -> Result<ViewPage<'_, D>, HauchiwaError>
+    pub fn glob_with_file<T>(&self, pattern: &str) -> Result<WithFile<'_, T>, HauchiwaError>
     where
-        D: 'static,
+        T: 'static,
     {
+        let refl_type = TypeId::of::<T>();
         let glob = glob::Pattern::new(pattern)?;
 
         let item = self
             .items
             .iter()
-            .find(|item| glob.matches_path_with(item.slug.as_ref(), GLOB_OPTS))
+            .filter(|item| {
+                item.refl_type == refl_type
+                    && glob.matches_path_with(item.slug.as_std_path(), GLOB_OPTS)
+            })
+            .map(Deref::deref)
+            .next()
             .ok_or_else(|| HauchiwaError::AssetNotFound(glob.to_string()))?;
 
-        if let Input::Content(content) = &item.data {
-            let meta = content
-                .meta
-                .downcast_ref::<D>()
-                .ok_or_else(|| HauchiwaError::Frontmatter(item.file.to_string()))?;
-            let area = content.area.as_ref();
-            let content = content.text.as_str();
+        let data = match &item.data {
+            Input::Lazy(lazy) => lazy.downcast_ref().unwrap(),
+        };
 
-            Ok(ViewPage {
-                file: &item.file,
-                slug: &item.slug,
-                area,
-                meta,
-                info: item.info.as_ref(),
-                content,
-            })
-        } else {
-            Err(HauchiwaError::AssetNotFound(glob.to_string()))
-        }
+        Ok(WithFile {
+            file: &item.file,
+            slug: &item.slug,
+            area: &item.area,
+            data,
+            info: None,
+        })
     }
 
-    /// Retrieve many possible content items.
-    pub fn glob_pages<D>(&self, pattern: &str) -> Result<Vec<ViewPage<'_, D>>, HauchiwaError>
+    pub fn glob_with_files<T>(&self, pattern: &str) -> Result<Vec<WithFile<'_, T>>, HauchiwaError>
     where
-        D: 'static,
+        T: 'static,
     {
-        let pattern = glob::Pattern::new(pattern)?;
+        let refl_type = TypeId::of::<T>();
+        let glob = glob::Pattern::new(pattern)?;
 
-        let inputs: Vec<_> = self
+        let items = self
             .items
             .iter()
-            .filter(|item| pattern.matches_path(item.slug.as_ref()))
-            .collect();
+            .filter(|item| {
+                item.refl_type == refl_type
+                    && glob.matches_path_with(item.slug.as_std_path(), GLOB_OPTS)
+            })
+            .map(Deref::deref)
+            .map(|item| {
+                let data = match &item.data {
+                    Input::Lazy(lazy) => lazy.downcast_ref().unwrap(),
+                };
 
-        let query = inputs
-            .into_iter()
-            .filter_map(|item| {
-                let (area, meta, content) = match &item.data {
-                    Input::Content(input_content) => {
-                        let area = input_content.area.as_ref();
-                        let meta = input_content.meta.downcast_ref::<D>()?;
-                        let data = input_content.text.as_str();
-                        Some((area, meta, data))
-                    }
-                    _ => None,
-                }?;
-
-                Some(ViewPage {
+                WithFile {
                     file: &item.file,
                     slug: &item.slug,
-                    area,
-                    meta,
-                    info: item.info.as_ref(),
-                    content,
-                })
+                    area: &item.area,
+                    data,
+                    info: None,
+                }
             })
             .collect();
 
-        Ok(query)
+        Ok(items)
     }
 
     /// Find the first on‐disk asset whose path matches `pattern`. This asset
@@ -153,7 +141,6 @@ socket.addEventListener("message", event => {{
 
         Ok(match next {
             Some(item) => match &item.data {
-                Input::Content(content) => content.meta.downcast_ref(),
                 Input::Lazy(lazy) => lazy.downcast_ref(),
             },
             None => None,
@@ -164,7 +151,6 @@ socket.addEventListener("message", event => {{
         let item = self.find_item_by_path(path)?;
 
         let data = match &item.data {
-            Input::Content(content) => content.meta.downcast_ref(),
             Input::Lazy(lazy) => lazy.downcast_ref(),
         };
 

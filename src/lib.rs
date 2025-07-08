@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 pub use crate::error::*;
 pub use crate::gitmap::{GitInfo, GitRepo};
 pub use crate::loader::Loader;
-pub use crate::runtime::{Context, ViewPage};
+pub use crate::runtime::{Context, WithFile};
 
 /// This value controls whether the library should run in the `Build` or the
 /// `Watch` mode. In `Build` mode, the library builds every page of the website
@@ -425,15 +425,7 @@ impl Debug for Hook {
 
 type Dynamic = Arc<dyn Any + Send + Sync>;
 
-#[derive(Debug)]
-struct InputContent {
-    area: Utf8PathBuf,
-    meta: Dynamic,
-    text: String,
-}
-
 enum Input {
-    Content(InputContent),
     /// Item computed on demand, cached in memory.
     Lazy(LazyLock<Dynamic, Box<dyn (FnOnce() -> Dynamic) + Send + Sync>>),
 }
@@ -444,6 +436,7 @@ struct InputItem {
     hash: Hash32,
     file: Utf8PathBuf,
     slug: Utf8PathBuf,
+    area: Utf8PathBuf,
     data: Input,
     info: Option<gitmap::GitInfo>,
 }

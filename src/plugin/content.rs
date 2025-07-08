@@ -1,68 +1,51 @@
 use std::{
-    any::{Any, TypeId, type_name},
+    any::{TypeId, type_name},
     collections::{HashMap, HashSet},
     fs,
-    sync::Arc,
+    sync::{Arc, LazyLock},
 };
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::{
-    Hash32, Input, InputContent, InputItem, LoaderError, LoaderFileCallbackError, LoaderFileError,
-    plugin::Loadable,
-};
+use crate::{Hash32, Input, InputItem, LoaderError, LoaderFileError, plugin::Loadable};
 
-type ArcAny = Arc<dyn Any + Send + Sync>;
-
-type ContentFnPtr =
-    Arc<dyn Fn(&str) -> Result<(ArcAny, String), LoaderFileCallbackError> + Send + Sync>;
-
-#[derive(Clone)]
-struct ContentFn(ContentFnPtr);
-
-impl ContentFn {
-    fn new<D>(parse_matter: fn(&str) -> Result<(D, String), anyhow::Error>) -> Self
-    where
-        D: Send + Sync + 'static,
-    {
-        Self(Arc::new(move |content| {
-            let (meta, data) = parse_matter(content).map_err(LoaderFileCallbackError)?;
-            Ok((Arc::new(meta), data))
-        }))
-    }
-
-    fn call(&self, data: &str) -> Result<(ArcAny, String), LoaderFileCallbackError> {
-        (self.0)(data)
-    }
+pub struct Content<T>
+where
+    T: Send + Sync + 'static,
+{
+    pub meta: T,
+    pub text: String,
 }
 
-pub struct LoaderContent {
-    refl_type: TypeId,
-    refl_name: &'static str,
+pub struct LoaderContent<T>
+where
+    T: Send + Sync + 'static,
+{
     path_base: &'static str,
     path_glob: &'static str,
-    init: ContentFn,
+    preload: fn(&str) -> Result<(T, String), anyhow::Error>,
     /// Content loaded and saved between multiple loads, cached by file path. We
     /// can check the hash of the item against file to see whether it changed.
     cached: HashMap<Utf8PathBuf, InputItem>,
     // repo: GitRepo,
 }
 
-impl LoaderContent {
-    pub(crate) fn new<T>(
+impl<T> LoaderContent<T>
+where
+    T: Send + Sync + 'static,
+{
+    pub(crate) fn new(
         path_base: &'static str,
         path_glob: &'static str,
-        parse_matter: fn(&str) -> Result<(T, String), anyhow::Error>,
+        preload: fn(&str) -> Result<(T, String), anyhow::Error>,
     ) -> Self
     where
         T: Send + Sync + 'static,
     {
         Self {
-            refl_type: TypeId::of::<T>(),
-            refl_name: type_name::<T>(),
             path_base,
             path_glob,
-            init: ContentFn::new(parse_matter),
+            preload,
             cached: HashMap::new(),
             // repo: todo!(),
         }
@@ -79,8 +62,6 @@ impl LoaderContent {
 
         let bytes = fs::read(&path)?;
         let hash = Hash32::hash(&bytes);
-        let text = String::from_utf8_lossy(&bytes);
-        let (meta, text) = self.init.call(&text)?;
 
         let area = match path.file_stem() {
             Some("index") => path
@@ -96,18 +77,29 @@ impl LoaderContent {
             .to_owned();
 
         Ok(Some(InputItem {
-            refl_type: self.refl_type,
-            refl_name: self.refl_name,
+            refl_type: TypeId::of::<Content<T>>(),
+            refl_name: type_name::<Content<T>>(),
             hash,
             info: None, //repo.files.get(path.as_str()).cloned(),
             file: path,
+            area,
             slug,
-            data: Input::Content(InputContent { area, meta, text }),
+            data: {
+                let preload = self.preload;
+                Input::Lazy(LazyLock::new(Box::new(move || {
+                    let text = String::from_utf8_lossy(&bytes);
+                    let (meta, text) = preload(&text).unwrap();
+                    Arc::new(Content { meta, text })
+                })))
+            },
         }))
     }
 }
 
-impl Loadable for LoaderContent {
+impl<T> Loadable for LoaderContent<T>
+where
+    T: Send + Sync + 'static,
+{
     fn load(&mut self) {
         let pattern = Utf8Path::new(self.path_base).join(self.path_glob);
 

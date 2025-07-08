@@ -71,15 +71,17 @@ where
             return;
         }
 
-        for file_path in arr {
-            let (hash, data) = f1(&file_path);
+        for file in arr {
+            let area = file.with_extension("");
+            let (hash, data) = f1(&file);
             cached.insert(
-                file_path.to_owned(),
+                file.to_owned(),
                 InputItem {
                     refl_type: TypeId::of::<R>(),
                     refl_name: type_name::<R>(),
-                    slug: file_path.clone(),
-                    file: file_path.clone(),
+                    slug: file.clone(),
+                    file: file.clone(),
+                    area,
                     hash,
                     data: {
                         let rt = self.rt.clone();
@@ -102,20 +104,22 @@ where
         let matcher = glob::Pattern::new(pattern.as_str()).unwrap();
         let mut changed = false;
 
-        for entry in set {
-            if !matcher.matches_path(entry.as_std_path()) {
+        for file in set {
+            if !matcher.matches_path(file.as_std_path()) {
                 continue;
             }
 
-            let (hash, data) = f1(entry);
+            let area = file.with_extension("");
+            let (hash, data) = f1(file);
             cached.insert(
-                entry.to_owned(),
+                file.to_owned(),
                 InputItem {
                     refl_type: TypeId::of::<R>(),
                     refl_name: type_name::<R>(),
                     hash,
-                    file: entry.to_owned(),
-                    slug: entry.strip_prefix(path_base).unwrap_or(entry).to_owned(),
+                    area,
+                    file: file.to_owned(),
+                    slug: file.strip_prefix(path_base).unwrap_or(file).to_owned(),
                     data: {
                         let rt = self.rt.clone();
                         Input::Lazy(LazyLock::new(Box::new(move || Arc::new(f2(rt, data)))))
@@ -204,16 +208,18 @@ where
             return;
         }
 
-        for file_path in arr {
-            let (hash, data) = f1(&file_path);
+        for file in arr {
+            let area = file.with_extension("");
+            let (hash, data) = f1(&file);
             cached.insert(
-                file_path.to_owned(),
+                file.to_owned(),
                 InputItem {
                     refl_type: TypeId::of::<R>(),
                     refl_name: type_name::<R>(),
-                    slug: file_path.clone(),
-                    file: file_path.clone(),
+                    slug: file.clone(),
+                    file: file.clone(),
                     hash,
+                    area,
                     data: {
                         let rt = self.rt.clone();
                         Input::Lazy(LazyLock::new(Box::new(move || Arc::new(f2(rt, data)))))
