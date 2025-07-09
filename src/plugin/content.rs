@@ -7,7 +7,7 @@ use std::{
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::{Hash32, Input, InputItem, LoaderError, LoaderFileError, plugin::Loadable};
+use crate::{FileData, FromFile, Hash32, Item, LoaderError, LoaderFileError, plugin::Loadable};
 
 pub struct Content<T>
 where
@@ -26,7 +26,7 @@ where
     preload: fn(&str) -> Result<(T, String), anyhow::Error>,
     /// Content loaded and saved between multiple loads, cached by file path. We
     /// can check the hash of the item against file to see whether it changed.
-    cached: HashMap<Utf8PathBuf, InputItem>,
+    cached: HashMap<Utf8PathBuf, Item>,
     // repo: GitRepo,
 }
 
@@ -55,13 +55,13 @@ where
     /// TODO: based on loader cache, here we can use Hash32 to check if the
     /// previously loaded content item already exists, and *if* we have it, we
     /// can skip the `init.call`, because we can just reuse the old one.
-    fn read_file(&self, path: Utf8PathBuf) -> Result<Option<InputItem>, LoaderFileError> {
+    fn read_file(&self, path: Utf8PathBuf) -> Result<Option<Item>, LoaderFileError> {
         if path.is_dir() {
             return Ok(None);
         }
 
         let bytes = fs::read(&path)?;
-        let hash = Hash32::hash(&bytes);
+        let _hash = Hash32::hash(&bytes);
 
         let area = match path.file_stem() {
             Some("index") => path
@@ -76,21 +76,25 @@ where
             .unwrap_or(&path)
             .to_owned();
 
-        Ok(Some(InputItem {
+        Ok(Some(Item {
             refl_type: TypeId::of::<Content<T>>(),
             refl_name: type_name::<Content<T>>(),
-            hash,
-            info: None, //repo.files.get(path.as_str()).cloned(),
-            file: path,
-            area,
-            slug,
-            data: {
-                let preload = self.preload;
-                Input::Lazy(LazyLock::new(Box::new(move || {
-                    let text = String::from_utf8_lossy(&bytes);
-                    let (meta, text) = preload(&text).unwrap();
-                    Arc::new(Content { meta, text })
-                })))
+            // hash,
+            data: FromFile {
+                file: Arc::new(FileData {
+                    file: path,
+                    slug,
+                    area,
+                    info: None,
+                }),
+                data: {
+                    let preload = self.preload;
+                    LazyLock::new(Box::new(move || {
+                        let text = String::from_utf8_lossy(&bytes);
+                        let (meta, text) = preload(&text).unwrap();
+                        Arc::new(Content { meta, text })
+                    }))
+                },
             },
         }))
     }
@@ -117,7 +121,7 @@ where
         }
 
         for item in vec {
-            self.cached.insert(item.file.clone(), item);
+            self.cached.insert(item.data.file.file.clone(), item);
         }
     }
 
@@ -136,7 +140,7 @@ where
                 .map_err(|e| LoaderError::LoaderGlobFile(path.to_owned(), e))
                 .unwrap()
             {
-                self.cached.insert(item.file.clone(), item);
+                self.cached.insert(item.data.file.file.clone(), item);
                 changed |= true;
             }
         }
@@ -144,7 +148,7 @@ where
         changed
     }
 
-    fn items(&self) -> Vec<&crate::InputItem> {
+    fn items(&self) -> Vec<&crate::Item> {
         self.cached.values().collect()
     }
 

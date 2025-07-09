@@ -2,7 +2,7 @@ use std::{collections::HashSet, fs};
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::{BuilderError, Hash32, InputItem};
+use crate::{BuilderError, Hash32, Item};
 
 pub mod content;
 pub mod generic;
@@ -15,7 +15,7 @@ pub mod ts;
 pub(crate) trait Loadable: 'static + Send {
     fn load(&mut self);
     fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> bool;
-    fn items(&self) -> Vec<&InputItem>;
+    fn items(&self) -> Vec<&Item>;
     fn path_base(&self) -> &'static str;
     fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool;
 }

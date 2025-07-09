@@ -704,7 +704,6 @@ dependencies = [
  "rayon",
  "serde",
  "sha2",
- "sitemap-rs",
  "thiserror 2.0.12",
  "tokio",
  "tower-http",
@@ -1657,16 +1656,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56199f7ddabf13fe5074ce809e7d3f42b42ae711800501b5b16ea82ad029c39d"
 
 [[package]]
-name = "sitemap-rs"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9973bbcfa8fb93f9bee6625b6bfbabcc918f734034d229c18642dd870ac6b2df"
-dependencies = [
- "chrono",
- "xml-builder",
-]
-
-[[package]]
 name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2248,12 +2237,6 @@ checksum = "6f42320e61fe2cfd34354ecb597f86f413484a798ba44a8ca1165c58d42da6c1"
 dependencies = [
  "bitflags 2.9.1",
 ]
-
-[[package]]
-name = "xml-builder"
-version = "0.5.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c023e38161c176b6ed516e2c398acd755cd19983661eff519b811c01646e10f"
 
 [[package]]
 name = "yaml-rust2"

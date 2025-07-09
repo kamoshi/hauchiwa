@@ -43,7 +43,7 @@ fn git(args: &[&str]) -> Result<String> {
     let output = Command::new(GIT_EXEC)
         .args(args)
         .output()
-        .with_context(|| format!("failed to run git with args {:?}", args))?;
+        .with_context(|| format!("failed to run git with args {args:?}"))?;
 
     if !output.status.success() {
         // If git executable not found, we can check error kind.

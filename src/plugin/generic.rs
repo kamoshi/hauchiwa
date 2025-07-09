@@ -7,7 +7,7 @@ use std::{
 use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{
-    Hash32, Input, InputItem,
+    FileData, FromFile, Hash32, Item,
     plugin::{Loadable, Runtime},
 };
 
@@ -18,7 +18,7 @@ where
 {
     path_base: &'static str,
     path_glob: &'static str,
-    cached: HashMap<Utf8PathBuf, InputItem>,
+    cached: HashMap<Utf8PathBuf, Item>,
     f1: fn(&Utf8Path) -> (Hash32, T),
     f2: fn(Runtime, T) -> R,
     rt: Runtime,
@@ -73,21 +73,25 @@ where
 
         for file in arr {
             let area = file.with_extension("");
-            let (hash, data) = f1(&file);
+            let (_hash, data) = f1(&file);
             cached.insert(
                 file.to_owned(),
-                InputItem {
+                Item {
                     refl_type: TypeId::of::<R>(),
                     refl_name: type_name::<R>(),
-                    slug: file.clone(),
-                    file: file.clone(),
-                    area,
-                    hash,
-                    data: {
-                        let rt = self.rt.clone();
-                        Input::Lazy(LazyLock::new(Box::new(move || Arc::new(f2(rt, data)))))
+                    // hash,
+                    data: FromFile {
+                        file: Arc::new(FileData {
+                            file: file.clone(),
+                            slug: file.clone(),
+                            area,
+                            info: None,
+                        }),
+                        data: {
+                            let rt = self.rt.clone();
+                            LazyLock::new(Box::new(move || Arc::new(f2(rt, data))))
+                        },
                     },
-                    info: None,
                 },
             );
         }
@@ -110,21 +114,25 @@ where
             }
 
             let area = file.with_extension("");
-            let (hash, data) = f1(file);
+            let (_hash, data) = f1(file);
             cached.insert(
                 file.to_owned(),
-                InputItem {
+                Item {
                     refl_type: TypeId::of::<R>(),
                     refl_name: type_name::<R>(),
-                    hash,
-                    area,
-                    file: file.to_owned(),
-                    slug: file.strip_prefix(path_base).unwrap_or(file).to_owned(),
-                    data: {
-                        let rt = self.rt.clone();
-                        Input::Lazy(LazyLock::new(Box::new(move || Arc::new(f2(rt, data)))))
+                    // hash,
+                    data: FromFile {
+                        file: Arc::new(FileData {
+                            file: file.clone(),
+                            slug: file.clone(),
+                            area,
+                            info: None,
+                        }),
+                        data: {
+                            let rt = self.rt.clone();
+                            LazyLock::new(Box::new(move || Arc::new(f2(rt, data))))
+                        },
                     },
-                    info: None,
                 },
             );
             changed = true;
@@ -133,7 +141,7 @@ where
         changed
     }
 
-    fn items(&self) -> Vec<&crate::InputItem> {
+    fn items(&self) -> Vec<&crate::Item> {
         self.cached.values().collect()
     }
 
@@ -155,7 +163,7 @@ where
 {
     path_base: &'static str,
     path_glob: &'static str,
-    cached: HashMap<Utf8PathBuf, InputItem>,
+    cached: HashMap<Utf8PathBuf, Item>,
     f1: fn(&Utf8Path) -> (Hash32, T),
     f2: fn(Runtime, T) -> R,
     rt: Runtime,
@@ -210,21 +218,25 @@ where
 
         for file in arr {
             let area = file.with_extension("");
-            let (hash, data) = f1(&file);
+            let (_hash, data) = f1(&file);
             cached.insert(
                 file.to_owned(),
-                InputItem {
+                Item {
                     refl_type: TypeId::of::<R>(),
                     refl_name: type_name::<R>(),
-                    slug: file.clone(),
-                    file: file.clone(),
-                    hash,
-                    area,
-                    data: {
-                        let rt = self.rt.clone();
-                        Input::Lazy(LazyLock::new(Box::new(move || Arc::new(f2(rt, data)))))
+                    // hash,
+                    data: FromFile {
+                        file: Arc::new(FileData {
+                            file: file.clone(),
+                            slug: file.clone(),
+                            area,
+                            info: None,
+                        }),
+                        data: {
+                            let rt = self.rt.clone();
+                            LazyLock::new(Box::new(move || Arc::new(f2(rt, data))))
+                        },
                     },
-                    info: None,
                 },
             );
         }
@@ -239,7 +251,7 @@ where
         }
     }
 
-    fn items(&self) -> Vec<&crate::InputItem> {
+    fn items(&self) -> Vec<&crate::Item> {
         self.cached.values().collect()
     }
 

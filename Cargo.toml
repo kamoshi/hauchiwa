@@ -22,7 +22,6 @@ grass                   = { version = "0.13", default-features = false, features
 rayon                   = "1.10"
 serde                   = { version = "1.0", features = ["derive"] }
 sha2                    = "0.10"
-sitemap-rs              = "0.3"
 
 # CLI
 console                 = { version = "0.15", default-features = false }

@@ -3,7 +3,7 @@ use std::{collections::HashSet, fs};
 use camino::Utf8PathBuf;
 
 use crate::{
-    Hash32, InputItem,
+    Hash32, Item,
     plugin::{Loadable, Runtime, content::LoaderContent, generic::LoaderGeneric},
 };
 
@@ -98,7 +98,7 @@ impl Loader {
         self.0.reload(set)
     }
 
-    pub(crate) fn items(&self) -> Vec<&InputItem> {
+    pub(crate) fn items(&self) -> Vec<&Item> {
         self.0.items()
     }
 

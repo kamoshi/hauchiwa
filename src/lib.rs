@@ -161,15 +161,15 @@ where
 
     // let builder = Arc::into_inner(builder).unwrap().into_inner().unwrap();
 
-    for (path, data) in pages {
-        let path = Utf8Path::new("dist").join(path);
+    for page in pages {
+        let path = Utf8Path::new("dist").join(&page.path);
 
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
         }
         let mut file = fs::File::create(&path)
             .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
-        std::io::Write::write_all(&mut file, data.as_bytes())
+        std::io::Write::write_all(&mut file, page.text.as_bytes())
             .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
     }
 
@@ -191,7 +191,7 @@ pub struct Website<G: Send + Sync> {
     /// Build tasks which can be used to generate pages.
     tasks: Vec<Task<G>>,
     /// Sitemap options
-    opts_sitemap: Option<Utf8PathBuf>,
+    // opts_sitemap: Option<Utf8PathBuf>,
     /// Hooks
     hooks: Vec<Hook>,
 }
@@ -232,7 +232,7 @@ impl<G: Send + Sync + 'static> Website<G> {
         Ok(())
     }
 
-    fn load_items(&mut self, repo: &GitRepo) -> Result<(), HauchiwaError> {
+    fn load_items(&mut self, _repo: &GitRepo) -> Result<(), HauchiwaError> {
         self.loaders
             .par_iter_mut()
             .map(|loader| loader.load())
@@ -252,7 +252,7 @@ impl<G: Send + Sync + 'static> Website<G> {
         changed
     }
 
-    fn reload_paths(&mut self, modified: &HashSet<Utf8PathBuf>, repo: &GitRepo) -> bool
+    fn reload_paths(&mut self, modified: &HashSet<Utf8PathBuf>, _repo: &GitRepo) -> bool
     where
         G: Send + Sync + 'static,
     {
@@ -323,7 +323,7 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
         self
     }
 
-    pub fn add_task(mut self, task: fn(Context<G>) -> TaskResult<TaskPaths>) -> Self {
+    pub fn add_task(mut self, task: fn(Context<G>) -> TaskResult<Vec<Page>>) -> Self {
         self.tasks.push(Task::new(task));
         self
     }
@@ -337,7 +337,7 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
         Website {
             loaders: self.loaders,
             tasks: self.tasks,
-            opts_sitemap: self.opts_sitemap,
+            // opts_sitemap: self.opts_sitemap,
             hooks: self.hooks,
         }
     }
@@ -352,8 +352,29 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
 // *           Tasks            *
 // ******************************
 
-/// Rendered content from the userland.
-type TaskPaths = Vec<(Utf8PathBuf, String)>;
+pub struct Page {
+    pub path: Utf8PathBuf,
+    pub text: String,
+    pub from: Option<Arc<FileData>>,
+}
+
+impl Page {
+    pub fn text(path: Utf8PathBuf, text: String) -> Self {
+        Self {
+            path,
+            text,
+            from: None,
+        }
+    }
+
+    pub fn text_with_file(path: Utf8PathBuf, text: String, from: Arc<FileData>) -> Self {
+        Self {
+            path,
+            text,
+            from: Some(from),
+        }
+    }
+}
 
 /// Result from a single executed task.
 pub type TaskResult<T> = anyhow::Result<T, anyhow::Error>;
@@ -361,7 +382,7 @@ pub type TaskResult<T> = anyhow::Result<T, anyhow::Error>;
 /// Task function pointer used to dynamically generate a website page. This
 /// function is provided by the user from the userland, but it is used
 /// internally during the build process.
-type TaskFnPtr<D> = Arc<dyn Fn(Context<D>) -> TaskResult<TaskPaths> + Send + Sync>;
+type TaskFnPtr<D> = Arc<dyn Fn(Context<D>) -> TaskResult<Vec<Page>> + Send + Sync>;
 
 /// Wraps `TaskFnPtr` and implements `Debug` trait for function pointer.
 struct Task<D: Send + Sync>(TaskFnPtr<D>);
@@ -371,13 +392,13 @@ impl<D: Send + Sync> Task<D> {
     fn new<F>(func: F) -> Self
     where
         D: Send + Sync,
-        F: Fn(Context<D>) -> TaskResult<TaskPaths> + Send + Sync + 'static,
+        F: Fn(Context<D>) -> TaskResult<Vec<Page>> + Send + Sync + 'static,
     {
         Self(Arc::new(func))
     }
 
     /// Run the task to generate a page.
-    fn call(&self, sack: Context<D>) -> TaskResult<TaskPaths> {
+    fn call(&self, sack: Context<D>) -> TaskResult<Vec<Page>> {
         (self.0)(sack)
     }
 }
@@ -398,14 +419,16 @@ impl<G: Send + Sync> Debug for Task<G> {
 // *           Hooks            *
 // ******************************
 
+type HookCallback = Box<dyn Fn(&[&Page]) -> TaskResult<()>>;
+
 pub enum Hook {
-    PostBuild(Box<dyn Fn(&[&(Utf8PathBuf, String)]) -> TaskResult<()>>),
+    PostBuild(HookCallback),
 }
 
 impl Hook {
     pub fn post_build<F>(fun: F) -> Self
     where
-        F: Fn(&[&(Utf8PathBuf, String)]) -> TaskResult<()> + 'static,
+        F: Fn(&[&Page]) -> TaskResult<()> + 'static,
     {
         Hook::PostBuild(Box::new(fun))
     }
@@ -425,39 +448,22 @@ impl Debug for Hook {
 
 type Dynamic = Arc<dyn Any + Send + Sync>;
 
-enum Input {
-    /// Item computed on demand, cached in memory.
-    Lazy(LazyLock<Dynamic, Box<dyn (FnOnce() -> Dynamic) + Send + Sync>>),
+pub struct FileData {
+    pub file: Utf8PathBuf,
+    pub slug: Utf8PathBuf,
+    pub area: Utf8PathBuf,
+    pub info: Option<gitmap::GitInfo>,
 }
 
-struct InputItem {
+struct FromFile {
+    file: Arc<FileData>,
+    /// Item computed on demand, cached in memory.
+    data: LazyLock<Dynamic, Box<dyn (FnOnce() -> Dynamic) + Send + Sync>>,
+}
+
+struct Item {
     refl_type: TypeId,
     refl_name: &'static str,
-    hash: Hash32,
-    file: Utf8PathBuf,
-    slug: Utf8PathBuf,
-    area: Utf8PathBuf,
-    data: Input,
-    info: Option<gitmap::GitInfo>,
+    // hash: Hash32,
+    data: FromFile,
 }
-
-// pub fn build_sitemap(&self, opts: &Utf8Path) -> Vec<u8> {
-//     let urls = self
-//         .tracked
-//         .iter()
-//         .flat_map(|x| &x.path)
-//         .collect::<HashSet<_>>()
-//         .into_iter()
-//         .map(|path| {
-//             Url::builder(opts.join(&path.0).parent().unwrap().to_string())
-//                 .change_frequency(ChangeFrequency::Monthly)
-//                 .priority(0.8)
-//                 .build()
-//                 .expect("failed a <url> validation")
-//         })
-//         .collect::<Vec<_>>();
-//     let urls = UrlSet::new(urls).expect("failed a <urlset> validation");
-//     let mut buf = Vec::<u8>::new();
-//     urls.write(&mut buf).expect("failed to write XML");
-//     buf
-// }

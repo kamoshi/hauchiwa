@@ -1,10 +1,9 @@
 use std::any::{TypeId, type_name};
 use std::ops::Deref;
+use std::sync::Arc;
 
-use camino::Utf8Path;
-
-use crate::{GitInfo, Globals, InputItem};
-use crate::{Input, error::*};
+use crate::{FileData, error::*};
+use crate::{Globals, Item};
 
 const GLOB_OPTS: glob::MatchOptions = glob::MatchOptions {
     case_sensitive: true,
@@ -12,13 +11,9 @@ const GLOB_OPTS: glob::MatchOptions = glob::MatchOptions {
     require_literal_leading_dot: true,
 };
 
-#[derive(Debug)]
 pub struct WithFile<'a, D> {
-    pub file: &'a Utf8Path,
-    pub slug: &'a Utf8Path,
-    pub area: &'a Utf8Path,
     pub data: &'a D,
-    pub info: Option<&'a GitInfo>,
+    pub file: Arc<FileData>,
 }
 
 /// A simple wrapper for all context data passed at runtime to tasks defined for
@@ -30,14 +25,14 @@ where
     /// Global data for the current build.
     globals: &'a Globals<G>,
     /// Every single input.
-    items: &'a Vec<&'a InputItem>,
+    items: &'a Vec<&'a Item>,
 }
 
 impl<'a, G> Context<'a, G>
 where
     G: Send + Sync,
 {
-    pub(crate) fn new(globals: &'a Globals<G>, items: &'a Vec<&'a InputItem>) -> Self {
+    pub(crate) fn new(globals: &'a Globals<G>, items: &'a Vec<&'a Item>) -> Self {
         Self { globals, items }
     }
 
@@ -72,22 +67,17 @@ socket.addEventListener("message", event => {{
             .iter()
             .filter(|item| {
                 item.refl_type == refl_type
-                    && glob.matches_path_with(item.slug.as_std_path(), GLOB_OPTS)
+                    && glob.matches_path_with(item.data.file.slug.as_std_path(), GLOB_OPTS)
             })
             .map(Deref::deref)
             .next()
             .ok_or_else(|| HauchiwaError::AssetNotFound(glob.to_string()))?;
 
-        let data = match &item.data {
-            Input::Lazy(lazy) => lazy.downcast_ref().unwrap(),
-        };
+        let data = item.data.data.downcast_ref().unwrap();
 
         Ok(WithFile {
-            file: &item.file,
-            slug: &item.slug,
-            area: &item.area,
             data,
-            info: None,
+            file: item.data.file.clone(),
         })
     }
 
@@ -103,20 +93,15 @@ socket.addEventListener("message", event => {{
             .iter()
             .filter(|item| {
                 item.refl_type == refl_type
-                    && glob.matches_path_with(item.slug.as_std_path(), GLOB_OPTS)
+                    && glob.matches_path_with(item.data.file.slug.as_std_path(), GLOB_OPTS)
             })
             .map(Deref::deref)
             .map(|item| {
-                let data = match &item.data {
-                    Input::Lazy(lazy) => lazy.downcast_ref().unwrap(),
-                };
+                let data = item.data.data.downcast_ref().unwrap();
 
                 WithFile {
-                    file: &item.file,
-                    slug: &item.slug,
-                    area: &item.area,
                     data,
-                    info: None,
+                    file: item.data.file.clone(),
                 }
             })
             .collect();
@@ -134,25 +119,20 @@ socket.addEventListener("message", event => {{
             .iter()
             .filter(|item| {
                 item.refl_type == refl_type
-                    && glob.matches_path_with(item.file.as_std_path(), GLOB_OPTS)
+                    && glob.matches_path_with(item.data.file.file.as_std_path(), GLOB_OPTS)
             })
             .map(Deref::deref)
             .next();
 
         Ok(match next {
-            Some(item) => match &item.data {
-                Input::Lazy(lazy) => lazy.downcast_ref(),
-            },
+            Some(item) => item.data.data.downcast_ref(),
             None => None,
         })
     }
 
     pub fn get<T: 'static>(&self, path: &str) -> Result<&T, HauchiwaError> {
         let item = self.find_item_by_path(path)?;
-
-        let data = match &item.data {
-            Input::Lazy(lazy) => lazy.downcast_ref(),
-        };
+        let data = item.data.data.downcast_ref();
 
         match data {
             Some(data) => Ok(data),
@@ -165,11 +145,11 @@ socket.addEventListener("message", event => {{
         }
     }
 
-    fn find_item_by_path(&self, path: &str) -> Result<&InputItem, HauchiwaError> {
+    fn find_item_by_path(&self, path: &str) -> Result<&Item, HauchiwaError> {
         self.items
             .iter()
             .map(Deref::deref)
-            .find(|item| item.file == path)
+            .find(|item| item.data.file.file == path)
             .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))
     }
 }
