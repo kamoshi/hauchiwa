@@ -7,7 +7,10 @@ use std::{
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::{FileData, FromFile, Hash32, Item, LoaderError, LoaderFileError, plugin::Loadable};
+use crate::{
+    FileData, FromFile, GitRepo, Hash32, Item, Loader, LoaderError, LoaderFileError,
+    loader::Loadable,
+};
 
 pub struct Content<T>
 where
@@ -15,6 +18,32 @@ where
 {
     pub meta: T,
     pub text: String,
+}
+
+/// Create a new collection which draws content from the filesystem files
+/// via a glob pattern. Usually used to collect articles written as markdown
+/// files, however it is completely format agnostic.
+///
+/// The parameter `parse_matter` allows you to customize how the metadata
+/// should be parsed. Default functions for the most common formats are
+/// provided by library:
+/// * [`parse_matter_json`](`crate::parse_matter_json`) - parse JSON metadata
+/// * [`parse_matter_yaml`](`crate::parse_matter_yaml`) - parse YAML metadata
+///
+/// # Examples
+///
+/// ```rust
+/// Collection::glob_with("content", "posts/**/*", ["md"], parse_matter_yaml::<Post>);
+/// ```
+pub fn glob_content<T>(
+    path_base: &'static str,
+    path_glob: &'static str,
+    preload: fn(&str) -> Result<(T, String), anyhow::Error>,
+) -> Loader
+where
+    T: Send + Sync + 'static,
+{
+    Loader::with(move |init| LoaderContent::new(path_base, path_glob, preload, init.repo.clone()))
 }
 
 pub struct LoaderContent<T>
@@ -27,7 +56,7 @@ where
     /// Content loaded and saved between multiple loads, cached by file path. We
     /// can check the hash of the item against file to see whether it changed.
     cached: HashMap<Utf8PathBuf, Item>,
-    // repo: GitRepo,
+    repo: Arc<GitRepo>,
 }
 
 impl<T> LoaderContent<T>
@@ -38,6 +67,7 @@ where
         path_base: &'static str,
         path_glob: &'static str,
         preload: fn(&str) -> Result<(T, String), anyhow::Error>,
+        repo: Arc<GitRepo>,
     ) -> Self
     where
         T: Send + Sync + 'static,
@@ -47,7 +77,7 @@ where
             path_glob,
             preload,
             cached: HashMap::new(),
-            // repo: todo!(),
+            repo,
         }
     }
 
@@ -82,10 +112,10 @@ where
             // hash,
             data: FromFile {
                 file: Arc::new(FileData {
+                    info: self.repo.files.get(path.as_str()).cloned(),
                     file: path,
                     slug,
                     area,
-                    info: None,
                 }),
                 data: {
                     let preload = self.preload;

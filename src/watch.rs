@@ -12,9 +12,10 @@ use notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::new_debouncer;
 use tungstenite::WebSocket;
 
+use crate::build;
 use crate::error::WatchError;
+use crate::loader::Loadable;
 use crate::{Globals, HauchiwaError, Mode, Website, init, load_repo};
-use crate::{Loader, build};
 
 fn reserve_port() -> Result<(TcpListener, u16), WatchError> {
     let listener = match TcpListener::bind("127.0.0.1:1337") {
@@ -41,7 +42,7 @@ where
     for base in website
         .loaders
         .iter()
-        .map(Loader::path_base)
+        .map(Loadable::path_base)
         .collect::<HashSet<_>>()
     {
         debouncer

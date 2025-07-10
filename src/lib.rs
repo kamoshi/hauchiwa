@@ -4,9 +4,8 @@
 mod error;
 mod gitmap;
 mod io;
-mod loader;
+pub mod loader;
 pub mod md;
-pub mod plugin;
 mod runtime;
 mod watch;
 
@@ -28,6 +27,7 @@ use sha2::{Digest, Sha256};
 pub use crate::error::*;
 pub use crate::gitmap::{GitInfo, GitRepo};
 pub use crate::loader::Loader;
+use crate::loader::{Loadable, LoaderInit};
 pub use crate::runtime::{Context, WithFile};
 
 /// This value controls whether the library should run in the `Build` or the
@@ -126,7 +126,7 @@ fn build<G>(website: &Website<G>, globals: &Globals<G>) -> Result<(), HauchiwaEr
 where
     G: Send + Sync,
 {
-    let items = website.loaders.iter().flat_map(Loader::items).collect();
+    let items = website.loaders.iter().flat_map(Loadable::items).collect();
 
     let total = website.tasks.len();
     let progress = ProgressBar::new(total as u64);
@@ -187,7 +187,7 @@ where
 /// though it can be replaced with the `()` Unit if you don't need to pass any data.
 pub struct Website<G: Send + Sync> {
     /// Preprocessors for files
-    loaders: Vec<Loader>,
+    loaders: Vec<Box<dyn Loadable>>,
     /// Build tasks which can be used to generate pages.
     tasks: Vec<Task<G>>,
     /// Sitemap options
@@ -267,45 +267,12 @@ impl<G: Send + Sync + 'static> Website<G> {
     }
 }
 
-// fn build_hooks<G>(website: &Website<G>, scheduler: &Scheduler<G>) -> Result<(), HookError>
-// where
-//     G: Send + Sync,
-// {
-//     let s = Instant::now();
-//     for hook in &website.hooks {
-//         let pages: Vec<_> = scheduler
-//             .tracked
-//             .iter()
-//             .flat_map(|trace| &trace.path)
-//             .collect();
-
-//         match hook {
-//             Hook::PostBuild(fun) => fun(&pages)?,
-//         }
-//     }
-
-//     eprintln!("Ran user hooks {}", crate::io::as_overhead(s));
-
-//     Ok(())
-// }
-
-// fn build_sitemap<G>(website: &Website<G>, scheduler: &Scheduler<G>) -> Result<(), SitemapError>
-// where
-//     G: Send + Sync,
-// {
-//     if let Some(ref opts) = website.opts_sitemap {
-//         let sitemap = scheduler.build_sitemap(opts);
-//         fs::write("dist/sitemap.xml", sitemap)?;
-//     }
-//     Ok(())
-// }
-
 /// A builder struct for creating a `Website` with specified settings.
 pub struct WebsiteConfiguration<G: Send + Sync> {
     loaders: Vec<Loader>,
     tasks: Vec<Task<G>>,
-    opts_sitemap: Option<Utf8PathBuf>,
     hooks: Vec<Hook>,
+    repo: Arc<GitRepo>,
 }
 
 impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
@@ -313,8 +280,8 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
         Self {
             loaders: Vec::default(),
             tasks: Vec::default(),
-            opts_sitemap: None,
             hooks: Vec::new(),
+            repo: Arc::new(load_repo()),
         }
     }
 
@@ -328,16 +295,18 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
         self
     }
 
-    pub fn set_opts_sitemap(mut self, path: impl AsRef<str>) -> Self {
-        self.opts_sitemap = Some(path.as_ref().into());
-        self
-    }
-
     pub fn finish(self) -> Website<G> {
         Website {
-            loaders: self.loaders,
+            loaders: self
+                .loaders
+                .into_iter()
+                .map(|Loader(new)| {
+                    new(LoaderInit {
+                        repo: self.repo.clone(),
+                    })
+                })
+                .collect(),
             tasks: self.tasks,
-            // opts_sitemap: self.opts_sitemap,
             hooks: self.hooks,
         }
     }

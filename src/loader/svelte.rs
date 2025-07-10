@@ -6,38 +6,37 @@ use std::{
 use camino::{Utf8Path, Utf8PathBuf};
 use sha2::{Digest, Sha256};
 
-use crate::{
-    Hash32,
-    plugin::{Loadable, generic::LoaderGenericMultifile},
-};
+use crate::{Hash32, Loader, loader::generic::LoaderGenericMultifile};
 
 pub struct Svelte {
     pub html: String,
     pub init: Utf8PathBuf,
 }
 
-pub(crate) fn new_loader_svelte(path_base: &'static str, path_glob: &'static str) -> impl Loadable {
-    LoaderGenericMultifile::new(
-        path_base,
-        path_glob,
-        |path| {
-            let hash = Hash32::hash(path.as_str());
-            let html = compile_svelte_html(path, hash);
-            let init = compile_svelte_init(path, hash);
+pub fn glob_svelte(path_base: &'static str, path_glob: &'static str) -> Loader {
+    Loader::with(move |_| {
+        LoaderGenericMultifile::new(
+            path_base,
+            path_glob,
+            |path| {
+                let hash = Hash32::hash(path.as_str());
+                let html = compile_svelte_html(path, hash);
+                let init = compile_svelte_init(path, hash);
 
-            let mut hasher = Sha256::new();
-            hasher.update(&html);
-            hasher.update(&init);
-            let hash: Hash32 = hasher.finalize().into();
+                let mut hasher = Sha256::new();
+                hasher.update(&html);
+                hasher.update(&init);
+                let hash: Hash32 = hasher.finalize().into();
 
-            (hash, (html, init))
-        },
-        |rt, (html, init)| {
-            let init = rt.store(init.as_bytes(), "js").unwrap();
+                (hash, (html, init))
+            },
+            |rt, (html, init)| {
+                let init = rt.store(init.as_bytes(), "js").unwrap();
 
-            Svelte { html, init }
-        },
-    )
+                Svelte { html, init }
+            },
+        )
+    })
 }
 
 fn compile_svelte_html(file: &Utf8Path, hash_class: Hash32) -> String {

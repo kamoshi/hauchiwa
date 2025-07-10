@@ -1,112 +1,105 @@
-use std::{collections::HashSet, fs};
+mod assets;
+mod content;
+mod generic;
+#[cfg(feature = "images")]
+mod images;
+mod script;
+mod styles;
+mod svelte;
 
-use camino::Utf8PathBuf;
+use std::{collections::HashSet, fs, sync::Arc};
 
-use crate::{
-    Hash32, Item,
-    plugin::{Loadable, Runtime, content::LoaderContent, generic::LoaderGeneric},
-};
+use camino::{Utf8Path, Utf8PathBuf};
 
-pub struct Loader(Box<dyn Loadable>);
+use crate::{BuilderError, GitRepo, Hash32, Item};
+
+pub use assets::glob_assets;
+pub use content::{Content, glob_content};
+#[cfg(feature = "images")]
+pub use images::{Image, glob_images};
+pub use script::{Script, glob_scripts};
+pub use styles::{Style, glob_styles};
+pub use svelte::{Svelte, glob_svelte};
+
+pub(crate) trait Loadable: 'static + Send {
+    fn load(&mut self);
+    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> bool;
+    fn items(&self) -> Vec<&Item>;
+    fn path_base(&self) -> &'static str;
+    fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool;
+}
+
+#[derive(Clone)]
+pub struct Runtime;
+
+impl Runtime {
+    pub fn store(&self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuilderError> {
+        let hash = Hash32::hash(data);
+        let hash = hash.to_hex();
+
+        let path_temp = Utf8Path::new(".cache/hash").join(&hash);
+        let path_dist = Utf8Path::new("dist/hash").join(&hash).with_extension(ext);
+        let path_root = Utf8Path::new("/hash/").join(&hash).with_extension(ext);
+
+        if !path_temp.exists() {
+            fs::create_dir_all(".cache/hash")
+                .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
+            fs::write(&path_temp, data)
+                .map_err(|e| BuilderError::FileWriteError(path_temp.clone(), e))?;
+        }
+
+        let dir = path_dist.parent().unwrap_or(&path_dist);
+        fs::create_dir_all(dir) //
+            .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
+        fs::copy(&path_temp, &path_dist)
+            .map_err(|e| BuilderError::FileCopyError(path_temp.clone(), path_dist.clone(), e))?;
+
+        Ok(path_root)
+    }
+}
+
+type LoaderInitCallback = Box<dyn Fn(LoaderInit) -> Box<dyn Loadable>>;
+
+pub struct Loader(pub(crate) LoaderInitCallback);
+
+pub struct LoaderInit {
+    pub repo: Arc<GitRepo>,
+}
 
 impl Loader {
-    /// Create a new collection which draws content from the filesystem files
-    /// via a glob pattern. Usually used to collect articles written as markdown
-    /// files, however it is completely format agnostic.
-    ///
-    /// The parameter `parse_matter` allows you to customize how the metadata
-    /// should be parsed. Default functions for the most common formats are
-    /// provided by library:
-    /// * [`parse_matter_json`](`crate::parse_matter_json`) - parse JSON metadata
-    /// * [`parse_matter_yaml`](`crate::parse_matter_yaml`) - parse YAML metadata
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// Collection::glob_with("content", "posts/**/*", ["md"], parse_matter_yaml::<Post>);
-    /// ```
-    pub fn glob_content<T>(
-        path_base: &'static str,
-        path_glob: &'static str,
-        parse_matter: fn(&str) -> Result<(T, String), anyhow::Error>,
-    ) -> Self
+    #[inline]
+    pub(crate) fn with<F, R>(f: F) -> Self
     where
-        T: Send + Sync + 'static,
+        F: Fn(LoaderInit) -> R + 'static,
+        R: Loadable,
     {
-        Self(Box::new(LoaderContent::new(
-            path_base,
-            path_glob,
-            parse_matter,
-        )))
+        Self(Box::new(move |init| Box::new(f(init))))
+    }
+}
+
+impl Loadable for Box<dyn Loadable> {
+    #[inline]
+    fn load(&mut self) {
+        (**self).load()
     }
 
-    pub fn glob_asset<T>(
-        path_base: &'static str,
-        path_glob: &'static str,
-        func: fn(Runtime, Vec<u8>) -> T,
-    ) -> Self
-    where
-        T: Send + Sync + 'static,
-    {
-        Self::plugin(LoaderGeneric::new(
-            path_base,
-            path_glob,
-            |path| {
-                let data = fs::read(path).unwrap();
-                let hash = Hash32::hash(&data);
-
-                (hash, data)
-            },
-            func,
-        ))
+    #[inline]
+    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> bool {
+        (**self).reload(set)
     }
 
-    #[cfg(feature = "images")]
-    pub fn glob_images(path_base: &'static str, path_glob: &'static str) -> Self {
-        use crate::plugin::image::new_loader_image;
-
-        Self::plugin(new_loader_image(path_base, path_glob))
+    #[inline]
+    fn items(&self) -> Vec<&Item> {
+        (**self).items()
     }
 
-    pub fn glob_style(path_base: &'static str, path_glob: &'static str) -> Self {
-        use crate::plugin::scss::new_loader_scss;
-
-        Self::plugin(new_loader_scss(path_base, path_glob))
+    #[inline]
+    fn path_base(&self) -> &'static str {
+        (**self).path_base()
     }
 
-    pub fn glob_scripts(path_base: &'static str, path_glob: &'static str) -> Self {
-        use crate::plugin::ts::new_loader_ts;
-
-        Self::plugin(new_loader_ts(path_base, path_glob))
-    }
-
-    pub fn glob_svelte(path_base: &'static str, path_glob: &'static str) -> Self {
-        use crate::plugin::svelte::new_loader_svelte;
-
-        Self::plugin(new_loader_svelte(path_base, path_glob))
-    }
-
-    fn plugin<T: Loadable>(plugin: T) -> Self {
-        Self(Box::new(plugin))
-    }
-
-    pub(crate) fn load(&mut self) {
-        self.0.load()
-    }
-
-    pub(crate) fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> bool {
-        self.0.reload(set)
-    }
-
-    pub(crate) fn items(&self) -> Vec<&Item> {
-        self.0.items()
-    }
-
-    pub(crate) fn path_base(&self) -> &'static str {
-        self.0.path_base()
-    }
-
-    pub(crate) fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool {
-        self.0.remove(obsolete)
+    #[inline]
+    fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool {
+        (**self).remove(obsolete)
     }
 }

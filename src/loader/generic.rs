@@ -8,7 +8,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{
     FileData, FromFile, Hash32, Item,
-    plugin::{Loadable, Runtime},
+    loader::{Loadable, Runtime},
 };
 
 pub(crate) struct LoaderGeneric<T, R>

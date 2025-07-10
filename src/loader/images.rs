@@ -4,28 +4,30 @@ use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{
     BuilderError, Hash32, HauchiwaError,
-    plugin::{Loadable, generic::LoaderGeneric},
+    loader::{Loader, generic::LoaderGeneric},
 };
 
 pub struct Image {
     pub path: Utf8PathBuf,
 }
 
-pub(crate) fn new_loader_image(path_base: &'static str, path_glob: &'static str) -> impl Loadable {
-    LoaderGeneric::new(
-        path_base,
-        path_glob,
-        |path| {
-            let bytes = fs::read(path).unwrap();
-            let hash = Hash32::hash(&bytes);
+pub fn glob_images(path_base: &'static str, path_glob: &'static str) -> Loader {
+    Loader::with(move |_| {
+        LoaderGeneric::new(
+            path_base,
+            path_glob,
+            |path| {
+                let bytes = fs::read(path).unwrap();
+                let hash = Hash32::hash(&bytes);
 
-            (hash, (hash, path.to_owned()))
-        },
-        |_, (hash, path)| {
-            let path = build_image(hash, &path).unwrap();
-            Image { path }
-        },
-    )
+                (hash, (hash, path.to_owned()))
+            },
+            |_, (hash, path)| {
+                let path = build_image(hash, &path).unwrap();
+                Image { path }
+            },
+        )
+    })
 }
 
 fn process_image(buffer: &[u8]) -> Vec<u8> {
