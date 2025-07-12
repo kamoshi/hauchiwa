@@ -18,10 +18,10 @@ macro_rules! matter_parser {
 			// We can cache the creation of the parser
 			static PARSER: LazyLock<Matter<$engine>> = LazyLock::new(Matter::<$engine>::new);
 
-			let entity = PARSER.parse(content);
+			let entity = PARSER.parse(content)?;
             let object = entity
                 .data
-                .unwrap_or_else(|| gray_matter::Pod::new_array())
+                .unwrap_or_else(gray_matter::Pod::new_hash)
                 .deserialize::<D>()
                 .map_err(|e| anyhow::anyhow!("Malformed frontmatter:\n{e}"))?;
 

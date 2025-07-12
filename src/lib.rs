@@ -7,6 +7,7 @@ mod io;
 pub mod loader;
 pub mod md;
 mod runtime;
+#[cfg(feature = "reload")]
 mod watch;
 
 use std::any::{Any, TypeId};
@@ -21,13 +22,11 @@ use console::style;
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use sha2::{Digest, Sha256};
-// use sitemap_rs::url::{ChangeFrequency, Url};
-// use sitemap_rs::url_set::UrlSet;
 
 pub use crate::error::*;
 pub use crate::gitmap::{GitInfo, GitRepo};
 pub use crate::loader::Loader;
-use crate::loader::{Loadable, LoaderInit};
+use crate::loader::{Loadable, LoaderOpts};
 pub use crate::runtime::{Context, WithFile};
 
 /// This value controls whether the library should run in the `Build` or the
@@ -220,6 +219,7 @@ impl<G: Send + Sync + 'static> Website<G> {
         Ok(())
     }
 
+    #[cfg(feature = "reload")]
     pub fn watch(&mut self, data: G) -> Result<(), HauchiwaError> {
         eprintln!(
             "Running {} in {} mode.",
@@ -300,8 +300,8 @@ impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
             loaders: self
                 .loaders
                 .into_iter()
-                .map(|Loader(new)| {
-                    new(LoaderInit {
+                .map(|loader| {
+                    loader.init(LoaderOpts {
                         repo: self.repo.clone(),
                     })
                 })

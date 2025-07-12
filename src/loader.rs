@@ -4,6 +4,7 @@ mod generic;
 #[cfg(feature = "images")]
 mod images;
 mod script;
+#[cfg(feature = "styles")]
 mod styles;
 mod svelte;
 
@@ -18,6 +19,7 @@ pub use content::{Content, glob_content};
 #[cfg(feature = "images")]
 pub use images::{Image, glob_images};
 pub use script::{Script, glob_scripts};
+#[cfg(feature = "styles")]
 pub use styles::{Style, glob_styles};
 pub use svelte::{Svelte, glob_svelte};
 
@@ -27,6 +29,55 @@ pub(crate) trait Loadable: 'static + Send {
     fn items(&self) -> Vec<&Item>;
     fn path_base(&self) -> &'static str;
     fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool;
+}
+
+impl Loadable for Box<dyn Loadable> {
+    #[inline]
+    fn load(&mut self) {
+        (**self).load()
+    }
+
+    #[inline]
+    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> bool {
+        (**self).reload(set)
+    }
+
+    #[inline]
+    fn items(&self) -> Vec<&Item> {
+        (**self).items()
+    }
+
+    #[inline]
+    fn path_base(&self) -> &'static str {
+        (**self).path_base()
+    }
+
+    #[inline]
+    fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool {
+        (**self).remove(obsolete)
+    }
+}
+
+pub struct Loader(Box<dyn Fn(LoaderOpts) -> Box<dyn Loadable>>);
+
+pub struct LoaderOpts {
+    pub repo: Arc<GitRepo>,
+}
+
+impl Loader {
+    #[inline]
+    pub(crate) fn with<F, R>(f: F) -> Self
+    where
+        F: Fn(LoaderOpts) -> R + 'static,
+        R: Loadable,
+    {
+        Self(Box::new(move |init| Box::new(f(init))))
+    }
+
+    #[inline]
+    pub(crate) fn init(&self, opts: LoaderOpts) -> Box<dyn Loadable> {
+        (self.0)(opts)
+    }
 }
 
 #[derive(Clone)]
@@ -55,51 +106,5 @@ impl Runtime {
             .map_err(|e| BuilderError::FileCopyError(path_temp.clone(), path_dist.clone(), e))?;
 
         Ok(path_root)
-    }
-}
-
-type LoaderInitCallback = Box<dyn Fn(LoaderInit) -> Box<dyn Loadable>>;
-
-pub struct Loader(pub(crate) LoaderInitCallback);
-
-pub struct LoaderInit {
-    pub repo: Arc<GitRepo>,
-}
-
-impl Loader {
-    #[inline]
-    pub(crate) fn with<F, R>(f: F) -> Self
-    where
-        F: Fn(LoaderInit) -> R + 'static,
-        R: Loadable,
-    {
-        Self(Box::new(move |init| Box::new(f(init))))
-    }
-}
-
-impl Loadable for Box<dyn Loadable> {
-    #[inline]
-    fn load(&mut self) {
-        (**self).load()
-    }
-
-    #[inline]
-    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> bool {
-        (**self).reload(set)
-    }
-
-    #[inline]
-    fn items(&self) -> Vec<&Item> {
-        (**self).items()
-    }
-
-    #[inline]
-    fn path_base(&self) -> &'static str {
-        (**self).path_base()
-    }
-
-    #[inline]
-    fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool {
-        (**self).remove(obsolete)
     }
 }

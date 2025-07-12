@@ -9,16 +9,17 @@ description = "Incredibly flexible static site generator library with incrementa
 repository  = "https://github.com/kamoshi/hauchiwa"
 
 [features]
-default = ["server", "images"]
-server = ["axum", "tokio", "tower-http"]
+default = ["styles", "images", "reload", "server"]
+styles = ["grass"]
 images = ["image"]
+reload = ["notify", "notify-debouncer-full", "tungstenite"]
+server = ["axum", "tokio", "tower-http"]
 
 [dependencies]
 camino                  = "1.1"
 chrono                  = "0.4"
-gray_matter             = { version = "0.2", default-features = false, features = ["yaml"] }
+gray_matter             = { version = "0.3", default-features = false, features = ["yaml", "json"] }
 glob                    = "0.3"
-grass                   = { version = "0.13", default-features = false, features = ["random"] }
 rayon                   = "1.10"
 serde                   = { version = "1.0", features = ["derive"] }
 sha2                    = "0.10"
@@ -31,12 +32,33 @@ indicatif               = { version = "0.17", features = ["rayon"] }
 anyhow                  = "1.0"
 thiserror               = "2.0"
 
-# Watch
-notify                  = "8.0"
-notify-debouncer-full   = { version = "0.5", default-features = false }
-tungstenite             = "0.26"
+# Feature = "styles"
+[dependencies.grass]
+version = "0.13"
+optional = true
+default-features = false
+features = ["random"]
 
-# Server
+# Feature = "images"
+[dependencies.image]
+version = "0.25"
+optional = true
+
+# Feature = "reload"
+[dependencies.notify]
+version = "8.0"
+optional = true
+
+[dependencies.notify-debouncer-full]
+version = "0.5"
+optional = true
+default-features = false
+
+[dependencies.tungstenite]
+version = "0.26"
+optional = true
+
+# Feature = "server"
 [dependencies.axum]
 version = "0.8"
 optional = true
@@ -54,8 +76,3 @@ version = "0.6"
 optional = true
 default-features = false
 features = ["fs"]
-
-# Images
-[dependencies.image]
-version = "0.25"
-optional = true

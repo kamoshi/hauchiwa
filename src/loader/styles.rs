@@ -1,4 +1,5 @@
 use camino::Utf8PathBuf;
+use grass::{Options, OutputStyle, from_path};
 
 use crate::{Hash32, Loader, loader::generic::LoaderGenericMultifile};
 
@@ -12,8 +13,8 @@ pub fn glob_styles(path_base: &'static str, path_glob: &'static str) -> Loader {
             path_base,
             path_glob,
             |path| {
-                let opts = grass::Options::default().style(grass::OutputStyle::Compressed);
-                let data = grass::from_path(path, &opts).unwrap();
+                let opts = Options::default().style(OutputStyle::Compressed);
+                let data = from_path(path, &opts).unwrap();
                 let hash = Hash32::hash(&data);
 
                 (hash, data)
