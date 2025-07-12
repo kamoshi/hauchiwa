@@ -1,4 +1,5 @@
 mod assets;
+mod asyncio;
 mod content;
 mod generic;
 #[cfg(feature = "images")]
@@ -15,7 +16,8 @@ use camino::{Utf8Path, Utf8PathBuf};
 use crate::{BuilderError, GitRepo, Hash32, Item};
 
 pub use assets::glob_assets;
-pub use content::{Content, glob_content};
+pub use asyncio::async_asset;
+pub use content::{Content, glob_content, json, yaml};
 #[cfg(feature = "images")]
 pub use images::{Image, glob_images};
 pub use script::{Script, glob_scripts};
@@ -58,24 +60,24 @@ impl Loadable for Box<dyn Loadable> {
     }
 }
 
-pub struct Loader(Box<dyn Fn(LoaderOpts) -> Box<dyn Loadable>>);
+pub struct Loader(Box<dyn FnOnce(LoaderOpts) -> Box<dyn Loadable>>);
 
 pub struct LoaderOpts {
-    pub repo: Arc<GitRepo>,
+    pub repo: Option<Arc<GitRepo>>,
 }
 
 impl Loader {
     #[inline]
     pub(crate) fn with<F, R>(f: F) -> Self
     where
-        F: Fn(LoaderOpts) -> R + 'static,
+        F: FnOnce(LoaderOpts) -> R + 'static,
         R: Loadable,
     {
         Self(Box::new(move |init| Box::new(f(init))))
     }
 
     #[inline]
-    pub(crate) fn init(&self, opts: LoaderOpts) -> Box<dyn Loadable> {
+    pub(crate) fn init(self, opts: LoaderOpts) -> Box<dyn Loadable> {
         (self.0)(opts)
     }
 }

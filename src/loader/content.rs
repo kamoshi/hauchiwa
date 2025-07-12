@@ -6,6 +6,7 @@ use std::{
 };
 
 use camino::{Utf8Path, Utf8PathBuf};
+use gray_matter::engine::{JSON, YAML};
 
 use crate::{
     FileData, FromFile, GitRepo, Hash32, Item, Loader, LoaderError, LoaderFileError,
@@ -56,7 +57,7 @@ where
     /// Content loaded and saved between multiple loads, cached by file path. We
     /// can check the hash of the item against file to see whether it changed.
     cached: HashMap<Utf8PathBuf, Item>,
-    repo: Arc<GitRepo>,
+    repo: Option<Arc<GitRepo>>,
 }
 
 impl<T> LoaderContent<T>
@@ -67,7 +68,7 @@ where
         path_base: &'static str,
         path_glob: &'static str,
         preload: fn(&str) -> Result<(T, String), anyhow::Error>,
-        repo: Arc<GitRepo>,
+        repo: Option<Arc<GitRepo>>,
     ) -> Self
     where
         T: Send + Sync + 'static,
@@ -112,7 +113,10 @@ where
             // hash,
             data: FromFile {
                 file: Arc::new(FileData {
-                    info: self.repo.files.get(path.as_str()).cloned(),
+                    info: self
+                        .repo
+                        .as_deref()
+                        .and_then(|repo| repo.files.get(path.as_str()).cloned()),
                     file: path,
                     slug,
                     area,
@@ -192,3 +196,40 @@ where
         self.cached.len() < before
     }
 }
+
+/// Generate the functions used to initialize content files. These functions can
+/// be used to parse the front matter using engines from crate `gray_matter`.
+macro_rules! matter_parser {
+	($name:ident, $engine:path) => {
+		#[doc = concat!(
+			"This function can be used to extract metadata from a document with `D` as the frontmatter shape.\n",
+			"Configured to use [`", stringify!($engine), "`] as the engine of the parser."
+		)]
+		pub fn $name<D>(content: &str) -> Result<(D, String), anyhow::Error>
+		where
+			D: for<'de> serde::Deserialize<'de> + Send + Sync + 'static,
+		{
+		    use gray_matter::{Matter, Pod};
+
+			// We can cache the creation of the parser
+			static PARSER: LazyLock<Matter<$engine>> = LazyLock::new(Matter::<$engine>::new);
+
+			let entity = PARSER.parse(content)?;
+            let object = entity
+                .data
+                .unwrap_or_else(Pod::new_hash)
+                .deserialize::<D>()
+                .map_err(|e| anyhow::anyhow!("Malformed frontmatter:\n{e}"))?;
+
+			Ok((
+				// Just the front matter
+				object,
+				// The rest of the content
+				entity.content,
+			))
+		}
+	};
+}
+
+matter_parser!(yaml, YAML);
+matter_parser!(json, JSON);

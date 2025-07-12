@@ -5,7 +5,6 @@ mod error;
 mod gitmap;
 mod io;
 pub mod loader;
-pub mod md;
 mod runtime;
 #[cfg(feature = "reload")]
 mod watch;
@@ -93,20 +92,6 @@ impl Debug for Hash32 {
     }
 }
 
-fn load_repo() -> GitRepo {
-    let s = Instant::now();
-
-    let repo = crate::gitmap::map(crate::gitmap::Options {
-        repository: ".".to_string(),
-        revision: "HEAD".to_string(),
-    })
-    .unwrap();
-
-    eprintln!("Loaded git repository data {}", crate::io::as_overhead(s));
-
-    repo
-}
-
 fn init<G>(website: &mut Website<G>) -> Result<(), HauchiwaError>
 where
     G: Send + Sync + 'static,
@@ -114,9 +99,7 @@ where
     crate::io::clear_dist()?;
     crate::io::clone_static()?;
 
-    let repo = load_repo();
-
-    website.load_items(&repo)?;
+    website.load_items()?;
 
     Ok(())
 }
@@ -175,10 +158,6 @@ where
     Ok(())
 }
 
-// ******************************
-// *    Website Configuration   *
-// ******************************
-
 /// This struct represents the website which will be built by the generator. The individual
 /// settings can be set by calling the `setup` function.
 ///
@@ -189,15 +168,13 @@ pub struct Website<G: Send + Sync> {
     loaders: Vec<Box<dyn Loadable>>,
     /// Build tasks which can be used to generate pages.
     tasks: Vec<Task<G>>,
-    /// Sitemap options
-    // opts_sitemap: Option<Utf8PathBuf>,
     /// Hooks
     hooks: Vec<Hook>,
 }
 
 impl<G: Send + Sync + 'static> Website<G> {
-    pub fn configure() -> WebsiteConfiguration<G> {
-        WebsiteConfiguration::new()
+    pub fn config() -> Config<G> {
+        Config::new()
     }
 
     pub fn build(&mut self, data: G) -> Result<(), HauchiwaError> {
@@ -232,7 +209,7 @@ impl<G: Send + Sync + 'static> Website<G> {
         Ok(())
     }
 
-    fn load_items(&mut self, _repo: &GitRepo) -> Result<(), HauchiwaError> {
+    fn load_items(&mut self) -> Result<(), HauchiwaError> {
         self.loaders
             .par_iter_mut()
             .map(|loader| loader.load())
@@ -252,7 +229,7 @@ impl<G: Send + Sync + 'static> Website<G> {
         changed
     }
 
-    fn reload_paths(&mut self, modified: &HashSet<Utf8PathBuf>, _repo: &GitRepo) -> bool
+    fn reload_paths(&mut self, modified: &HashSet<Utf8PathBuf>) -> bool
     where
         G: Send + Sync + 'static,
     {
@@ -268,21 +245,36 @@ impl<G: Send + Sync + 'static> Website<G> {
 }
 
 /// A builder struct for creating a `Website` with specified settings.
-pub struct WebsiteConfiguration<G: Send + Sync> {
+pub struct Config<G: Send + Sync> {
     loaders: Vec<Loader>,
     tasks: Vec<Task<G>>,
     hooks: Vec<Hook>,
-    repo: Arc<GitRepo>,
+    repo: Option<Arc<GitRepo>>,
 }
 
-impl<G: Send + Sync + 'static> WebsiteConfiguration<G> {
+impl<G: Send + Sync + 'static> Config<G> {
     fn new() -> Self {
         Self {
             loaders: Vec::default(),
             tasks: Vec::default(),
             hooks: Vec::new(),
-            repo: Arc::new(load_repo()),
+            repo: None,
         }
+    }
+
+    /// Load git repository data from path.
+    pub fn load_git(mut self, path: impl AsRef<Utf8Path>) -> anyhow::Result<Config<G>> {
+        use crate::gitmap::{Options, map};
+        let s = Instant::now();
+
+        let data = map(Options {
+            repository: path.as_ref().to_string(),
+            revision: "HEAD".to_string(),
+        })?;
+
+        eprintln!("Loaded git repository data {}", crate::io::as_overhead(s));
+        self.repo = Some(Arc::new(data));
+        Ok(self)
     }
 
     pub fn add_loaders(mut self, processors: impl IntoIterator<Item = Loader>) -> Self {

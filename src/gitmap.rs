@@ -170,22 +170,3 @@ pub fn map(opts: Options) -> Result<GitRepo> {
         files,
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // These tests assume you have a valid Git repository at the specified path.
-    // Adjust the repository path and revision as needed.
-    #[test]
-    fn test_map_repo() {
-        // Replace with an appropriate repository path for testing.
-        let opts = Options {
-            repository: ".".to_string(),
-            revision: "HEAD".to_string(),
-        };
-        let repo = map(opts).expect("failed to map repo");
-        println!("Top level path: {}", repo.top_level_abs_path);
-        println!("Found {} files", repo.files.len());
-    }
-}
