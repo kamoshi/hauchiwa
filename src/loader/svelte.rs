@@ -25,20 +25,21 @@ where
             path_glob,
             |path| {
                 let server = compile_svelte_server(path);
-                let hash = Hash32::hash(&server);
-                let client = compile_svelte_init(path, hash);
+                let anchor = Hash32::hash(&server);
+                let client = compile_svelte_init(path, anchor);
+                let hash = Hash32::hash(&client);
 
-                let ssr = Box::new({
-                    let hashed = hash.to_hex();
+                let html = Box::new({
+                    let anchor = anchor.to_hex();
 
                     move |props: &P| {
                         let json = serde_json::to_string(props).unwrap();
                         let html = run_ssr(&server, &json);
-                        format!(r#"<div class="_{hashed}" data-props='{json}'>{html}</div>"#,)
+                        format!("<div class='_{anchor}' data-props='{json}'>{html}</div>")
                     }
                 });
 
-                (hash, (ssr, client))
+                (hash, (html, client))
             },
             |rt, (html, init)| {
                 let init = rt.store(init.as_bytes(), "js").unwrap();
@@ -50,9 +51,9 @@ where
 }
 
 fn compile_svelte_server(file: &Utf8Path) -> String {
-    const SSR: &str = r#"
-        import { build } from "npm:esbuild";
-        import svelte from "npm:esbuild-svelte";
+    const JS: &str = r#"
+        import { build } from "npm:esbuild@0.25.6";
+        import svelte from "npm:esbuild-svelte@0.9.3";
 
         const file = Deno.args[0];
 
@@ -96,7 +97,7 @@ fn compile_svelte_server(file: &Utf8Path) -> String {
 
     {
         let stdin = child.stdin.as_mut().expect("stdin not piped");
-        stdin.write_all(SSR.as_bytes()).unwrap();
+        stdin.write_all(JS.as_bytes()).unwrap();
         stdin.flush().unwrap();
     }
 
@@ -113,7 +114,7 @@ fn compile_svelte_server(file: &Utf8Path) -> String {
 }
 
 fn run_ssr(server: &str, props: &str) -> String {
-    let code = format!(
+    let js = format!(
         r#"
         const json = Deno.args[0];
         const props = JSON.parse(json);
@@ -141,7 +142,7 @@ fn run_ssr(server: &str, props: &str) -> String {
 
     {
         let stdin = child.stdin.as_mut().expect("stdin not piped");
-        stdin.write_all(code.as_bytes()).unwrap();
+        stdin.write_all(js.as_bytes()).unwrap();
         stdin.flush().unwrap();
     }
 
@@ -158,10 +159,10 @@ fn run_ssr(server: &str, props: &str) -> String {
 }
 
 fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> String {
-    const SSR: &str = r#"
+    const JS: &str = r#"
         import * as path from "node:path";
-        import { build } from "npm:esbuild";
-        import svelte from "npm:esbuild-svelte";
+        import { build } from "npm:esbuild@0.25.6";
+        import svelte from "npm:esbuild-svelte@0.9.3";
 
         const file = Deno.args[0];
         const hash = Deno.args[1];
@@ -223,7 +224,7 @@ fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> String {
 
     {
         let stdin = child.stdin.as_mut().expect("stdin not piped");
-        stdin.write_all(SSR.as_bytes()).unwrap();
+        stdin.write_all(JS.as_bytes()).unwrap();
         stdin.flush().unwrap();
     }
 
