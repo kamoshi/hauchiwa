@@ -9,11 +9,12 @@ description = "Incredibly flexible static site generator library with incrementa
 repository  = "https://github.com/kamoshi/hauchiwa"
 
 [features]
-default = ["styles", "images", "reload", "server"]
+default = ["asyncrt", "styles", "images", "reload", "server"]
+asyncrt = ["tokio"]
 styles = ["grass"]
 images = ["image"]
 reload = ["notify", "notify-debouncer-full", "tungstenite"]
-server = ["axum", "tokio", "tower-http"]
+server = ["asyncrt", "axum", "tower-http"]
 
 [dependencies]
 camino                  = "1.1"
@@ -21,7 +22,7 @@ chrono                  = "0.4"
 gray_matter             = { version = "0.3", default-features = false, features = ["yaml", "json"] }
 glob                    = "0.3"
 rayon                   = "1.10"
-serde                   = { version = "1.0", features = ["derive"] }
+serde                   = { version = "1.0", default-features = false }
 serde_json              = "1"
 blake3                  = { version = "1.8.2", features = ["rayon", "mmap"] }
 

@@ -2,7 +2,7 @@
 
 Incredibly flexible static site generator library with incremental rebuilds and
 cached image optimization. This library can be used as the backbone of your own
-static site generator, it can handle all the mundane work:
+static site generator, it can handle all the mundane work for you:
 
 - gathering content files from the file system
 - optimizing images and caching the work
@@ -10,25 +10,31 @@ static site generator, it can handle all the mundane work:
 - compiling JavaScript applications via ESBuild
 - watching for changes and incremental rebuilds
 
+
 ## Feature flags
 
-- `server` - add a HTTP server for the generated website's files in watch mode
+```toml
+[dependencies.hauchiwa]
+features = [
+    "asyncrt",  # add async runtime (tokio) and async loader
+    "styles",   # add sass loader
+    "images",   # add image loader + optimizer
+    "reload",   # add live reload in watch mode
+    "server",   # add http server for local development and writing in watch mode
+]
+```
 
 ## Get started
 
 To get started add the following snippet to your `Cargo.toml` file.
 
 ```toml
-[dependencies.hauchiwa]
-version = "*" # change this version to the latest
-features = ["server"]
+hauchiwa = "*" # change this version to the latest
 ```
 
 ## Declarative configuration
 
-The configuration API is designed to be extremely minimal while providing the
-maximum of value to the user by being flexible and unopinionated. It's supposed
-to be really delightful and intuitive to use.
+The configuration API is designed to be extremely minimal, but powerful and flexible.
 
 Here's a small sample of how you can use this library to create your own
 generator. Let's start by defining the shape of front matter for a single post
@@ -70,46 +76,57 @@ fn main() {
     let args = Args::parse();
 
     // Here we start by calling the `setup` function.
-    let website = Website::setup()
-        // We can configure the collections of files used to build the pages.
-        .add_collections([
-            Collection::glob_with("content", "posts/**/*", ["md"], process_matter_yaml::<Post>),
-        ])
-        // We can configure the generator to process additional files like images or custom assets.
-        .add_processors([
-            Processor::process_images(["jpg", "png", "gif"]),
-            Processor::process_assets(["bib"], process_bibliography),
-        ])
-        // We can add directories containing global stylesheets, either CSS or SCSS.
-        .add_global_styles(["styles"])
-        // We can add entrypoints to scripts and their aliases.
-        .add_scripts([
-            ("search", "./js/search/dist/search.js"),
-            ("photos", "./js/vanilla/photos.js"),
+    let website = Website::config()
+        .add_loaders([
+            // We can configure the collections of files used to build the pages.
+            loader::glob_content(BASE, "posts/**/*.md", yaml::<Post>),
+            // We can configure the generator to process additional files like images or custom assets.
+            loader::glob_images(BASE, "**/*.jpg"),
+            loader::glob_images(BASE, "**/*.png"),
+            loader::glob_images(BASE, "**/*.gif"),
+            loader::glob_assets(BASE, "**/*.bib", |rt, data| {
+                // save the raw data in cache and return path
+                let path = rt.store(&data, "bib").unwrap();
+                let text = String::from_utf8_lossy(&data);
+                let data = hayagriva::io::from_biblatex_str(&text).unwrap();
+
+                // return data (path to file + parsed bibtex)
+                Bibtex { path, data }
+            }),
+            // We can add directories containing global stylesheets, either CSS or SCSS.
+            loader::glob_styles("styles", "**/[!_]*.scss"),
+            // We can add JavaScript scripts compiled via ESBuild
+            loader::glob_scripts("scripts", "src/*/main.ts"),
+            // We can add Svelte component compiled via ESbuild. We can use type
+            // parameter to specify the shape of props passed to the component,
+            // or we can use `()` if we don't need anything.
+            loader::glob_svelte::<Props>("scripts", "src/*/App.svelte"),
         ])
         // We can add a simple task to generate the `index.html` page with arbitrary
         // content, here it's `<h1>hello world!</h1>`.
         .add_task(|_| {
-            vec![("index.html".into(), String::from("<h1>hello world!</h1>"))]
+            vec![Page::text("index.html".into(), String::from("<h1>hello world!</h1>"))]
         })
-        // We can retrieve any loaded content from the `sack` provided to the task.
+        // We can retrieve any loaded content from the `ctx` provided to the task.
         // Note that you have to bring your own markdown parser and HTML templating
         // engine here.
-        .add_task(|sack| {
-            sack.query_content::<Post>("posts/**/*")
+        .add_task(|ctx| {
+            let pages = ctx.glob_with_file::<Content<Post>>("posts/**/*")
                 .into_iter()
-                .map(|query| {
-                    // Retrieve any assets required to build the page, they are automatically
-                    // tracked when in watch mode, and cause a rebuild when modified.
-                    let library = sack.get_library(query.area);
+                .map(|item| {
+                    // Retrieve any assets required to build the page.
+                    let pattern = format!("{}/*", item.file.area);
+                    let library = ctx.get::<Bibtex>(&pattern)?;
                     // Parse the content of a Markdown file, bring your own library.
-                    let (parsed, outline, bib) = html::post::parse_content(query.content, &sack, query.area, library);
+                    let (parsed, outline, bibliography) = crate::md::parse(&ctx, item.data.text, library);
                     // Generate the HTML page, bring your own library.
-                    let out_buff = html::post::as_html(query.meta, &parsed, &sack, outline, bib);
-                    // Return the slug and content as a tuple.
-                    (query.slug.join("index.html"), out_buff)
+                    let rendered = crate::html::render(&ctx, parsed, outline, bibliography);
+                    // Return the path and content as a tuple.
+                    (item.file.slug.join("index.html"), rendered)
                 })
-                .collect()
+                .collect()?;
+
+            Ok(pages)
         })
         // Complete the configuration process.
         .finish();
@@ -128,4 +145,4 @@ look at it 😊
 
 ## License
 
-This library is available under GPL 3.0.
+This library is available under GPL 2.0 (or later).

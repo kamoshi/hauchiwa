@@ -1,5 +1,6 @@
 mod assets;
-mod asyncio;
+#[cfg(feature = "asyncrt")]
+mod asyncrt;
 mod content;
 mod generic;
 #[cfg(feature = "images")]
@@ -16,7 +17,8 @@ use camino::{Utf8Path, Utf8PathBuf};
 use crate::{BuilderError, GitRepo, Hash32, Item};
 
 pub use assets::glob_assets;
-pub use asyncio::async_asset;
+#[cfg(feature = "asyncrt")]
+pub use asyncrt::async_asset;
 pub use content::{Content, glob_content, json, yaml};
 #[cfg(feature = "images")]
 pub use images::{Image, glob_images};
