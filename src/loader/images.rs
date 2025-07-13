@@ -17,8 +17,7 @@ pub fn glob_images(path_base: &'static str, path_glob: &'static str) -> Loader {
             path_base,
             path_glob,
             |path| {
-                let bytes = fs::read(path).unwrap();
-                let hash = Hash32::hash(&bytes);
+                let hash = Hash32::hash_file(path);
 
                 (hash, (hash, path.to_owned()))
             },

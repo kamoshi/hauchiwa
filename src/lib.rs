@@ -20,7 +20,6 @@ use camino::{Utf8Path, Utf8PathBuf};
 use console::style;
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
-use sha2::{Digest, Sha256};
 
 pub use crate::error::*;
 pub use crate::gitmap::{GitInfo, GitRepo};
@@ -70,7 +69,18 @@ where
 
 impl Hash32 {
     fn hash(buffer: impl AsRef<[u8]>) -> Self {
-        Sha256::digest(buffer).into()
+        blake3::Hasher::new()
+            .update(buffer.as_ref())
+            .finalize()
+            .into()
+    }
+
+    fn hash_file(path: impl AsRef<std::path::Path>) -> Self {
+        blake3::Hasher::new()
+            .update_mmap_rayon(path)
+            .unwrap()
+            .finalize()
+            .into()
     }
 
     fn to_hex(self) -> String {
