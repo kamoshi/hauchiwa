@@ -4,31 +4,41 @@ use std::{
 };
 
 use camino::{Utf8Path, Utf8PathBuf};
-use sha2::{Digest, Sha256};
 
 use crate::{Hash32, Loader, loader::generic::LoaderGenericMultifile};
 
-pub struct Svelte {
-    pub html: String,
+pub struct Svelte<P>
+where
+    P: serde::Serialize,
+{
+    pub html: Box<dyn Fn(&P) -> String + Send + Sync>,
     pub init: Utf8PathBuf,
 }
 
-pub fn glob_svelte(path_base: &'static str, path_glob: &'static str) -> Loader {
+pub fn glob_svelte<P>(path_base: &'static str, path_glob: &'static str) -> Loader
+where
+    P: serde::Serialize + 'static,
+{
     Loader::with(move |_| {
         LoaderGenericMultifile::new(
             path_base,
             path_glob,
             |path| {
-                let hash = Hash32::hash(path.as_str());
-                let html = compile_svelte_html(path, hash);
-                let init = compile_svelte_init(path, hash);
+                let server = compile_svelte_server(path);
+                let hash = Hash32::hash(&server);
+                let client = compile_svelte_init(path, hash);
 
-                let mut hasher = Sha256::new();
-                hasher.update(&html);
-                hasher.update(&init);
-                let hash: Hash32 = hasher.finalize().into();
+                let ssr = Box::new({
+                    let hashed = hash.to_hex();
 
-                (hash, (html, init))
+                    move |props: &P| {
+                        let json = serde_json::to_string(props).unwrap();
+                        let html = run_ssr(&server, &json);
+                        format!(r#"<div class="_{hashed}" data-props='{json}'>{html}</div>"#,)
+                    }
+                });
+
+                (hash, (ssr, client))
             },
             |rt, (html, init)| {
                 let init = rt.store(init.as_bytes(), "js").unwrap();
@@ -39,19 +49,19 @@ pub fn glob_svelte(path_base: &'static str, path_glob: &'static str) -> Loader {
     })
 }
 
-fn compile_svelte_html(file: &Utf8Path, hash_class: Hash32) -> String {
+fn compile_svelte_server(file: &Utf8Path) -> String {
     const SSR: &str = r#"
         import { build } from "npm:esbuild";
         import svelte from "npm:esbuild-svelte";
 
         const file = Deno.args[0];
-        const hash = Deno.args[1];
 
         const ssr = await build({
             entryPoints: [file],
-            bundle: true,
             format: "esm",
             platform: "node",
+            minify: true,
+            bundle: true,
             write: false,
             mainFields: ["svelte", "module", "main"],
             conditions: ["svelte"],
@@ -64,15 +74,9 @@ fn compile_svelte_html(file: &Utf8Path, hash_class: Hash32) -> String {
             ],
         });
 
-        const { default: Comp } = await import(
-            "data:text/javascript," + encodeURIComponent(ssr.outputFiles[0].text)
-        );
-
-        const data = { out: "" };
-        Comp(data);
-
-        const html = new TextEncoder().encode(`<div class="_${hash}">${data.out}</div>`);
-        await Deno.stdout.write(html);
+        const text = encodeURIComponent(ssr.outputFiles[0].text);
+        const js = new TextEncoder().encode(text);
+        await Deno.stdout.write(js);
         await Deno.stdout.close();
     "#;
 
@@ -84,7 +88,6 @@ fn compile_svelte_html(file: &Utf8Path, hash_class: Hash32) -> String {
         .arg("--allow-run")
         .arg("-")
         .arg(file.as_str())
-        .arg(hash_class.to_hex())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -94,7 +97,8 @@ fn compile_svelte_html(file: &Utf8Path, hash_class: Hash32) -> String {
     {
         let stdin = child.stdin.as_mut().expect("stdin not piped");
         stdin.write_all(SSR.as_bytes()).unwrap();
-    } // drop closes the pipe
+        stdin.flush().unwrap();
+    }
 
     let output = child
         .wait_with_output()
@@ -105,7 +109,51 @@ fn compile_svelte_html(file: &Utf8Path, hash_class: Hash32) -> String {
         panic!("Deno bundler failed:\n{stderr}");
     }
 
-    // println!("{}", String::from_utf8_lossy(&output.stdout));
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn run_ssr(server: &str, props: &str) -> String {
+    let code = format!(
+        r#"
+        const json = Deno.args[0];
+        const props = JSON.parse(json);
+
+        const {{ default: SSR }} = await import("data:text/javascript,{server}");
+        const data = {{ out: "" }};
+        SSR(data, props);
+
+        const html = new TextEncoder().encode(data.out);
+        await Deno.stdout.write(html);
+        await Deno.stdout.close();
+    "#
+    );
+
+    let mut child = Command::new("deno")
+        .arg("run")
+        .arg("--quiet")
+        .arg("-")
+        .arg(props)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to start Deno SSR server");
+
+    {
+        let stdin = child.stdin.as_mut().expect("stdin not piped");
+        stdin.write_all(code.as_bytes()).unwrap();
+        stdin.flush().unwrap();
+    }
+
+    let output = child
+        .wait_with_output()
+        .expect("failed to read Deno output");
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        panic!("Deno SSR failed:\n{stderr}");
+    }
+
     String::from_utf8(output.stdout).unwrap()
 }
 
@@ -124,7 +172,9 @@ fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> String {
 
             const query = document.querySelectorAll('._${hash}');
             for (const target of query) {
-                hydrate(App, { target });
+                const attrs = target.getAttribute('data-props');
+                const props = JSON.parse(attrs) ?? {};
+                hydrate(App, { target, props });
             }
         `;
 
@@ -174,7 +224,8 @@ fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> String {
     {
         let stdin = child.stdin.as_mut().expect("stdin not piped");
         stdin.write_all(SSR.as_bytes()).unwrap();
-    } // drop closes the pipe
+        stdin.flush().unwrap();
+    }
 
     let output = child
         .wait_with_output()
@@ -185,6 +236,5 @@ fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> String {
         panic!("Deno bundler failed:\n{stderr}");
     }
 
-    // println!("{}", String::from_utf8_lossy(&output.stdout));
     String::from_utf8(output.stdout).unwrap()
 }
