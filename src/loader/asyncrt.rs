@@ -7,7 +7,7 @@ use std::{
 use camino::Utf8PathBuf;
 
 use crate::{
-    FileData, FromFile, Item, Loader,
+    FileData, FromFile, Item, Loader, LoaderError,
     loader::{Loadable, Runtime},
 };
 
@@ -57,11 +57,11 @@ where
     F: Fn(Runtime) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<T>> + 'static,
 {
-    fn load(&mut self) {
+    fn load(&mut self) -> Result<(), LoaderError> {
         let f1 = &self.f1;
 
         let data = f1(self.rt.clone());
-        let data = self.tokio.block_on(data).unwrap();
+        let data = self.tokio.block_on(data)?;
 
         self.cached = Some(Item {
             refl_type: TypeId::of::<T>(),
@@ -74,13 +74,15 @@ where
                     area: "".into(),
                     info: None,
                 }),
-                data: LazyLock::new(Box::new(move || Arc::new(data))),
+                data: LazyLock::new(Box::new(move || Ok(Arc::new(data)))),
             },
         });
+
+        Ok(())
     }
 
-    fn reload(&mut self, _: &HashSet<Utf8PathBuf>) -> bool {
-        false
+    fn reload(&mut self, _: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError> {
+        Ok(false)
     }
 
     fn items(&self) -> Vec<&crate::Item> {

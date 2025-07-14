@@ -7,7 +7,7 @@ use std::{
 use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{
-    FileData, FromFile, Hash32, Item,
+    FileData, FromFile, Hash32, Item, LoaderError,
     loader::{Loadable, Runtime},
 };
 
@@ -19,8 +19,8 @@ where
     path_base: &'static str,
     path_glob: &'static str,
     cached: HashMap<Utf8PathBuf, Item>,
-    f1: fn(&Utf8Path) -> (Hash32, T),
-    f2: fn(Runtime, T) -> R,
+    f1: fn(&Utf8Path) -> anyhow::Result<(Hash32, T)>,
+    f2: fn(Runtime, T) -> anyhow::Result<R>,
     rt: Runtime,
 }
 
@@ -32,8 +32,8 @@ where
     pub fn new(
         path_base: &'static str,
         path_glob: &'static str,
-        f1: fn(&Utf8Path) -> (Hash32, T),
-        f2: fn(Runtime, T) -> R,
+        f1: fn(&Utf8Path) -> anyhow::Result<(Hash32, T)>,
+        f2: fn(Runtime, T) -> anyhow::Result<R>,
     ) -> Self {
         Self {
             path_base,
@@ -51,7 +51,7 @@ where
     T: 'static + Send + Sync,
     R: 'static + Send + Sync,
 {
-    fn load(&mut self) {
+    fn load(&mut self) -> Result<(), LoaderError> {
         let path_base = self.path_base;
         let path_glob = self.path_glob;
         let cached = &mut self.cached;
@@ -68,12 +68,12 @@ where
         }
 
         if arr.is_empty() {
-            return;
+            return Ok(());
         }
 
         for file in arr {
             let area = file.with_extension("");
-            let (_hash, data) = f1(&file);
+            let (_hash, data) = f1(&file)?;
             cached.insert(
                 file.to_owned(),
                 Item {
@@ -89,15 +89,17 @@ where
                         }),
                         data: {
                             let rt = self.rt.clone();
-                            LazyLock::new(Box::new(move || Arc::new(f2(rt, data))))
+                            LazyLock::new(Box::new(move || Ok(Arc::new(f2(rt, data)?))))
                         },
                     },
                 },
             );
         }
+
+        Ok(())
     }
 
-    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> bool {
+    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError> {
         let path_base = self.path_base;
         let path_glob = self.path_glob;
         let cached = &mut self.cached;
@@ -114,7 +116,7 @@ where
             }
 
             let area = file.with_extension("");
-            let (_hash, data) = f1(file);
+            let (_hash, data) = f1(file)?;
             cached.insert(
                 file.to_owned(),
                 Item {
@@ -130,7 +132,7 @@ where
                         }),
                         data: {
                             let rt = self.rt.clone();
-                            LazyLock::new(Box::new(move || Arc::new(f2(rt, data))))
+                            LazyLock::new(Box::new(move || Ok(Arc::new(f2(rt, data)?))))
                         },
                     },
                 },
@@ -138,7 +140,7 @@ where
             changed = true;
         }
 
-        changed
+        Ok(changed)
     }
 
     fn items(&self) -> Vec<&crate::Item> {
@@ -164,8 +166,8 @@ where
     path_base: &'static str,
     path_glob: &'static str,
     cached: HashMap<Utf8PathBuf, Item>,
-    f1: fn(&Utf8Path) -> (Hash32, T),
-    f2: fn(Runtime, T) -> R,
+    f1: fn(&Utf8Path) -> anyhow::Result<(Hash32, T)>,
+    f2: fn(Runtime, T) -> anyhow::Result<R>,
     rt: Runtime,
 }
 
@@ -177,8 +179,8 @@ where
     pub fn new(
         path_base: &'static str,
         path_glob: &'static str,
-        f1: fn(&Utf8Path) -> (Hash32, T),
-        f2: fn(Runtime, T) -> R,
+        f1: fn(&Utf8Path) -> anyhow::Result<(Hash32, T)>,
+        f2: fn(Runtime, T) -> anyhow::Result<R>,
     ) -> Self {
         Self {
             path_base,
@@ -196,7 +198,7 @@ where
     T: 'static + Send + Sync,
     R: 'static + Send + Sync,
 {
-    fn load(&mut self) {
+    fn load(&mut self) -> Result<(), LoaderError> {
         let path_base = self.path_base;
         let path_glob = self.path_glob;
         let cached = &mut self.cached;
@@ -213,12 +215,12 @@ where
         }
 
         if arr.is_empty() {
-            return;
+            return Ok(());
         }
 
         for file in arr {
             let area = file.with_extension("");
-            let (_hash, data) = f1(&file);
+            let (_hash, data) = f1(&file)?;
             cached.insert(
                 file.to_owned(),
                 Item {
@@ -234,20 +236,22 @@ where
                         }),
                         data: {
                             let rt = self.rt.clone();
-                            LazyLock::new(Box::new(move || Arc::new(f2(rt, data))))
+                            LazyLock::new(Box::new(move || Ok(Arc::new(f2(rt, data)?))))
                         },
                     },
                 },
             );
         }
+
+        Ok(())
     }
 
-    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> bool {
+    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError> {
         if set.iter().any(|path| path.starts_with(self.path_base)) {
-            self.load();
-            true
+            self.load()?;
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 

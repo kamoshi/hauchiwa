@@ -1,8 +1,33 @@
 use camino::Utf8PathBuf;
 use thiserror::Error;
 
+#[derive(Debug, Error, Clone)]
+#[error(transparent)]
+pub struct ArcError(#[from] pub(crate) std::sync::Arc<anyhow::Error>);
+
+impl ArcError {
+    pub(crate) fn new(err: impl Into<anyhow::Error>) -> Self {
+        Self(std::sync::Arc::new(err.into()))
+    }
+}
+
+impl From<anyhow::Error> for ArcError {
+    fn from(e: anyhow::Error) -> Self {
+        ArcError(std::sync::Arc::new(e))
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum HauchiwaError {
+    #[error(transparent)]
+    Dynamic(#[from] anyhow::Error),
+
+    #[error(transparent)]
+    DynamicShared(#[from] std::sync::Arc<anyhow::Error>),
+
+    #[error(transparent)]
+    Canned(#[from] ArcError),
+
     #[error(transparent)]
     Loader(#[from] LoaderError),
 
@@ -61,6 +86,9 @@ pub enum LoaderFileError {
 
 #[derive(Debug, Error)]
 pub enum LoaderError {
+    #[error(transparent)]
+    Userland(#[from] anyhow::Error),
+
     #[error("Encountered an error while loading file {0}:\n{1}")]
     LoaderGlobFile(Utf8PathBuf, LoaderFileError),
 

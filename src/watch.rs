@@ -93,7 +93,7 @@ where
         }
 
         if !modified.is_empty() {
-            dirty |= website.reload_paths(&modified)
+            dirty |= website.reload_paths(&modified)?;
         }
 
         if dirty {

@@ -17,12 +17,12 @@ pub fn glob_scripts(path_base: &'static str, path_glob: &'static str) -> Loader 
                 let data = compile_esbuild(path);
                 let hash = Hash32::hash(&data);
 
-                (hash, data)
+                Ok((hash, data))
             },
             |rt, data| {
-                let path = rt.store(&data, "js").unwrap();
+                let path = rt.store(&data, "js")?;
 
-                Script { path }
+                Ok(Script { path })
             },
         )
     })

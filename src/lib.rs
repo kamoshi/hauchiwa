@@ -75,12 +75,11 @@ impl Hash32 {
             .into()
     }
 
-    fn hash_file(path: impl AsRef<std::path::Path>) -> Self {
-        blake3::Hasher::new()
-            .update_mmap_rayon(path)
-            .unwrap()
+    fn hash_file(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
+        Ok(blake3::Hasher::new()
+            .update_mmap_rayon(path)?
             .finalize()
-            .into()
+            .into())
     }
 
     fn to_hex(self) -> String {
@@ -239,7 +238,7 @@ impl<G: Send + Sync + 'static> Website<G> {
         changed
     }
 
-    fn reload_paths(&mut self, modified: &HashSet<Utf8PathBuf>) -> bool
+    fn reload_paths(&mut self, modified: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError>
     where
         G: Send + Sync + 'static,
     {
@@ -248,9 +247,13 @@ impl<G: Send + Sync + 'static> Website<G> {
         changed |= self
             .loaders
             .par_iter_mut()
-            .any(|loader| loader.reload(modified));
+            .try_fold(
+                || false,
+                |acc, loader| -> Result<_, LoaderError> { Ok(acc || loader.reload(modified)?) },
+            )
+            .try_reduce(|| false, |a, b| Ok(a || b))?;
 
-        changed
+        Ok(changed)
     }
 }
 
@@ -418,6 +421,7 @@ impl Debug for Hook {
 // ******************************
 
 type Dynamic = Arc<dyn Any + Send + Sync>;
+type DynamicResult = Result<Dynamic, ArcError>;
 
 pub struct FileData {
     pub file: Utf8PathBuf,
@@ -429,7 +433,7 @@ pub struct FileData {
 struct FromFile {
     file: Arc<FileData>,
     /// Item computed on demand, cached in memory.
-    data: LazyLock<Dynamic, Box<dyn (FnOnce() -> Dynamic) + Send + Sync>>,
+    data: LazyLock<DynamicResult, Box<dyn (FnOnce() -> DynamicResult) + Send + Sync>>,
 }
 
 struct Item {

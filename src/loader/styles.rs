@@ -14,15 +14,15 @@ pub fn glob_styles(path_base: &'static str, path_glob: &'static str) -> Loader {
             path_glob,
             |path| {
                 let opts = Options::default().style(OutputStyle::Compressed);
-                let data = from_path(path, &opts).unwrap();
+                let data = from_path(path, &opts)?;
                 let hash = Hash32::hash(&data);
 
-                (hash, data)
+                Ok((hash, data))
             },
             |rt, data| {
-                let path = rt.store(data.as_bytes(), "css").unwrap();
+                let path = rt.store(data.as_bytes(), "css")?;
 
-                Style { path }
+                Ok(Style { path })
             },
         )
     })

@@ -17,13 +17,13 @@ pub fn glob_images(path_base: &'static str, path_glob: &'static str) -> Loader {
             path_base,
             path_glob,
             |path| {
-                let hash = Hash32::hash_file(path);
+                let hash = Hash32::hash_file(path)?;
 
-                (hash, (hash, path.to_owned()))
+                Ok((hash, (hash, path.to_owned())))
             },
             |_, (hash, path)| {
-                let path = build_image(hash, &path).unwrap();
-                Image { path }
+                let path = build_image(hash, &path)?;
+                Ok(Image { path })
             },
         )
     })

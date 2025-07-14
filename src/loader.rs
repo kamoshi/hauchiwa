@@ -14,7 +14,7 @@ use std::{collections::HashSet, fs, sync::Arc};
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::{BuilderError, GitRepo, Hash32, Item};
+use crate::{BuilderError, GitRepo, Hash32, Item, error::LoaderError};
 
 pub use assets::glob_assets;
 #[cfg(feature = "asyncrt")]
@@ -28,8 +28,8 @@ pub use styles::{Style, glob_styles};
 pub use svelte::{Svelte, glob_svelte};
 
 pub(crate) trait Loadable: 'static + Send {
-    fn load(&mut self);
-    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> bool;
+    fn load(&mut self) -> Result<(), LoaderError>;
+    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError>;
     fn items(&self) -> Vec<&Item>;
     fn path_base(&self) -> &'static str;
     fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool;
@@ -37,12 +37,12 @@ pub(crate) trait Loadable: 'static + Send {
 
 impl Loadable for Box<dyn Loadable> {
     #[inline]
-    fn load(&mut self) {
+    fn load(&mut self) -> Result<(), LoaderError> {
         (**self).load()
     }
 
     #[inline]
-    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> bool {
+    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError> {
         (**self).reload(set)
     }
 

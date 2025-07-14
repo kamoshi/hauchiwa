@@ -9,7 +9,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use gray_matter::engine::{JSON, YAML};
 
 use crate::{
-    FileData, FromFile, GitRepo, Hash32, Item, Loader, LoaderError, LoaderFileError,
+    ArcError, FileData, FromFile, GitRepo, Hash32, Item, Loader, LoaderError, LoaderFileError,
     loader::Loadable,
 };
 
@@ -124,9 +124,9 @@ where
                 data: {
                     let preload = self.preload;
                     LazyLock::new(Box::new(move || {
-                        let text = String::from_utf8_lossy(&bytes);
-                        let (meta, text) = preload(&text).unwrap();
-                        Arc::new(Content { meta, text })
+                        let text = String::from_utf8(bytes).map_err(ArcError::new)?;
+                        let (meta, text) = preload(&text).map_err(ArcError::new)?;
+                        Ok(Arc::new(Content { meta, text }))
                     }))
                 },
             },
@@ -138,7 +138,7 @@ impl<T> Loadable for LoaderContent<T>
 where
     T: Send + Sync + 'static,
 {
-    fn load(&mut self) {
+    fn load(&mut self) -> Result<(), LoaderError> {
         let pattern = Utf8Path::new(self.path_base).join(self.path_glob);
 
         let mut vec = vec![];
@@ -147,8 +147,7 @@ where
 
             if let Some(item) = self
                 .read_file(path.clone())
-                .map_err(|e| LoaderError::LoaderGlobFile(path, e))
-                .unwrap()
+                .map_err(|e| LoaderError::LoaderGlobFile(path, e))?
             {
                 vec.push(item);
             }
@@ -157,9 +156,11 @@ where
         for item in vec {
             self.cached.insert(item.data.file.file.clone(), item);
         }
+
+        Ok(())
     }
 
-    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> bool {
+    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError> {
         let pattern = Utf8Path::new(self.path_base).join(self.path_glob);
         let pattern = glob::Pattern::new(pattern.as_str()).unwrap();
         let mut changed = false;
@@ -171,15 +172,14 @@ where
 
             if let Some(item) = self
                 .read_file(path.clone())
-                .map_err(|e| LoaderError::LoaderGlobFile(path.to_owned(), e))
-                .unwrap()
+                .map_err(|e| LoaderError::LoaderGlobFile(path.to_owned(), e))?
             {
                 self.cached.insert(item.data.file.file.clone(), item);
                 changed |= true;
             }
         }
 
-        changed
+        Ok(changed)
     }
 
     fn items(&self) -> Vec<&crate::Item> {

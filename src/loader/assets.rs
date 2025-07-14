@@ -8,7 +8,7 @@ use crate::{
 pub fn glob_assets<T>(
     path_base: &'static str,
     path_glob: &'static str,
-    func: fn(Runtime, Vec<u8>) -> T,
+    func: fn(Runtime, Vec<u8>) -> anyhow::Result<T>,
 ) -> Loader
 where
     T: Send + Sync + 'static,
@@ -18,10 +18,10 @@ where
             path_base,
             path_glob,
             |path| {
-                let data = fs::read(path).unwrap();
+                let data = fs::read(path)?;
                 let hash = Hash32::hash(&data);
 
-                (hash, data)
+                Ok((hash, data))
             },
             func,
         )

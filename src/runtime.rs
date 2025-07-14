@@ -2,6 +2,8 @@ use std::any::{TypeId, type_name};
 use std::ops::Deref;
 use std::sync::Arc;
 
+use anyhow::anyhow;
+
 use crate::{FileData, error::*};
 use crate::{Globals, Item};
 
@@ -73,10 +75,13 @@ socket.addEventListener("message", event => {{
             .next()
             .ok_or_else(|| HauchiwaError::AssetNotFound(glob.to_string()))?;
 
-        let data = item.data.data.downcast_ref().unwrap();
+        let data = match &*item.data.data {
+            Ok(ok) => ok,
+            Err(e) => Err(e.clone())?,
+        };
 
         Ok(WithFile {
-            data,
+            data: data.downcast_ref().ok_or(anyhow!("Failed to downcast"))?,
             file: item.data.file.clone(),
         })
     }
@@ -95,16 +100,19 @@ socket.addEventListener("message", event => {{
                 item.refl_type == refl_type
                     && glob.matches_path_with(item.data.file.slug.as_std_path(), GLOB_OPTS)
             })
-            .map(Deref::deref)
-            .map(|item| {
-                let data = item.data.data.downcast_ref().unwrap();
+            .try_fold(Vec::new(), |mut acc, &item| -> Result<_, HauchiwaError> {
+                let data = match &*item.data.data {
+                    Ok(ok) => ok,
+                    Err(e) => Err(e.clone())?,
+                };
 
-                WithFile {
-                    data,
+                acc.push(WithFile {
+                    data: data.downcast_ref().ok_or(anyhow!("Failed to downcast"))?,
                     file: item.data.file.clone(),
-                }
-            })
-            .collect();
+                });
+
+                Ok(acc)
+            })?;
 
         Ok(items)
     }
@@ -114,7 +122,7 @@ socket.addEventListener("message", event => {{
     pub fn glob<T: 'static>(&self, pattern: &str) -> Result<Option<&T>, HauchiwaError> {
         let refl_type = TypeId::of::<T>();
         let glob = glob::Pattern::new(pattern)?;
-        let next = self
+        let item = self
             .items
             .iter()
             .filter(|item| {
@@ -124,15 +132,26 @@ socket.addEventListener("message", event => {{
             .map(Deref::deref)
             .next();
 
-        Ok(match next {
-            Some(item) => item.data.data.downcast_ref(),
-            None => None,
-        })
+        let item = match item {
+            Some(item) => item,
+            None => return Ok(None),
+        };
+
+        let data = match &*item.data.data {
+            Ok(ok) => ok,
+            Err(e) => Err(e.clone())?,
+        };
+
+        Ok(data.downcast_ref())
     }
 
     pub fn get<T: 'static>(&self, path: &str) -> Result<&T, HauchiwaError> {
         let item = self.find_item_by_path(path)?;
-        let data = item.data.data.downcast_ref();
+        let data = match &*item.data.data {
+            Ok(ok) => ok,
+            Err(e) => Err(e.clone())?,
+        };
+        let data = data.downcast_ref();
 
         match data {
             Some(data) => Ok(data),

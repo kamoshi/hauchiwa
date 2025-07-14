@@ -39,12 +39,12 @@ where
                     }
                 });
 
-                (hash, (html, client))
+                Ok((hash, (html, client)))
             },
             |rt, (html, init)| {
-                let init = rt.store(init.as_bytes(), "js").unwrap();
+                let init = rt.store(init.as_bytes(), "js")?;
 
-                Svelte { html, init }
+                Ok(Svelte { html, init })
             },
         )
     })
