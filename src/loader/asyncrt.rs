@@ -90,7 +90,7 @@ where
     }
 
     fn path_base(&self) -> &'static str {
-        "./"
+        "./styles"
     }
 
     fn remove(&mut self, _: &HashSet<Utf8PathBuf>) -> bool {

@@ -19,7 +19,7 @@ use std::time::Instant;
 use camino::{Utf8Path, Utf8PathBuf};
 use console::style;
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
-use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 
 pub use crate::error::*;
 pub use crate::gitmap::{GitInfo, GitRepo};
@@ -390,12 +390,16 @@ impl<D: Send + Sync> Task<D> {
     fn call(&mut self, globals: &Globals<D>, items: &[&Item]) -> TaskResult<Vec<Page>> {
         let tracker = Arc::new(RwLock::new(vec![]));
         let context = Context::new(globals, items, tracker.clone());
-        let pages = (self.func)(context);
 
-        self.init = false;
-        self.filters = Arc::into_inner(tracker).unwrap().into_inner().unwrap();
+        match (self.func)(context) {
+            Ok(ok) => {
+                self.init = false;
+                self.filters = Arc::into_inner(tracker).unwrap().into_inner().unwrap();
 
-        pages
+                Ok(ok)
+            }
+            err => err,
+        }
     }
 }
 

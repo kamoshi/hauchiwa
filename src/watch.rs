@@ -68,7 +68,12 @@ where
 
         let obsolete = match events
             .iter()
-            .filter(|de| matches!(de.event.kind, EventKind::Remove(..)))
+            .filter(|de| {
+                matches!(
+                    de.event.kind,
+                    EventKind::Create(..) | EventKind::Modify(..) | EventKind::Remove(..)
+                )
+            })
             .flat_map(|de| &de.event.paths)
             .try_fold(
                 HashSet::new(),
@@ -88,8 +93,14 @@ where
 
         let modified = match events
             .iter()
-            .filter(|de| matches!(de.event.kind, EventKind::Create(..) | EventKind::Modify(..)))
+            .filter(|de| {
+                matches!(
+                    de.event.kind,
+                    EventKind::Create(..) | EventKind::Modify(..) | EventKind::Remove(..)
+                )
+            })
             .flat_map(|de| &de.event.paths)
+            .filter(|path| path.exists())
             .try_fold(
                 HashSet::new(),
                 |mut acc, path| -> Result<_, anyhow::Error> {
@@ -118,7 +129,7 @@ where
             dirty |= match website.reload_paths(&modified) {
                 Ok(ok) => ok,
                 Err(e) => {
-                    eprintln!("{e}");
+                    eprintln!("Error while reloading:\n{e}");
                     continue;
                 }
             };
