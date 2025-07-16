@@ -55,7 +55,7 @@ pub struct Globals<G: Send + Sync = ()> {
 }
 
 /// 32 bytes length generic hash
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 struct Hash32([u8; 32]);
 
 impl<T> From<T> for Hash32
@@ -369,8 +369,10 @@ impl<D: Send + Sync> Task<D> {
     }
 
     /// Run the task to generate a page.
-    fn call(&self, sack: Context<D>) -> TaskResult<Vec<Page>> {
-        (self.0)(sack)
+    fn call(&self, ctx: Context<D>) -> TaskResult<Vec<Page>> {
+        // TODO: Do the ceremony here. Track dependencies here. Store
+        // dependencies in this struct
+        (self.0)(ctx)
     }
 }
 
@@ -436,6 +438,6 @@ struct FromFile {
 struct Item {
     refl_type: TypeId,
     refl_name: &'static str,
-    // hash: Hash32,
+    hash: Hash32,
     data: FromFile,
 }

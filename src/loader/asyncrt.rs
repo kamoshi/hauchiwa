@@ -66,7 +66,7 @@ where
         self.cached = Some(Item {
             refl_type: TypeId::of::<T>(),
             refl_name: type_name::<T>(),
-            // hash,
+            hash: Default::default(),
             data: FromFile {
                 file: Arc::new(FileData {
                     file: "".into(),

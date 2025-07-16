@@ -82,6 +82,13 @@ where
         }
     }
 
+    fn check_loaded(&self, path: &Utf8Path, hash: Hash32) -> bool {
+        match self.cached.get(path) {
+            Some(item) => item.hash == hash,
+            None => false,
+        }
+    }
+
     /// Helper function, convert file into InputItem
     /// TODO: based on loader cache, here we can use Hash32 to check if the
     /// previously loaded content item already exists, and *if* we have it, we
@@ -92,7 +99,10 @@ where
         }
 
         let bytes = fs::read(&path)?;
-        let _hash = Hash32::hash(&bytes);
+        let hash = Hash32::hash(&bytes);
+        if self.check_loaded(&path, hash) {
+            return Ok(None);
+        }
 
         let area = match path.file_stem() {
             Some("index") => path
@@ -110,7 +120,7 @@ where
         Ok(Some(Item {
             refl_type: TypeId::of::<Content<T>>(),
             refl_name: type_name::<Content<T>>(),
-            // hash,
+            hash,
             data: FromFile {
                 file: Arc::new(FileData {
                     info: self

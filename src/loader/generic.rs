@@ -44,6 +44,13 @@ where
             rt: Runtime,
         }
     }
+
+    fn check_loaded(&self, path: &Utf8Path, hash: Hash32) -> bool {
+        match self.cached.get(path) {
+            Some(item) => item.hash == hash,
+            None => false,
+        }
+    }
 }
 
 impl<T, R> Loadable for LoaderGeneric<T, R>
@@ -54,7 +61,6 @@ where
     fn load(&mut self) -> Result<(), LoaderError> {
         let path_base = self.path_base;
         let path_glob = self.path_glob;
-        let cached = &mut self.cached;
         let f1 = self.f1;
         let f2 = self.f2;
 
@@ -73,13 +79,17 @@ where
 
         for file in arr {
             let area = file.with_extension("");
-            let (_hash, data) = f1(&file)?;
-            cached.insert(
+            let (hash, data) = f1(&file)?;
+            if self.check_loaded(&file, hash) {
+                continue;
+            }
+
+            self.cached.insert(
                 file.to_owned(),
                 Item {
                     refl_type: TypeId::of::<R>(),
                     refl_name: type_name::<R>(),
-                    // hash,
+                    hash,
                     data: FromFile {
                         file: Arc::new(FileData {
                             file: file.clone(),
@@ -102,7 +112,6 @@ where
     fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError> {
         let path_base = self.path_base;
         let path_glob = self.path_glob;
-        let cached = &mut self.cached;
         let f1 = self.f1;
         let f2 = self.f2;
 
@@ -116,13 +125,17 @@ where
             }
 
             let area = file.with_extension("");
-            let (_hash, data) = f1(file)?;
-            cached.insert(
+            let (hash, data) = f1(file)?;
+            if self.check_loaded(file, hash) {
+                continue;
+            }
+
+            self.cached.insert(
                 file.to_owned(),
                 Item {
                     refl_type: TypeId::of::<R>(),
                     refl_name: type_name::<R>(),
-                    // hash,
+                    hash,
                     data: FromFile {
                         file: Arc::new(FileData {
                             file: file.clone(),
@@ -191,6 +204,13 @@ where
             rt: Runtime,
         }
     }
+
+    fn check_loaded(&self, path: &Utf8Path, hash: Hash32) -> bool {
+        match self.cached.get(path) {
+            Some(item) => item.hash == hash,
+            None => false,
+        }
+    }
 }
 
 impl<T, R> Loadable for LoaderGenericMultifile<T, R>
@@ -201,7 +221,6 @@ where
     fn load(&mut self) -> Result<(), LoaderError> {
         let path_base = self.path_base;
         let path_glob = self.path_glob;
-        let cached = &mut self.cached;
         let f1 = self.f1;
         let f2 = self.f2;
 
@@ -220,13 +239,17 @@ where
 
         for file in arr {
             let area = file.with_extension("");
-            let (_hash, data) = f1(&file)?;
-            cached.insert(
+            let (hash, data) = f1(&file)?;
+            if self.check_loaded(&file, hash) {
+                continue;
+            }
+
+            self.cached.insert(
                 file.to_owned(),
                 Item {
                     refl_type: TypeId::of::<R>(),
                     refl_name: type_name::<R>(),
-                    // hash,
+                    hash,
                     data: FromFile {
                         file: Arc::new(FileData {
                             file: file.clone(),
