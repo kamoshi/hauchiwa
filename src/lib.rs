@@ -135,8 +135,7 @@ where
         .par_iter()
         .map(|task| task.call(Context::new(globals, &items)))
         .progress_with(progress.clone())
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap()
+        .collect::<Result<Vec<_>, _>>()?
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
@@ -146,11 +145,9 @@ where
     let temp: Vec<_> = pages.iter().collect();
     for hook in &website.hooks {
         match hook {
-            Hook::PostBuild(callback) => callback(&temp).unwrap(),
+            Hook::PostBuild(callback) => callback(&temp)?,
         }
     }
-
-    // let builder = Arc::into_inner(builder).unwrap().into_inner().unwrap();
 
     for page in pages {
         let path = Utf8Path::new("dist").join(&page.path);
@@ -421,7 +418,7 @@ impl Debug for Hook {
 // ******************************
 
 type Dynamic = Arc<dyn Any + Send + Sync>;
-type DynamicResult = Result<Dynamic, ArcError>;
+type DynamicResult = Result<Dynamic, LazyAssetError>;
 
 pub struct FileData {
     pub file: Utf8PathBuf,

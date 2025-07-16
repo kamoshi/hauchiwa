@@ -15,7 +15,7 @@ use tungstenite::WebSocket;
 use crate::build;
 use crate::error::WatchError;
 use crate::loader::Loadable;
-use crate::{Globals, HauchiwaError, Mode, Website, init};
+use crate::{Globals, Mode, Website, init};
 
 fn reserve_port() -> Result<(TcpListener, u16), WatchError> {
     let listener = match TcpListener::bind("127.0.0.1:1337") {
@@ -28,16 +28,16 @@ fn reserve_port() -> Result<(TcpListener, u16), WatchError> {
     Ok((listener, port))
 }
 
-pub fn watch<G>(website: &mut Website<G>, data: G) -> Result<(), HauchiwaError>
+pub fn watch<G>(website: &mut Website<G>, data: G) -> anyhow::Result<()>
 where
     G: Send + Sync + 'static,
 {
-    let root = env::current_dir().unwrap();
+    let root = env::current_dir()?;
     let (tcp, port) = reserve_port()?;
     let client = Arc::new(Mutex::new(vec![]));
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut debouncer = new_debouncer(Duration::from_millis(250), None, tx).unwrap();
+    let mut debouncer = new_debouncer(Duration::from_millis(250), None, tx)?;
 
     for base in website
         .loaders
@@ -45,9 +45,7 @@ where
         .map(Loadable::path_base)
         .collect::<HashSet<_>>()
     {
-        debouncer
-            .watch(Path::new(base), RecursiveMode::Recursive)
-            .unwrap();
+        debouncer.watch(Path::new(base), RecursiveMode::Recursive)?;
     }
 
     let thread_i = new_thread_ws_incoming(tcp, client.clone());
@@ -65,24 +63,48 @@ where
     #[cfg(feature = "server")]
     let thread_http = server::start();
 
-    while let Ok(events) = rx.recv().unwrap() {
+    while let Ok(events) = rx.recv()? {
         let mut dirty = false;
 
-        let obsolete: HashSet<_> = events
+        let obsolete = match events
             .iter()
             .filter(|de| matches!(de.event.kind, EventKind::Remove(..)))
             .flat_map(|de| &de.event.paths)
-            .map(|path| path.strip_prefix(&root).unwrap())
-            .map(|path| Utf8PathBuf::try_from(path.to_path_buf()).unwrap())
-            .collect();
+            .try_fold(
+                HashSet::new(),
+                |mut acc, path| -> Result<_, anyhow::Error> {
+                    let path = path.strip_prefix(&root)?;
+                    let path = Utf8PathBuf::try_from(path.to_path_buf())?;
+                    acc.insert(path);
+                    Ok(acc)
+                },
+            ) {
+            Ok(ok) => ok,
+            Err(e) => {
+                eprintln!("{e}");
+                continue;
+            }
+        };
 
-        let modified: HashSet<_> = events
+        let modified = match events
             .iter()
             .filter(|de| matches!(de.event.kind, EventKind::Create(..) | EventKind::Modify(..)))
             .flat_map(|de| &de.event.paths)
-            .map(|path| path.strip_prefix(&root).unwrap())
-            .map(|path| Utf8PathBuf::try_from(path.to_path_buf()).unwrap())
-            .collect();
+            .try_fold(
+                HashSet::new(),
+                |mut acc, path| -> Result<_, anyhow::Error> {
+                    let path = path.strip_prefix(&root)?;
+                    let path = Utf8PathBuf::try_from(path.to_path_buf())?;
+                    acc.insert(path);
+                    Ok(acc)
+                },
+            ) {
+            Ok(ok) => ok,
+            Err(e) => {
+                eprintln!("{e}");
+                continue;
+            }
+        };
 
         if obsolete.is_empty() && modified.is_empty() {
             continue;
@@ -93,7 +115,13 @@ where
         }
 
         if !modified.is_empty() {
-            dirty |= website.reload_paths(&modified)?;
+            dirty |= match website.reload_paths(&modified) {
+                Ok(ok) => ok,
+                Err(e) => {
+                    eprintln!("{e}");
+                    continue;
+                }
+            };
         }
 
         if dirty {
@@ -101,7 +129,7 @@ where
             let start = Instant::now();
 
             match build(website, &globals) {
-                Ok(()) => tx_reload.send(()).unwrap(),
+                Ok(()) => tx_reload.send(())?,
                 Err(e) => {
                     eprintln!("Encountered an error while rebuilding: {e}")
                 }

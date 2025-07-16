@@ -59,11 +59,11 @@ where
         let f2 = self.f2;
 
         let pattern = Utf8Path::new(path_base).join(path_glob);
-        let iter = glob::glob(pattern.as_str()).unwrap();
+        let iter = glob::glob(pattern.as_str())?;
 
         let mut arr = vec![];
         for entry in iter {
-            let path = Utf8PathBuf::try_from(entry.unwrap()).unwrap();
+            let path = Utf8PathBuf::try_from(entry?)?;
             arr.push(path);
         }
 
@@ -107,7 +107,7 @@ where
         let f2 = self.f2;
 
         let pattern = Utf8Path::new(path_base).join(path_glob);
-        let matcher = glob::Pattern::new(pattern.as_str()).unwrap();
+        let matcher = glob::Pattern::new(pattern.as_str())?;
         let mut changed = false;
 
         for file in set {
@@ -206,11 +206,11 @@ where
         let f2 = self.f2;
 
         let pattern = Utf8Path::new(path_base).join(path_glob);
-        let iter = glob::glob(pattern.as_str()).unwrap();
+        let iter = glob::glob(pattern.as_str())?;
 
         let mut arr = vec![];
         for entry in iter {
-            let path = Utf8PathBuf::try_from(entry.unwrap()).unwrap();
+            let path = Utf8PathBuf::try_from(entry?)?;
             arr.push(path);
         }
 

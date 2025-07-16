@@ -1,32 +1,34 @@
+use std::sync::Arc;
+
 use camino::Utf8PathBuf;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone)]
 #[error(transparent)]
-pub struct ArcError(#[from] pub(crate) std::sync::Arc<anyhow::Error>);
+pub struct LazyAssetError(#[from] pub(crate) Arc<anyhow::Error>);
 
-impl ArcError {
+impl LazyAssetError {
     pub(crate) fn new(err: impl Into<anyhow::Error>) -> Self {
-        Self(std::sync::Arc::new(err.into()))
+        Self(Arc::new(err.into()))
     }
 }
 
-impl From<anyhow::Error> for ArcError {
+impl From<anyhow::Error> for LazyAssetError {
     fn from(e: anyhow::Error) -> Self {
-        ArcError(std::sync::Arc::new(e))
+        LazyAssetError(Arc::new(e))
     }
 }
 
 #[derive(Debug, Error)]
 pub enum HauchiwaError {
     #[error(transparent)]
-    Dynamic(#[from] anyhow::Error),
+    Anyhow(#[from] anyhow::Error),
 
     #[error(transparent)]
-    DynamicShared(#[from] std::sync::Arc<anyhow::Error>),
+    AnyhowArc(#[from] Arc<anyhow::Error>),
 
     #[error(transparent)]
-    Canned(#[from] ArcError),
+    LazyAssetError(#[from] LazyAssetError),
 
     #[error(transparent)]
     Loader(#[from] LoaderError),

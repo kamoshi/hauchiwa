@@ -44,7 +44,7 @@ fn process_image(buffer: &[u8]) -> Vec<u8> {
     out
 }
 
-fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaError> {
+fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, BuilderError> {
     let hash = hash.to_hex();
     let path_root = Utf8Path::new("/hash/img/")
         .join(&hash)
@@ -64,7 +64,7 @@ fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, HauchiwaErr
 
         fs::create_dir_all(".cache/hash/img/")
             .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
-        fs::write(&path_hash, buffer).unwrap();
+        fs::write(&path_hash, buffer);
     }
 
     let dir = path_dist.parent().unwrap_or(&path_dist);

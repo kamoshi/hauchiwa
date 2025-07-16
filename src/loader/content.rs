@@ -9,8 +9,8 @@ use camino::{Utf8Path, Utf8PathBuf};
 use gray_matter::engine::{JSON, YAML};
 
 use crate::{
-    ArcError, FileData, FromFile, GitRepo, Hash32, Item, Loader, LoaderError, LoaderFileError,
-    loader::Loadable,
+    FileData, FromFile, GitRepo, Hash32, Item, LazyAssetError, Loader, LoaderError,
+    LoaderFileError, loader::Loadable,
 };
 
 pub struct Content<T>
@@ -124,8 +124,8 @@ where
                 data: {
                     let preload = self.preload;
                     LazyLock::new(Box::new(move || {
-                        let text = String::from_utf8(bytes).map_err(ArcError::new)?;
-                        let (meta, text) = preload(&text).map_err(ArcError::new)?;
+                        let text = String::from_utf8(bytes).map_err(LazyAssetError::new)?;
+                        let (meta, text) = preload(&text).map_err(LazyAssetError::new)?;
                         Ok(Arc::new(Content { meta, text }))
                     }))
                 },
@@ -142,8 +142,8 @@ where
         let pattern = Utf8Path::new(self.path_base).join(self.path_glob);
 
         let mut vec = vec![];
-        for path in glob::glob(pattern.as_str()).unwrap() {
-            let path = Utf8PathBuf::try_from(path.unwrap()).unwrap();
+        for path in glob::glob(pattern.as_str())? {
+            let path = Utf8PathBuf::try_from(path?)?;
 
             if let Some(item) = self
                 .read_file(path.clone())
@@ -162,7 +162,7 @@ where
 
     fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError> {
         let pattern = Utf8Path::new(self.path_base).join(self.path_glob);
-        let pattern = glob::Pattern::new(pattern.as_str()).unwrap();
+        let pattern = glob::Pattern::new(pattern.as_str())?;
         let mut changed = false;
 
         for path in set {
