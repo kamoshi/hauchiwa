@@ -1,10 +1,11 @@
 use std::any::{TypeId, type_name};
+use std::borrow::Cow;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use anyhow::anyhow;
 
-use crate::{FileData, error::*};
+use crate::{FileData, Hash32, error::*};
 use crate::{Globals, Item};
 
 const GLOB_OPTS: glob::MatchOptions = glob::MatchOptions {
@@ -27,15 +28,25 @@ where
     /// Global data for the current build.
     globals: &'a Globals<G>,
     /// Every single input.
-    items: &'a Vec<&'a Item>,
+    items: &'a [&'a Item],
+    ///
+    deps: Arc<RwLock<Vec<Tracker>>>,
 }
 
 impl<'a, G> Context<'a, G>
 where
     G: Send + Sync,
 {
-    pub(crate) fn new(globals: &'a Globals<G>, items: &'a Vec<&'a Item>) -> Self {
-        Self { globals, items }
+    pub(crate) fn new(
+        globals: &'a Globals<G>,
+        items: &'a [&'a Item],
+        deps: Arc<RwLock<Vec<Tracker>>>,
+    ) -> Self {
+        Self {
+            globals,
+            items,
+            deps,
+        }
     }
 
     /// Retrieve the globals.
@@ -61,24 +72,21 @@ socket.addEventListener("message", event => {{
     where
         T: 'static,
     {
-        let refl_type = TypeId::of::<T>();
-        let glob = glob::Pattern::new(pattern)?;
+        let mut filter = FilterGlob::new(TypeId::of::<T>(), glob::Pattern::new(pattern)?);
 
-        let item = self
-            .items
-            .iter()
-            .filter(|item| {
-                item.refl_type == refl_type
-                    && glob.matches_path_with(item.data.file.slug.as_std_path(), GLOB_OPTS)
-            })
-            .map(Deref::deref)
+        let item = filter
+            .filter(self.items)
             .next()
-            .ok_or_else(|| HauchiwaError::AssetNotFound(glob.to_string()))?;
+            .ok_or_else(|| HauchiwaError::AssetNotFound(filter.glob.to_string()))?;
 
         let data = match &*item.data.data {
             Ok(ok) => ok,
             Err(e) => Err(e.clone())?,
         };
+
+        // save dependencies
+        filter.store(vec![item.hash]);
+        self.deps.write().unwrap().push(Tracker::Glob(filter));
 
         Ok(WithFile {
             data: data.downcast_ref().ok_or(anyhow!("Failed to downcast"))?,
@@ -90,29 +98,30 @@ socket.addEventListener("message", event => {{
     where
         T: 'static,
     {
-        let refl_type = TypeId::of::<T>();
-        let glob = glob::Pattern::new(pattern)?;
+        let mut filter = FilterGlob::new(TypeId::of::<T>(), glob::Pattern::new(pattern)?);
 
-        let items = self
-            .items
-            .iter()
-            .filter(|item| {
-                item.refl_type == refl_type
-                    && glob.matches_path_with(item.data.file.slug.as_std_path(), GLOB_OPTS)
-            })
-            .try_fold(Vec::new(), |mut acc, &item| -> Result<_, HauchiwaError> {
+        let (items, hashes) = filter.filter(self.items).try_fold(
+            (Vec::new(), Vec::new()),
+            |mut acc, item| -> Result<_, HauchiwaError> {
                 let data = match &*item.data.data {
                     Ok(ok) => ok,
                     Err(e) => Err(e.clone())?,
                 };
 
-                acc.push(WithFile {
+                acc.0.push(WithFile {
                     data: data.downcast_ref().ok_or(anyhow!("Failed to downcast"))?,
                     file: item.data.file.clone(),
                 });
 
+                acc.1.push(item.hash);
+
                 Ok(acc)
-            })?;
+            },
+        )?;
+
+        // save dependencies
+        filter.store(hashes);
+        self.deps.write().unwrap().push(Tracker::Glob(filter));
 
         Ok(items)
     }
@@ -120,17 +129,8 @@ socket.addEventListener("message", event => {{
     /// Find the first on‐disk asset whose path matches `pattern`. This asset
     /// will be built only on request and cached.
     pub fn glob<T: 'static>(&self, pattern: &str) -> Result<Option<&T>, HauchiwaError> {
-        let refl_type = TypeId::of::<T>();
-        let glob = glob::Pattern::new(pattern)?;
-        let item = self
-            .items
-            .iter()
-            .filter(|item| {
-                item.refl_type == refl_type
-                    && glob.matches_path_with(item.data.file.file.as_std_path(), GLOB_OPTS)
-            })
-            .map(Deref::deref)
-            .next();
+        let mut filter = FilterGlob::new(TypeId::of::<T>(), glob::Pattern::new(pattern)?);
+        let item = filter.filter(self.items).next();
 
         let item = match item {
             Some(item) => item,
@@ -142,33 +142,134 @@ socket.addEventListener("message", event => {{
             Err(e) => Err(e.clone())?,
         };
 
+        // save dependencies
+        filter.store(vec![item.hash]);
+        self.deps.write().unwrap().push(Tracker::Glob(filter));
+
         Ok(data.downcast_ref())
     }
 
     pub fn get<T: 'static>(&self, path: &str) -> Result<&T, HauchiwaError> {
-        let item = self.find_item_by_path(path)?;
+        let mut filter = FilterId::new(path);
+        let item = filter
+            .filter(self.items)
+            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
+
         let data = match &*item.data.data {
-            Ok(ok) => ok,
+            Ok(ok) => match ok.downcast_ref() {
+                Some(data) => data,
+                None => {
+                    let have = item.refl_name;
+                    let need = type_name::<T>();
+                    Err(HauchiwaError::Frontmatter(format!(
+                        "Requested {need}, but received {have}"
+                    )))?
+                }
+            },
             Err(e) => Err(e.clone())?,
         };
-        let data = data.downcast_ref();
 
-        match data {
-            Some(data) => Ok(data),
-            None => {
-                let have = item.refl_name;
-                let need = type_name::<T>();
-                eprintln!("Requested {need}, but received {have}");
-                todo!()
-            }
+        // save dependencies
+        filter.store(item);
+        self.deps.write().unwrap().push(Tracker::Id(filter));
+
+        Ok(data)
+    }
+}
+
+struct FilterId {
+    id: String,
+    hash: Hash32,
+}
+
+impl FilterId {
+    fn new(id: impl ToString) -> Self {
+        Self {
+            id: id.to_string(),
+            hash: Default::default(),
         }
     }
 
-    fn find_item_by_path(&self, path: &str) -> Result<&Item, HauchiwaError> {
-        self.items
+    fn filter<'ctx>(&self, items: &'ctx [&Item]) -> Option<&'ctx Item> {
+        items
             .iter()
             .map(Deref::deref)
-            .find(|item| item.data.file.file == path)
-            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))
+            .find(|item| item.data.file.file == self.id)
+    }
+
+    fn check(&self, items: &[&Item]) -> bool {
+        match self.filter(items) {
+            Some(item) => self.hash != item.hash,
+            None => true,
+        }
+    }
+
+    fn store(&mut self, item: &Item) {
+        self.hash = item.hash;
+    }
+}
+
+struct FilterGlob {
+    ty: TypeId,
+    glob: glob::Pattern,
+    hash: Cow<'static, [Hash32]>,
+}
+
+impl FilterGlob {
+    fn new(ty: TypeId, glob: glob::Pattern) -> Self {
+        Self {
+            ty,
+            glob,
+            hash: Default::default(),
+        }
+    }
+
+    fn filter<'ctx>(&self, items: &'ctx [&'ctx Item]) -> impl Iterator<Item = &'ctx Item> {
+        items
+            .iter()
+            .filter(|item| {
+                item.refl_type == self.ty
+                    && self
+                        .glob
+                        .matches_path_with(item.data.file.slug.as_std_path(), GLOB_OPTS)
+            })
+            .map(Deref::deref)
+    }
+
+    fn check(&self, items: &[&Item]) -> bool {
+        let new = self.filter(items).collect::<Vec<_>>();
+        if self.hash.len() != new.len() {
+            return true;
+        }
+
+        for item in new {
+            if !self.hash.contains(&item.hash) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn store(&mut self, items: Vec<Hash32>) {
+        self.hash = if items.is_empty() {
+            Default::default()
+        } else {
+            items.into()
+        };
+    }
+}
+
+pub enum Tracker {
+    Id(FilterId),
+    Glob(FilterGlob),
+}
+
+impl Tracker {
+    pub fn check(&self, items: &[&Item]) -> bool {
+        match self {
+            Tracker::Id(filter) => filter.check(items),
+            Tracker::Glob(filter) => filter.check(items),
+        }
     }
 }

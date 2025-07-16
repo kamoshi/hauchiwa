@@ -13,7 +13,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::fs;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, RwLock};
 use std::time::Instant;
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -25,6 +25,7 @@ pub use crate::error::*;
 pub use crate::gitmap::{GitInfo, GitRepo};
 pub use crate::loader::Loader;
 use crate::loader::{Loadable, LoaderOpts};
+use crate::runtime::Tracker;
 pub use crate::runtime::{Context, WithFile};
 
 /// This value controls whether the library should run in the `Build` or the
@@ -113,11 +114,15 @@ where
     Ok(())
 }
 
-fn build<G>(website: &Website<G>, globals: &Globals<G>) -> Result<(), HauchiwaError>
+fn build<G>(website: &mut Website<G>, globals: &Globals<G>) -> Result<(), HauchiwaError>
 where
     G: Send + Sync,
 {
-    let items = website.loaders.iter().flat_map(Loadable::items).collect();
+    let items = website
+        .loaders
+        .iter()
+        .flat_map(Loadable::items)
+        .collect::<Vec<_>>();
 
     let total = website.tasks.len();
     let progress = ProgressBar::new(total as u64);
@@ -132,8 +137,9 @@ where
 
     let pages = website
         .tasks
-        .par_iter()
-        .map(|task| task.call(Context::new(globals, &items)))
+        .par_iter_mut()
+        .filter(|task| task.is_outdated(&items))
+        .map(|task| task.call(globals, &items))
         .progress_with(progress.clone())
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
@@ -356,7 +362,11 @@ pub type TaskResult<T> = anyhow::Result<T, anyhow::Error>;
 type TaskFnPtr<D> = Arc<dyn Fn(Context<D>) -> TaskResult<Vec<Page>> + Send + Sync>;
 
 /// Wraps `TaskFnPtr` and implements `Debug` trait for function pointer.
-struct Task<D: Send + Sync>(TaskFnPtr<D>);
+struct Task<D: Send + Sync> {
+    init: bool,
+    func: TaskFnPtr<D>,
+    filters: Vec<Tracker>,
+}
 
 impl<D: Send + Sync> Task<D> {
     /// Create new task function pointer.
@@ -365,20 +375,27 @@ impl<D: Send + Sync> Task<D> {
         D: Send + Sync,
         F: Fn(Context<D>) -> TaskResult<Vec<Page>> + Send + Sync + 'static,
     {
-        Self(Arc::new(func))
+        Self {
+            init: true,
+            func: Arc::new(func),
+            filters: Default::default(),
+        }
+    }
+
+    fn is_outdated(&self, items: &[&Item]) -> bool {
+        self.init || self.filters.iter().any(|f| f.check(items))
     }
 
     /// Run the task to generate a page.
-    fn call(&self, ctx: Context<D>) -> TaskResult<Vec<Page>> {
-        // TODO: Do the ceremony here. Track dependencies here. Store
-        // dependencies in this struct
-        (self.0)(ctx)
-    }
-}
+    fn call(&mut self, globals: &Globals<D>, items: &[&Item]) -> TaskResult<Vec<Page>> {
+        let tracker = Arc::new(RwLock::new(vec![]));
+        let context = Context::new(globals, items, tracker.clone());
+        let pages = (self.func)(context);
 
-impl<G: Send + Sync> Clone for Task<G> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
+        self.init = false;
+        self.filters = Arc::into_inner(tracker).unwrap().into_inner().unwrap();
+
+        pages
     }
 }
 
