@@ -3,7 +3,7 @@ use std::fs;
 use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{
-    BuilderError, Hash32, HauchiwaError,
+    BuilderError, Hash32,
     loader::{Loader, generic::LoaderGeneric},
 };
 

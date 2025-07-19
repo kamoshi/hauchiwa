@@ -1,5 +1,6 @@
 use std::{
     any::{TypeId, type_name},
+    borrow::Cow,
     collections::{HashMap, HashSet},
     sync::{Arc, LazyLock},
 };
@@ -58,6 +59,13 @@ where
     T: 'static + Send + Sync,
     R: 'static + Send + Sync,
 {
+    fn name(&self) -> Cow<'static, str> {
+        Utf8Path::new(self.path_base)
+            .join(self.path_glob)
+            .to_string()
+            .into()
+    }
+
     fn load(&mut self) -> Result<(), LoaderError> {
         let path_base = self.path_base;
         let path_glob = self.path_glob;
@@ -89,6 +97,7 @@ where
                 Item {
                     refl_type: TypeId::of::<R>(),
                     refl_name: type_name::<R>(),
+                    id: file.as_str().into(),
                     hash,
                     data: FromFile {
                         file: Arc::new(FileData {
@@ -135,6 +144,7 @@ where
                 Item {
                     refl_type: TypeId::of::<R>(),
                     refl_name: type_name::<R>(),
+                    id: file.as_str().into(),
                     hash,
                     data: FromFile {
                         file: Arc::new(FileData {
@@ -218,6 +228,13 @@ where
     T: 'static + Send + Sync,
     R: 'static + Send + Sync,
 {
+    fn name(&self) -> Cow<'static, str> {
+        Utf8Path::new(self.path_base)
+            .join(self.path_glob)
+            .to_string()
+            .into()
+    }
+
     fn load(&mut self) -> Result<(), LoaderError> {
         let path_base = self.path_base;
         let path_glob = self.path_glob;
@@ -249,6 +266,7 @@ where
                 Item {
                     refl_type: TypeId::of::<R>(),
                     refl_name: type_name::<R>(),
+                    id: file.as_str().into(),
                     hash,
                     data: FromFile {
                         file: Arc::new(FileData {

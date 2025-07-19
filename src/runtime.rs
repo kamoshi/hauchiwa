@@ -149,11 +149,11 @@ socket.addEventListener("message", event => {{
         Ok(data.downcast_ref())
     }
 
-    pub fn get<T: 'static>(&self, path: &str) -> Result<&T, HauchiwaError> {
-        let mut filter = FilterId::new(path);
+    pub fn get<T: 'static>(&self, id: impl AsRef<str>) -> Result<&T, HauchiwaError> {
+        let mut filter = FilterId::new(id.as_ref());
         let item = filter
             .filter(self.items)
-            .ok_or_else(|| HauchiwaError::AssetNotFound(path.to_string()))?;
+            .ok_or_else(|| HauchiwaError::AssetNotFound(id.as_ref().to_string()))?;
 
         let data = match &*item.data.data {
             Ok(ok) => match ok.downcast_ref() {
@@ -183,7 +183,7 @@ struct FilterId {
 }
 
 impl FilterId {
-    fn new(id: impl ToString) -> Self {
+    fn new(id: &str) -> Self {
         Self {
             id: id.to_string(),
             hash: Default::default(),
@@ -194,7 +194,7 @@ impl FilterId {
         items
             .iter()
             .map(Deref::deref)
-            .find(|item| item.data.file.file == self.id)
+            .find(|item| *item.id == self.id)
     }
 
     fn check(&self, items: &[&Item]) -> bool {

@@ -1,5 +1,6 @@
 use std::{
     any::{TypeId, type_name},
+    borrow::Cow,
     collections::{HashMap, HashSet},
     fs,
     sync::{Arc, LazyLock},
@@ -120,6 +121,7 @@ where
         Ok(Some(Item {
             refl_type: TypeId::of::<Content<T>>(),
             refl_name: type_name::<Content<T>>(),
+            id: path.as_str().into(),
             hash,
             data: FromFile {
                 file: Arc::new(FileData {
@@ -148,6 +150,13 @@ impl<T> Loadable for LoaderContent<T>
 where
     T: Send + Sync + 'static,
 {
+    fn name(&self) -> Cow<'static, str> {
+        Utf8Path::new(self.path_base)
+            .join(self.path_glob)
+            .to_string()
+            .into()
+    }
+
     fn load(&mut self) -> Result<(), LoaderError> {
         let pattern = Utf8Path::new(self.path_base).join(self.path_glob);
 

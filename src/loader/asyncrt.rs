@@ -1,5 +1,6 @@
 use std::{
     any::{TypeId, type_name},
+    borrow::Cow,
     collections::HashSet,
     sync::{Arc, LazyLock},
 };
@@ -11,13 +12,13 @@ use crate::{
     loader::{Loadable, Runtime},
 };
 
-pub fn async_asset<T, F, Fut>(async_closure: F) -> Loader
+pub fn async_asset<T, F, Fut>(id: &'static str, async_closure: F) -> Loader
 where
     T: Send + Sync + 'static,
     F: Fn(Runtime) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<T>> + 'static,
 {
-    Loader::with(move |_| LoaderAsyncio::new(async_closure))
+    Loader::with(move |_| LoaderAsyncio::new(id, async_closure))
 }
 
 struct LoaderAsyncio<T, F, Fut>
@@ -26,6 +27,7 @@ where
     F: Fn(Runtime) -> Fut + 'static,
     Fut: Future<Output = anyhow::Result<T>> + 'static,
 {
+    id: &'static str,
     cached: Option<Item>,
     f1: F,
     rt: Runtime,
@@ -38,8 +40,9 @@ where
     F: Fn(Runtime) -> Fut + 'static,
     Fut: Future<Output = anyhow::Result<T>> + 'static,
 {
-    pub fn new(f1: F) -> Self {
+    pub fn new(id: &'static str, f1: F) -> Self {
         Self {
+            id,
             cached: None,
             f1,
             rt: Runtime,
@@ -57,6 +60,10 @@ where
     F: Fn(Runtime) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<T>> + 'static,
 {
+    fn name(&self) -> Cow<'static, str> {
+        self.id.into()
+    }
+
     fn load(&mut self) -> Result<(), LoaderError> {
         let f1 = &self.f1;
 
@@ -66,6 +73,7 @@ where
         self.cached = Some(Item {
             refl_type: TypeId::of::<T>(),
             refl_name: type_name::<T>(),
+            id: self.id.into(),
             hash: Default::default(),
             data: FromFile {
                 file: Arc::new(FileData {

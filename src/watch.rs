@@ -122,11 +122,11 @@ where
         }
 
         if !obsolete.is_empty() {
-            dirty |= website.remove_paths(&obsolete);
+            dirty |= website.loaders_remove(&obsolete);
         }
 
         if !modified.is_empty() {
-            dirty |= match website.reload_paths(&modified) {
+            dirty |= match website.loaders_reload(&modified) {
                 Ok(ok) => ok,
                 Err(e) => {
                     eprintln!("Error while reloading:\n{e}");
@@ -136,7 +136,6 @@ where
         }
 
         if dirty {
-            println!("\nStarting rebuild...");
             let start = Instant::now();
 
             match build(website, &globals) {
@@ -147,7 +146,7 @@ where
             };
 
             let duration = start.elapsed();
-            println!("Finished rebuild in {duration:?}");
+            println!("Refreshed in {duration:?}");
         }
     }
 

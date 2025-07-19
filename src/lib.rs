@@ -10,10 +10,11 @@ mod runtime;
 mod watch;
 
 use std::any::{Any, TypeId};
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::fs;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::time::Instant;
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -109,44 +110,16 @@ where
     crate::io::clear_dist()?;
     crate::io::clone_static()?;
 
-    website.load_items()?;
+    website.loaders_load()?;
 
     Ok(())
 }
 
 fn build<G>(website: &mut Website<G>, globals: &Globals<G>) -> Result<(), HauchiwaError>
 where
-    G: Send + Sync,
+    G: Send + Sync + 'static,
 {
-    let items = website
-        .loaders
-        .iter()
-        .flat_map(Loadable::items)
-        .collect::<Vec<_>>();
-
-    let total = website.tasks.len();
-    let progress = ProgressBar::new(total as u64);
-    progress.set_style(
-        ProgressStyle::default_bar()
-            .template(
-                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
-            )
-            .expect("invalid progress bar template")
-            .progress_chars("##-"),
-    );
-
-    let pages = website
-        .tasks
-        .par_iter_mut()
-        .filter(|task| task.is_outdated(&items))
-        .map(|task| task.call(globals, &items))
-        .progress_with(progress.clone())
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-
-    progress.finish_with_message("Finished all tasks");
+    let pages = website.run_tasks(globals)?;
 
     let temp: Vec<_> = pages.iter().collect();
     for hook in &website.hooks {
@@ -221,42 +194,168 @@ impl<G: Send + Sync + 'static> Website<G> {
         Ok(())
     }
 
-    fn load_items(&mut self) -> Result<(), HauchiwaError> {
+    fn loaders_load(&mut self) -> Result<(), HauchiwaError> {
+        let len = self.loaders.len();
+        let bar = ProgressBar::new(len as u64).with_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+                .expect("Error setting progress bar template")
+                .progress_chars("#>-"),
+        );
+
+        let active = Arc::new(Mutex::new(HashSet::new()));
+
         self.loaders
             .par_iter_mut()
-            .map(|loader| loader.load())
-            .collect::<Vec<_>>();
+            .map(|loader| {
+                let name = loader.name();
+
+                {
+                    let mut active = active.lock().unwrap();
+                    active.insert(name.clone());
+                    let msg = format_active(&active);
+                    bar.set_message(msg);
+                }
+
+                let result = loader.load();
+
+                {
+                    let mut active = active.lock().unwrap();
+                    active.remove(&name);
+                    let msg = format_active(&active);
+                    bar.set_message(msg);
+                    bar.inc(1);
+                }
+
+                result
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        bar.finish_with_message("Loaded assets");
 
         Ok(())
     }
 
-    fn remove_paths(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool {
-        let mut changed = false;
-
-        changed |= self
-            .loaders
+    fn loaders_remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool {
+        self.loaders
             .par_iter_mut()
-            .any(|loader| loader.remove(obsolete));
-
-        changed
+            .any(|loader| loader.remove(obsolete))
     }
 
-    fn reload_paths(&mut self, modified: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError>
+    fn loaders_reload(&mut self, modified: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError>
     where
         G: Send + Sync + 'static,
     {
-        let mut changed = false;
+        let len = self.loaders.len();
+        let bar = ProgressBar::new(len as u64).with_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+                .expect("Error setting progress bar template")
+                .progress_chars("#>-"),
+        );
 
-        changed |= self
+        let active = Arc::new(Mutex::new(HashSet::new()));
+
+        let changed = self
             .loaders
             .par_iter_mut()
             .try_fold(
                 || false,
-                |acc, loader| -> Result<_, LoaderError> { Ok(acc || loader.reload(modified)?) },
+                |acc, loader| -> Result<_, LoaderError> {
+                    let name = loader.name();
+
+                    {
+                        let mut active = active.lock().unwrap();
+                        active.insert(name.clone());
+                        let msg = format_active(&active);
+                        bar.set_message(msg);
+                    }
+
+                    let result = loader.reload(modified)?;
+
+                    {
+                        let mut active = active.lock().unwrap();
+                        active.remove(&name);
+                        let msg = format_active(&active);
+                        bar.set_message(msg);
+                        bar.inc(1);
+                    }
+
+                    Ok(acc || result)
+                },
             )
             .try_reduce(|| false, |a, b| Ok(a || b))?;
 
+        bar.finish_with_message("Reloaded assets");
+
         Ok(changed)
+    }
+
+    fn run_tasks(&mut self, globals: &Globals<G>) -> Result<Vec<Page>, HauchiwaError> {
+        let items = self
+            .loaders
+            .iter()
+            .flat_map(Loadable::items)
+            .collect::<Vec<_>>();
+
+        let total = self.tasks.len();
+        let bar = ProgressBar::new(total as u64);
+        bar.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+                .expect("invalid progress bar template")
+                .progress_chars("#>-"),
+        );
+
+        let set = Arc::new(Mutex::new(HashSet::new()));
+
+        let pages = self
+            .tasks
+            .par_iter_mut()
+            .filter(|task| task.is_outdated(&items))
+            .map(|task| {
+                let name = Cow::from(task.name);
+
+                {
+                    let mut active = set.lock().unwrap();
+                    active.insert(name.clone());
+                    let msg = format_active(&active);
+                    bar.set_message(msg);
+                }
+
+                let result = task.call(globals, &items);
+
+                {
+                    let mut active = set.lock().unwrap();
+                    active.remove(&name);
+                    let msg = format_active(&active);
+                    bar.set_message(msg);
+                    bar.inc(1);
+                }
+
+                result
+            })
+            .progress_with(bar.clone())
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        bar.finish_with_message("Finished all tasks");
+
+        Ok(pages)
+    }
+}
+
+fn format_active(active: &HashSet<Cow<str>>) -> String {
+    const MAX: usize = 5;
+    let mut names: Vec<_> = active.iter().cloned().collect();
+    names.sort();
+
+    if names.len() <= MAX {
+        names.join(", ")
+    } else {
+        format!("{}… ({} total)", names[..MAX].join(", "), names.len())
     }
 }
 
@@ -298,8 +397,12 @@ impl<G: Send + Sync + 'static> Config<G> {
         self
     }
 
-    pub fn add_task(mut self, task: fn(Context<G>) -> TaskResult<Vec<Page>>) -> Self {
-        self.tasks.push(Task::new(task));
+    pub fn add_task(
+        mut self,
+        name: &'static str,
+        task: fn(Context<G>) -> TaskResult<Vec<Page>>,
+    ) -> Self {
+        self.tasks.push(Task::new(name, task));
         self
     }
 
@@ -363,6 +466,7 @@ type TaskFnPtr<D> = Arc<dyn Fn(Context<D>) -> TaskResult<Vec<Page>> + Send + Syn
 
 /// Wraps `TaskFnPtr` and implements `Debug` trait for function pointer.
 struct Task<D: Send + Sync> {
+    pub name: &'static str,
     init: bool,
     func: TaskFnPtr<D>,
     filters: Vec<Tracker>,
@@ -370,12 +474,13 @@ struct Task<D: Send + Sync> {
 
 impl<D: Send + Sync> Task<D> {
     /// Create new task function pointer.
-    fn new<F>(func: F) -> Self
+    fn new<F>(name: &'static str, func: F) -> Self
     where
         D: Send + Sync,
         F: Fn(Context<D>) -> TaskResult<Vec<Page>> + Send + Sync + 'static,
     {
         Self {
+            name,
             init: true,
             func: Arc::new(func),
             filters: Default::default(),
@@ -459,6 +564,7 @@ struct FromFile {
 struct Item {
     refl_type: TypeId,
     refl_name: &'static str,
+    id: Box<str>,
     hash: Hash32,
     data: FromFile,
 }

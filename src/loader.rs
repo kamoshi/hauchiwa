@@ -10,7 +10,7 @@ mod script;
 mod styles;
 mod svelte;
 
-use std::{collections::HashSet, fs, sync::Arc};
+use std::{borrow::Cow, collections::HashSet, fs, sync::Arc};
 
 use camino::{Utf8Path, Utf8PathBuf};
 
@@ -28,6 +28,7 @@ pub use styles::{Style, glob_styles};
 pub use svelte::{Svelte, glob_svelte};
 
 pub(crate) trait Loadable: 'static + Send {
+    fn name(&self) -> Cow<'static, str>;
     fn load(&mut self) -> Result<(), LoaderError>;
     fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError>;
     fn items(&self) -> Vec<&Item>;
@@ -36,6 +37,11 @@ pub(crate) trait Loadable: 'static + Send {
 }
 
 impl Loadable for Box<dyn Loadable> {
+    #[inline]
+    fn name(&self) -> Cow<'static, str> {
+        (**self).name()
+    }
+
     #[inline]
     fn load(&mut self) -> Result<(), LoaderError> {
         (**self).load()
