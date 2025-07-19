@@ -1,5 +1,5 @@
 use std::sync::Arc;
-#[cfg(feature = "notify")]
+#[cfg(feature = "reload")]
 use std::sync::mpsc::{RecvError, SendError};
 
 use thiserror::Error;
@@ -40,7 +40,7 @@ pub enum HauchiwaError {
     #[error("Error while building the website.\n{0}")]
     Build(#[from] BuildError),
 
-    #[cfg(feature = "notify")]
+    #[cfg(feature = "reload")]
     #[error("Error while watching for file changes:\n{0}")]
     Watch(#[from] WatchError),
 }
@@ -87,7 +87,7 @@ pub enum BuildError {
     Hook(anyhow::Error),
 }
 
-#[cfg(feature = "notify")]
+#[cfg(feature = "reload")]
 #[derive(Debug, Error)]
 pub enum WatchError {
     #[error(transparent)]

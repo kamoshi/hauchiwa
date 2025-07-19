@@ -1,10 +1,8 @@
-use std::any::{TypeId, type_name};
+use std::any::TypeId;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::{Arc, RwLock};
-
-use anyhow::anyhow;
 
 use crate::{FileData, Hash32, error::*};
 use crate::{Globals, Item};
@@ -30,7 +28,6 @@ where
     globals: &'a Globals<G>,
     /// Every single input.
     items: &'a [&'a Item],
-    ///
     deps: Arc<RwLock<Vec<Tracker>>>,
 }
 
@@ -204,7 +201,7 @@ impl FilterId {
             .map(Deref::deref)
     }
 
-    fn other_types<'ctx>(&self, items: &'ctx [&Item]) -> Vec<&'static str> {
+    fn other_types(&self, items: &[&Item]) -> Vec<&'static str> {
         items
             .iter()
             .filter_map(|item| {
