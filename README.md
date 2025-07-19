@@ -10,6 +10,8 @@ static site generator, it can handle all the mundane work for you:
 - compiling JavaScript applications via ESBuild
 - watching for changes and incremental rebuilds
 
+This library's API is purposefully designed to be small, simple, flexible and powerful.
+
 
 ## Feature flags
 
@@ -91,7 +93,7 @@ fn main() {
                 let data = hayagriva::io::from_biblatex_str(&text).unwrap();
 
                 // return data (path to file + parsed bibtex)
-                Bibtex { path, data }
+                Ok(Bibtex { path, data })
             }),
             // We can add directories containing global stylesheets, either CSS or SCSS.
             loader::glob_styles("styles", "**/[!_]*.scss"),
@@ -104,13 +106,15 @@ fn main() {
         ])
         // We can add a simple task to generate the `index.html` page with arbitrary
         // content, here it's `<h1>hello world!</h1>`.
-        .add_task(|_| {
-            vec![Page::text("index.html".into(), String::from("<h1>hello world!</h1>"))]
+        .add_task("index page", |_| {
+            let pages = vec![Page::text("index.html".into(), String::from("<h1>hello world!</h1>"))];
+
+            Ok(pages)
         })
         // We can retrieve any loaded content from the `ctx` provided to the task.
         // Note that you have to bring your own markdown parser and HTML templating
         // engine here.
-        .add_task(|ctx| {
+        .add_task("posts", |ctx| {
             let pages = ctx.glob_with_file::<Content<Post>>("posts/**/*")
                 .into_iter()
                 .map(|item| {
