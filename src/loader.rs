@@ -14,7 +14,7 @@ use std::{borrow::Cow, collections::HashSet, fs, sync::Arc};
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::{BuilderError, GitRepo, Hash32, Item, error::LoaderError};
+use crate::{BuildError, GitRepo, Hash32, Item, error::LoaderError};
 
 pub use assets::glob_assets;
 #[cfg(feature = "asyncrt")]
@@ -94,7 +94,7 @@ impl Loader {
 pub struct Runtime;
 
 impl Runtime {
-    pub fn store(&self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuilderError> {
+    pub fn store(&self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuildError> {
         let hash = Hash32::hash(data);
         let hash = hash.to_hex();
 
@@ -103,17 +103,13 @@ impl Runtime {
         let path_root = Utf8Path::new("/hash/").join(&hash).with_extension(ext);
 
         if !path_temp.exists() {
-            fs::create_dir_all(".cache/hash")
-                .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
-            fs::write(&path_temp, data)
-                .map_err(|e| BuilderError::FileWriteError(path_temp.clone(), e))?;
+            fs::create_dir_all(".cache/hash")?;
+            fs::write(&path_temp, data)?;
         }
 
         let dir = path_dist.parent().unwrap_or(&path_dist);
-        fs::create_dir_all(dir) //
-            .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
-        fs::copy(&path_temp, &path_dist)
-            .map_err(|e| BuilderError::FileCopyError(path_temp.clone(), path_dist.clone(), e))?;
+        fs::create_dir_all(dir)?;
+        fs::copy(&path_temp, &path_dist)?;
 
         Ok(path_root)
     }

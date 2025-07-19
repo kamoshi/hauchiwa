@@ -1,5 +1,6 @@
 use std::any::{TypeId, type_name};
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 
@@ -68,20 +69,23 @@ socket.addEventListener("message", event => {{
         })
     }
 
-    pub fn glob_with_file<T>(&self, pattern: &str) -> Result<WithFile<'_, T>, HauchiwaError>
+    pub fn glob_with_file<T>(&self, pattern: &str) -> Result<WithFile<'_, T>, ContextError>
     where
         T: 'static,
     {
         let mut filter = FilterGlob::new(TypeId::of::<T>(), glob::Pattern::new(pattern)?);
 
-        let item = filter
-            .filter(self.items)
-            .next()
-            .ok_or_else(|| HauchiwaError::AssetNotFound(filter.glob.to_string()))?;
+        let item = match filter.filter(self.items).next() {
+            Some(item) => item,
+            None => {
+                let other = filter.other_types(self.items).join(", ");
+                return Err(ContextError::NotFoundWrongShape(pattern.to_string(), other));
+            }
+        };
 
         let data = match &*item.data.data {
             Ok(ok) => ok,
-            Err(e) => Err(e.clone())?,
+            Err(e) => return Err(ContextError::LazyAssetError(item.id.to_string(), e.clone())),
         };
 
         // save dependencies
@@ -89,12 +93,12 @@ socket.addEventListener("message", event => {{
         self.deps.write().unwrap().push(Tracker::Glob(filter));
 
         Ok(WithFile {
-            data: data.downcast_ref().ok_or(anyhow!("Failed to downcast"))?,
+            data: data.downcast_ref().unwrap(),
             file: item.data.file.clone(),
         })
     }
 
-    pub fn glob_with_files<T>(&self, pattern: &str) -> Result<Vec<WithFile<'_, T>>, HauchiwaError>
+    pub fn glob_with_files<T>(&self, pattern: &str) -> Result<Vec<WithFile<'_, T>>, ContextError>
     where
         T: 'static,
     {
@@ -102,14 +106,16 @@ socket.addEventListener("message", event => {{
 
         let (items, hashes) = filter.filter(self.items).try_fold(
             (Vec::new(), Vec::new()),
-            |mut acc, item| -> Result<_, HauchiwaError> {
+            |mut acc, item| -> Result<_, ContextError> {
                 let data = match &*item.data.data {
                     Ok(ok) => ok,
-                    Err(e) => Err(e.clone())?,
+                    Err(e) => {
+                        return Err(ContextError::LazyAssetError(item.id.to_string(), e.clone()));
+                    }
                 };
 
                 acc.0.push(WithFile {
-                    data: data.downcast_ref().ok_or(anyhow!("Failed to downcast"))?,
+                    data: data.downcast_ref().unwrap(),
                     file: item.data.file.clone(),
                 });
 
@@ -128,7 +134,7 @@ socket.addEventListener("message", event => {{
 
     /// Find the first on‐disk asset whose path matches `pattern`. This asset
     /// will be built only on request and cached.
-    pub fn glob<T: 'static>(&self, pattern: &str) -> Result<Option<&T>, HauchiwaError> {
+    pub fn glob<T: 'static>(&self, pattern: &str) -> Result<Option<&T>, ContextError> {
         let mut filter = FilterGlob::new(TypeId::of::<T>(), glob::Pattern::new(pattern)?);
         let item = filter.filter(self.items).next();
 
@@ -139,7 +145,7 @@ socket.addEventListener("message", event => {{
 
         let data = match &*item.data.data {
             Ok(ok) => ok,
-            Err(e) => Err(e.clone())?,
+            Err(e) => return Err(ContextError::LazyAssetError(item.id.to_string(), e.clone())),
         };
 
         // save dependencies
@@ -149,24 +155,23 @@ socket.addEventListener("message", event => {{
         Ok(data.downcast_ref())
     }
 
-    pub fn get<T: 'static>(&self, id: impl AsRef<str>) -> Result<&T, HauchiwaError> {
-        let mut filter = FilterId::new(id.as_ref());
-        let item = filter
-            .filter(self.items)
-            .ok_or_else(|| HauchiwaError::AssetNotFound(id.as_ref().to_string()))?;
+    pub fn get<T: 'static>(&self, id: impl AsRef<str>) -> Result<&T, ContextError> {
+        let mut filter = FilterId::new(TypeId::of::<T>(), id.as_ref());
+        let item = match filter.filter(self.items) {
+            Some(item) => item,
+            None => {
+                let other = filter.other_types(self.items);
+                let id = id.as_ref().to_string();
+                return Err(match other.len() {
+                    0 => ContextError::NotFound(id),
+                    _ => ContextError::NotFoundWrongShape(id, other.join(", ")),
+                });
+            }
+        };
 
         let data = match &*item.data.data {
-            Ok(ok) => match ok.downcast_ref() {
-                Some(data) => data,
-                None => {
-                    let have = item.refl_name;
-                    let need = type_name::<T>();
-                    Err(HauchiwaError::Frontmatter(format!(
-                        "Requested {need}, but received {have}"
-                    )))?
-                }
-            },
-            Err(e) => Err(e.clone())?,
+            Ok(ok) => ok.downcast_ref().unwrap(), // this won't ever fail
+            Err(e) => return Err(ContextError::LazyAssetError(item.id.to_string(), e.clone())),
         };
 
         // save dependencies
@@ -177,14 +182,16 @@ socket.addEventListener("message", event => {{
     }
 }
 
-struct FilterId {
+pub(crate) struct FilterId {
+    ty: TypeId,
     id: String,
     hash: Hash32,
 }
 
 impl FilterId {
-    fn new(id: &str) -> Self {
+    fn new(ty: TypeId, id: &str) -> Self {
         Self {
+            ty,
             id: id.to_string(),
             hash: Default::default(),
         }
@@ -193,8 +200,23 @@ impl FilterId {
     fn filter<'ctx>(&self, items: &'ctx [&Item]) -> Option<&'ctx Item> {
         items
             .iter()
+            .find(|item| item.refl_type == self.ty && *item.id == self.id)
             .map(Deref::deref)
-            .find(|item| *item.id == self.id)
+    }
+
+    fn other_types<'ctx>(&self, items: &'ctx [&Item]) -> Vec<&'static str> {
+        items
+            .iter()
+            .filter_map(|item| {
+                if item.refl_type != self.ty && *item.id == self.id {
+                    Some(item.refl_name)
+                } else {
+                    None
+                }
+            })
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     fn check(&self, items: &[&Item]) -> bool {
@@ -209,7 +231,7 @@ impl FilterId {
     }
 }
 
-struct FilterGlob {
+pub(crate) struct FilterGlob {
     ty: TypeId,
     glob: glob::Pattern,
     hash: Cow<'static, [Hash32]>,
@@ -234,6 +256,23 @@ impl FilterGlob {
                         .matches_path_with(item.data.file.slug.as_std_path(), GLOB_OPTS)
             })
             .map(Deref::deref)
+    }
+
+    fn other_types<'ctx>(&self, items: &'ctx [&'ctx Item]) -> Vec<&'static str> {
+        items
+            .iter()
+            .filter_map(|item| {
+                if item.refl_type != self.ty
+                    && self
+                        .glob
+                        .matches_path_with(item.data.file.slug.as_std_path(), GLOB_OPTS)
+                {
+                    Some(item.refl_name)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     fn check(&self, items: &[&Item]) -> bool {

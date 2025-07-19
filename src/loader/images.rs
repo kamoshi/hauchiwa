@@ -3,7 +3,7 @@ use std::fs;
 use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{
-    BuilderError, Hash32,
+    BuildError, Hash32,
     loader::{Loader, generic::LoaderGeneric},
 };
 
@@ -44,7 +44,7 @@ fn process_image(buffer: &[u8]) -> Vec<u8> {
     out
 }
 
-fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, BuilderError> {
+fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, BuildError> {
     let hash = hash.to_hex();
     let path_root = Utf8Path::new("/hash/img/")
         .join(&hash)
@@ -58,20 +58,16 @@ fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, BuilderErro
 
     // If this hash exists it means the work is already done.
     if !path_hash.exists() {
-        let buffer = fs::read(file) //
-            .map_err(|e| BuilderError::FileReadError(file.to_path_buf(), e))?;
+        let buffer = fs::read(file)?;
         let buffer = process_image(&buffer);
 
-        fs::create_dir_all(".cache/hash/img/")
-            .map_err(|e| BuilderError::CreateDirError(".cache/hash".into(), e))?;
+        fs::create_dir_all(".cache/hash/img/")?;
         fs::write(&path_hash, buffer);
     }
 
     let dir = path_dist.parent().unwrap_or(&path_dist);
-    fs::create_dir_all(dir) //
-        .map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
-    fs::copy(&path_hash, &path_dist)
-        .map_err(|e| BuilderError::FileCopyError(path_hash.to_owned(), path_dist.clone(), e))?;
+    fs::create_dir_all(dir)?;
+    fs::copy(&path_hash, &path_dist)?;
 
     Ok(path_root)
 }

@@ -115,7 +115,7 @@ where
     Ok(())
 }
 
-fn build<G>(website: &mut Website<G>, globals: &Globals<G>) -> Result<(), HauchiwaError>
+fn build<G>(website: &mut Website<G>, globals: &Globals<G>) -> Result<(), BuildError>
 where
     G: Send + Sync + 'static,
 {
@@ -124,7 +124,7 @@ where
     let temp: Vec<_> = pages.iter().collect();
     for hook in &website.hooks {
         match hook {
-            Hook::PostBuild(callback) => callback(&temp)?,
+            Hook::PostBuild(callback) => callback(&temp).map_err(BuildError::Hook)?,
         }
     }
 
@@ -132,12 +132,10 @@ where
         let path = Utf8Path::new("dist").join(&page.path);
 
         if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir).map_err(|e| BuilderError::CreateDirError(dir.to_owned(), e))?;
+            fs::create_dir_all(dir)?;
         }
-        let mut file = fs::File::create(&path)
-            .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
-        std::io::Write::write_all(&mut file, page.text.as_bytes())
-            .map_err(|e| BuilderError::FileWriteError(path.to_owned(), e))?;
+        let mut file = fs::File::create(&path)?;
+        std::io::Write::write_all(&mut file, page.text.as_bytes())?;
     }
 
     Ok(())
@@ -189,6 +187,8 @@ impl<G: Send + Sync + 'static> Website<G> {
             style("watch").blue()
         );
 
+        init(self)?;
+
         watch::watch(self, data)?;
 
         Ok(())
@@ -217,7 +217,9 @@ impl<G: Send + Sync + 'static> Website<G> {
                     bar.set_message(msg);
                 }
 
-                let result = loader.load();
+                let result = loader
+                    .load()
+                    .map_err(|err| HauchiwaError::Loader(name.to_string(), err));
 
                 {
                     let mut active = active.lock().unwrap();
@@ -291,7 +293,7 @@ impl<G: Send + Sync + 'static> Website<G> {
         Ok(changed)
     }
 
-    fn run_tasks(&mut self, globals: &Globals<G>) -> Result<Vec<Page>, HauchiwaError> {
+    fn run_tasks(&mut self, globals: &Globals<G>) -> Result<Vec<Page>, BuildError> {
         let items = self
             .loaders
             .iter()
@@ -323,7 +325,9 @@ impl<G: Send + Sync + 'static> Website<G> {
                     bar.set_message(msg);
                 }
 
-                let result = task.call(globals, &items);
+                let result = task
+                    .call(globals, &items)
+                    .map_err(|e| BuildError::Task(name.to_string(), e));
 
                 {
                     let mut active = set.lock().unwrap();

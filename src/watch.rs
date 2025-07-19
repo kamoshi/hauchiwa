@@ -15,20 +15,20 @@ use tungstenite::WebSocket;
 use crate::build;
 use crate::error::WatchError;
 use crate::loader::Loadable;
-use crate::{Globals, Mode, Website, init};
+use crate::{Globals, Mode, Website};
 
 fn reserve_port() -> Result<(TcpListener, u16), WatchError> {
     let listener = match TcpListener::bind("127.0.0.1:1337") {
         Ok(sock) => sock,
-        Err(_) => TcpListener::bind("127.0.0.1:0").map_err(WatchError::Bind)?,
+        Err(_) => TcpListener::bind("127.0.0.1:0")?,
     };
 
-    let addr = listener.local_addr().map_err(WatchError::Bind)?;
+    let addr = listener.local_addr()?;
     let port = addr.port();
     Ok((listener, port))
 }
 
-pub fn watch<G>(website: &mut Website<G>, data: G) -> anyhow::Result<()>
+pub fn watch<G>(website: &mut Website<G>, data: G) -> Result<(), WatchError>
 where
     G: Send + Sync + 'static,
 {
@@ -57,7 +57,6 @@ where
         data,
     };
 
-    init(website)?;
     build(website, &globals)?;
 
     #[cfg(feature = "server")]

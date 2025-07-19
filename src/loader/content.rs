@@ -11,7 +11,7 @@ use gray_matter::engine::{JSON, YAML};
 
 use crate::{
     FileData, FromFile, GitRepo, Hash32, Item, LazyAssetError, Loader, LoaderError,
-    LoaderFileError, loader::Loadable,
+    loader::Loadable,
 };
 
 pub struct Content<T>
@@ -94,7 +94,7 @@ where
     /// TODO: based on loader cache, here we can use Hash32 to check if the
     /// previously loaded content item already exists, and *if* we have it, we
     /// can skip the `init.call`, because we can just reuse the old one.
-    fn read_file(&self, path: Utf8PathBuf) -> Result<Option<Item>, LoaderFileError> {
+    fn read_file(&self, path: Utf8PathBuf) -> Result<Option<Item>, LoaderError> {
         if path.is_dir() {
             return Ok(None);
         }
@@ -164,10 +164,7 @@ where
         for path in glob::glob(pattern.as_str())? {
             let path = Utf8PathBuf::try_from(path?)?;
 
-            if let Some(item) = self
-                .read_file(path.clone())
-                .map_err(|e| LoaderError::LoaderGlobFile(path, e))?
-            {
+            if let Some(item) = self.read_file(path.clone())? {
                 vec.push(item);
             }
         }
@@ -189,10 +186,7 @@ where
                 continue;
             };
 
-            if let Some(item) = self
-                .read_file(path.clone())
-                .map_err(|e| LoaderError::LoaderGlobFile(path.to_owned(), e))?
-            {
+            if let Some(item) = self.read_file(path.clone())? {
                 self.cached.insert(item.data.file.file.clone(), item);
                 changed |= true;
             }

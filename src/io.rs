@@ -8,8 +8,7 @@ use camino::Utf8Path;
 use console::Style;
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::HauchiwaError;
-use crate::error::ClearError;
+use crate::error::{StepClearError, StepCopyStatic};
 
 const ANSI_BLUE: Style = Style::new().blue();
 
@@ -27,30 +26,26 @@ pub fn as_overhead(s: Instant) -> impl Display {
 }
 
 /// Delete the entire `dist` directory if it exists.
-pub fn clear_dist() -> Result<(), ClearError> {
+pub fn clear_dist() -> Result<(), StepClearError> {
     let s = Instant::now();
 
     if fs::metadata("dist").is_ok() {
-        fs::remove_dir_all("dist") //
-            .map_err(ClearError::RemoveError)?;
+        fs::remove_dir_all("dist")?;
     }
 
-    fs::create_dir("dist") //
-        .map_err(ClearError::CreateError)?;
-
+    fs::create_dir("dist")?;
     eprintln!("Cleaned the dist directory {}", as_overhead(s));
 
     Ok(())
 }
 
-pub fn clone_static() -> Result<(), HauchiwaError> {
+pub fn clone_static() -> Result<(), StepCopyStatic> {
     let pb = ProgressBar::no_length();
     pb.set_message("Copying static files...");
     pb.set_style(PROGRESS_STYLE.clone());
 
     let s = Instant::now();
-    copy_rec(Utf8Path::new("public"), Utf8Path::new("dist"), &pb)
-        .map_err(HauchiwaError::CloneStatic)?;
+    copy_rec(Utf8Path::new("public"), Utf8Path::new("dist"), &pb)?;
 
     pb.finish_with_message(format!("Finished copying static files! {}", as_overhead(s)));
 

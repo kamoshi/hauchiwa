@@ -1,6 +1,7 @@
 use std::sync::Arc;
+#[cfg(feature = "notify")]
+use std::sync::mpsc::{RecvError, SendError};
 
-use camino::Utf8PathBuf;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone)]
@@ -22,52 +23,26 @@ impl From<anyhow::Error> for LazyAssetError {
 #[derive(Debug, Error)]
 pub enum HauchiwaError {
     #[error(transparent)]
-    Anyhow(#[from] anyhow::Error),
-
-    #[error(transparent)]
     AnyhowArc(#[from] Arc<anyhow::Error>),
 
-    #[error(transparent)]
-    LazyAssetError(#[from] LazyAssetError),
+    #[error("Asset '{0}': {1}")]
+    Asset(Box<str>, LazyAssetError),
 
-    #[error(transparent)]
-    Loader(#[from] LoaderError),
+    #[error("Loader '{0}': {1}")]
+    Loader(String, LoaderError),
 
-    #[error("Encountered an error while clearing the dist directory:\n{0}")]
-    Clear(#[from] ClearError),
+    #[error("Error while clearing the dist directory:\n{0}")]
+    StepClear(#[from] StepClearError),
 
-    #[error("Error while cloning static content: {0}")]
-    CloneStatic(std::io::Error),
+    #[error("Error while copying static content:\n{0}")]
+    StepStatic(#[from] StepCopyStatic),
 
-    #[error("Error while building sitemap {0}")]
-    Sitemap(#[from] SitemapError),
+    #[error("Error while building the website.\n{0}")]
+    Build(#[from] BuildError),
 
-    #[error("Failed to compile stylesheets: {0}")]
-    Stylesheet(#[from] StylesheetError),
-
-    #[error("Error while watching {0}")]
+    #[cfg(feature = "notify")]
+    #[error("Error while watching for file changes:\n{0}")]
     Watch(#[from] WatchError),
-
-    #[error("Invalid glob pattern: {0}")]
-    Glob(#[from] glob::PatternError),
-
-    #[error("Asset not found: {0}")]
-    AssetNotFound(String),
-
-    #[error("Frontmatter has wrong shape: {0}")]
-    Frontmatter(String),
-
-    #[error("Failed to acquire read lock")]
-    LockRead,
-
-    #[error("Failed to acquire write lock")]
-    LockWrite,
-
-    #[error("Failed to build asset {0}")]
-    Builder(#[from] BuilderError),
-
-    #[error("Error while executing a hook:\n{0}")]
-    Hook(#[from] HookError),
 }
 
 #[derive(Debug, Error)]
@@ -75,97 +50,79 @@ pub enum HauchiwaError {
 pub struct LoaderFileCallbackError(pub anyhow::Error);
 
 #[derive(Debug, Error)]
-pub enum LoaderFileError {
-    #[error(transparent)]
-    Callback(#[from] LoaderFileCallbackError),
-
-    #[error(transparent)]
+pub enum LoaderError {
+    #[error("Couldn't load data from file.\n{0}")]
     FileSystem(#[from] std::io::Error),
 
-    #[error("Error while reading frontmatter - {0}")]
-    Frontmatter(String),
-}
-
-#[derive(Debug, Error)]
-pub enum LoaderError {
-    #[error(transparent)]
-    Userland(#[from] anyhow::Error),
-
-    #[error("Encountered an error while loading file {0}:\n{1}")]
-    LoaderGlobFile(Utf8PathBuf, LoaderFileError),
-
-    #[error(transparent)]
+    #[error("Couldn't compile glob pattern.\n{0}")]
     GlobPattern(#[from] glob::PatternError),
 
-    #[error(transparent)]
+    #[error("Couldn't run glob.\n{0}")]
     Glob(#[from] glob::GlobError),
 
-    #[error(transparent)]
+    #[error("Couldn't convert path to UTF-8.\n{0}")]
     PathFormat(#[from] camino::FromPathBufError),
+
+    #[error("An error occured while loading asset.\n{0}")]
+    Userland(#[from] anyhow::Error),
 }
 
 #[derive(Debug, Error)]
-pub enum ClearError {
+#[error(transparent)]
+pub struct StepClearError(#[from] std::io::Error);
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct StepCopyStatic(#[from] std::io::Error);
+
+#[derive(Debug, Error)]
+pub enum BuildError {
     #[error(transparent)]
-    RemoveError(std::io::Error),
+    Io(#[from] std::io::Error),
 
-    #[error(transparent)]
-    CreateError(std::io::Error),
+    #[error("Task '{0}':\n{1}")]
+    Task(String, anyhow::Error),
+
+    #[error("Hook:\n{0}")]
+    Hook(anyhow::Error),
 }
 
-#[derive(Debug, Error)]
-pub enum SitemapError {
-    #[error("Failed to write output to file {0}")]
-    FileWrite(#[from] std::io::Error),
-}
-
-#[derive(Debug, Error)]
-pub enum StylesheetError {
-    #[error("Glob pattern error: {0}")]
-    GlobPattern(#[from] glob::PatternError),
-
-    #[error("Glob error: {0}")]
-    Glob(#[from] glob::GlobError),
-
-    #[error("Invalid file name, only UTF-8 filenames are supported. {0}")]
-    InvalidFileName(String),
-
-    #[error("CSS compile error: {0}")]
-    Compiler(String),
-}
-
+#[cfg(feature = "notify")]
 #[derive(Debug, Error)]
 pub enum WatchError {
-    #[error("Failed to bind to address {0}")]
-    Bind(std::io::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 
     #[error(transparent)]
-    Loader(#[from] LoaderError),
-}
+    Build(#[from] BuildError),
 
-#[derive(Debug, Error)]
-pub enum BuilderError {
-    #[error("Userland error: {0}")]
-    Userland(#[from] anyhow::Error),
+    #[error(transparent)]
+    Notify(#[from] notify::Error),
 
-    #[error("Failed to read file `{0}`: {1}")]
-    FileReadError(Utf8PathBuf, std::io::Error),
+    #[error(transparent)]
+    Recv(#[from] RecvError),
 
-    #[error("Failed to create directory `{0}`: {1}")]
-    CreateDirError(Utf8PathBuf, std::io::Error),
-
-    #[error("Failed to write file `{0}`: {1}")]
-    FileWriteError(Utf8PathBuf, std::io::Error),
-
-    #[error("Failed to copy file from `{0}` to `{1}`: {2}")]
-    FileCopyError(Utf8PathBuf, Utf8PathBuf, std::io::Error),
-
-    #[error("Failed to optimize image")]
-    OptimizationError,
+    #[error(transparent)]
+    Send(#[from] SendError<()>),
 }
 
 #[derive(Debug, Error)]
 pub enum HookError {
     #[error(transparent)]
     Userland(#[from] anyhow::Error),
+}
+
+#[derive(Debug, Error)]
+pub enum ContextError {
+    #[error(transparent)]
+    Pattern(#[from] glob::PatternError),
+
+    #[error("Asset not found: {0}")]
+    NotFound(String),
+
+    #[error("Asset not found: {0}, available assets with types {1}")]
+    NotFoundWrongShape(String, String),
+
+    #[error("Asset {0}:\n{1}")]
+    LazyAssetError(String, LazyAssetError),
 }
