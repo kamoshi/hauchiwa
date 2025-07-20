@@ -7,6 +7,9 @@ use std::sync::{Arc, RwLock};
 use crate::{FileData, Hash32, error::*};
 use crate::{Globals, Item};
 
+/// Generator name and version.
+const GENERATOR: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
+
 const GLOB_OPTS: glob::MatchOptions = glob::MatchOptions {
     case_sensitive: true,
     require_literal_separator: true,
@@ -33,6 +36,8 @@ pub struct Context<'a, G>
 where
     G: Send + Sync,
 {
+    /// Generator name and version.
+    pub generator: &'static str,
     /// Global data for the current build.
     globals: &'a Globals<G>,
     /// Every single input.
@@ -51,6 +56,7 @@ where
         deps: Arc<RwLock<Vec<Tracker>>>,
     ) -> Self {
         Self {
+            generator: GENERATOR,
             globals,
             items,
             deps,
