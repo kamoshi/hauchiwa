@@ -7,11 +7,13 @@ use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{Hash32, Loader, loader::generic::LoaderGenericMultifile};
 
+type Prerender<P> = Box<dyn Fn(&P) -> anyhow::Result<String> + Send + Sync>;
+
 pub struct Svelte<P>
 where
     P: serde::Serialize,
 {
-    pub html: Box<dyn Fn(&P) -> anyhow::Result<String> + Send + Sync>,
+    pub html: Prerender<P>,
     pub init: Utf8PathBuf,
 }
 

@@ -62,7 +62,7 @@ fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, BuildError>
         let buffer = process_image(&buffer);
 
         fs::create_dir_all(".cache/hash/img/")?;
-        fs::write(&path_hash, buffer);
+        fs::write(&path_hash, buffer)?;
     }
 
     let dir = path_dist.parent().unwrap_or(&path_dist);
