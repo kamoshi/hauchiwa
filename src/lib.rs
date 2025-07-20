@@ -19,8 +19,8 @@ use std::time::Instant;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use console::style;
-use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use indicatif::{ProgressBar, ProgressStyle};
+use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 pub use crate::error::*;
 pub use crate::gitmap::{GitInfo, GitRepo};
@@ -119,24 +119,39 @@ fn build<G>(website: &mut Website<G>, globals: &Globals<G>) -> Result<(), BuildE
 where
     G: Send + Sync + 'static,
 {
-    let pages = website.run_tasks(globals)?;
+    website.run_tasks(globals)?;
 
-    let temp: Vec<_> = pages.iter().collect();
-    for hook in &website.hooks {
-        match hook {
-            Hook::PostBuild(callback) => callback(&temp).map_err(BuildError::Hook)?,
-        }
-    }
+    let pages: Vec<_> = website
+        .tasks
+        .iter()
+        .flat_map(|task| task.pages.iter())
+        .collect();
 
-    for page in pages {
-        let path = Utf8Path::new("dist").join(&page.path);
+    website
+        .hooks
+        .par_iter()
+        .try_for_each(|hook| -> Result<_, BuildError> {
+            match hook {
+                Hook::PostBuild(callback) => callback(&pages).map_err(BuildError::Hook)?,
+            };
 
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir)?;
-        }
-        let mut file = fs::File::create(&path)?;
-        std::io::Write::write_all(&mut file, page.text.as_bytes())?;
-    }
+            Ok(())
+        })?;
+
+    pages
+        .par_iter()
+        .try_for_each(|page| -> Result<_, BuildError> {
+            let path = Utf8Path::new("dist").join(&page.path);
+
+            if let Some(dir) = path.parent() {
+                fs::create_dir_all(dir)?;
+            }
+
+            let mut file = fs::File::create(&path)?;
+            std::io::Write::write_all(&mut file, page.text.as_bytes())?;
+
+            Ok(())
+        })?;
 
     Ok(())
 }
@@ -195,6 +210,8 @@ impl<G: Send + Sync + 'static> Website<G> {
     }
 
     fn loaders_load(&mut self) -> Result<(), HauchiwaError> {
+        let s = Instant::now();
+
         let len = self.loaders.len();
         let bar = ProgressBar::new(len as u64).with_style(
             ProgressStyle::default_spinner()
@@ -233,7 +250,7 @@ impl<G: Send + Sync + 'static> Website<G> {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        bar.finish_with_message("Loaded assets");
+        bar.finish_with_message(format!("Loaded assets {}", crate::io::as_overhead(s)));
 
         Ok(())
     }
@@ -293,7 +310,9 @@ impl<G: Send + Sync + 'static> Website<G> {
         Ok(changed)
     }
 
-    fn run_tasks(&mut self, globals: &Globals<G>) -> Result<Vec<Page>, BuildError> {
+    fn run_tasks(&mut self, globals: &Globals<G>) -> Result<(), BuildError> {
+        let s = Instant::now();
+
         let items = self
             .loaders
             .iter()
@@ -311,11 +330,10 @@ impl<G: Send + Sync + 'static> Website<G> {
 
         let set = Arc::new(Mutex::new(HashSet::new()));
 
-        let pages = self
-            .tasks
+        self.tasks
             .par_iter_mut()
             .filter(|task| task.is_outdated(&items))
-            .map(|task| {
+            .try_for_each(|task| -> Result<_, BuildError> {
                 let name = Cow::from(task.name);
 
                 {
@@ -325,9 +343,8 @@ impl<G: Send + Sync + 'static> Website<G> {
                     bar.set_message(msg);
                 }
 
-                let result = task
-                    .call(globals, &items)
-                    .map_err(|e| BuildError::Task(name.to_string(), e));
+                task.run(globals, &items)
+                    .map_err(|e| BuildError::Task(name.to_string(), e))?;
 
                 {
                     let mut active = set.lock().unwrap();
@@ -337,17 +354,12 @@ impl<G: Send + Sync + 'static> Website<G> {
                     bar.inc(1);
                 }
 
-                result
-            })
-            .progress_with(bar.clone())
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
+                Ok(())
+            })?;
 
-        bar.finish_with_message("Finished all tasks");
+        bar.finish_with_message(format!("Finished tasks {}", crate::io::as_overhead(s)));
 
-        Ok(pages)
+        Ok(())
     }
 }
 
@@ -471,6 +483,7 @@ type TaskFnPtr<D> = Arc<dyn Fn(Context<D>) -> TaskResult<Vec<Page>> + Send + Syn
 /// Wraps `TaskFnPtr` and implements `Debug` trait for function pointer.
 struct Task<D: Send + Sync> {
     pub name: &'static str,
+    pub pages: Vec<Page>,
     init: bool,
     func: TaskFnPtr<D>,
     filters: Vec<Tracker>,
@@ -485,6 +498,7 @@ impl<D: Send + Sync> Task<D> {
     {
         Self {
             name,
+            pages: Default::default(),
             init: true,
             func: Arc::new(func),
             filters: Default::default(),
@@ -496,19 +510,15 @@ impl<D: Send + Sync> Task<D> {
     }
 
     /// Run the task to generate a page.
-    fn call(&mut self, globals: &Globals<D>, items: &[&Item]) -> TaskResult<Vec<Page>> {
+    fn run(&mut self, globals: &Globals<D>, items: &[&Item]) -> anyhow::Result<()> {
         let tracker = Arc::new(RwLock::new(vec![]));
         let context = Context::new(globals, items, tracker.clone());
 
-        match (self.func)(context) {
-            Ok(ok) => {
-                self.init = false;
-                self.filters = Arc::into_inner(tracker).unwrap().into_inner().unwrap();
+        self.pages = (self.func)(context)?;
+        self.init = false;
+        self.filters = Arc::into_inner(tracker).unwrap().into_inner().unwrap();
 
-                Ok(ok)
-            }
-            err => err,
-        }
+        Ok(())
     }
 }
 
@@ -522,7 +532,7 @@ impl<G: Send + Sync> Debug for Task<G> {
 // *           Hooks            *
 // ******************************
 
-type HookCallback = Box<dyn Fn(&[&Page]) -> TaskResult<()>>;
+type HookCallback = Box<dyn Fn(&[&Page]) -> TaskResult<()> + Send + Sync>;
 
 pub enum Hook {
     PostBuild(HookCallback),
@@ -531,7 +541,7 @@ pub enum Hook {
 impl Hook {
     pub fn post_build<F>(fun: F) -> Self
     where
-        F: Fn(&[&Page]) -> TaskResult<()> + 'static,
+        F: Fn(&[&Page]) -> TaskResult<()> + Send + Sync + 'static,
     {
         Hook::PostBuild(Box::new(fun))
     }
