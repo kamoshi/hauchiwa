@@ -1,34 +1,54 @@
 # Hauchiwa
 
-Incredibly flexible static site generator library with incremental rebuilds and
-cached image optimization. This library can be used as the backbone of your own
-static site generator, it can handle all the mundane work for you:
+An incredibly flexible static site generator library featuring incremental
+rebuilds and cached image optimization. This library is designed to be the
+robust backbone for your custom static site generator, handling all the common
+tasks:
 
-- gathering content files from the file system
-- optimizing images and caching the work
-- compiling SCSS and CSS stylesheets
-- compiling JavaScript applications via ESBuild
-- watching for changes and incremental rebuilds
+- **Loading content**: Efficiently collects content files from your file system.
+- **Image optimization**: Optimizes images and intelligently caches the results
+  to speed up subsequent builds.
+- **Stylesheet compilation**: Compiles SCSS and CSS stylesheets.
+- **JavaScript compilation**: Processes JavaScript applications using ESBuild.
+- **Watch mode**: Monitors for changes and performs fast, incremental rebuilds.
+- and much more...
 
-This library's API is purposefully designed to be small, simple, flexible and powerful.
+## Why This Library?
 
+I created this library out of dissatisfaction with existing static site
+generators. Many felt either too **rigid** (like Jekyll, Hugo, and Zola),
+**arcane** (like Hakyll), or simply **bloated** JavaScript frameworks (like
+Gatsby and Astro).
+
+In contrast, this library's API is purposefully **small**, **simple**,
+**flexible**, and **powerful**. If you're looking to generate a static blog, you
+likely won't need any other generator. Its true strength lies in its
+extensibility, as you can leverage the entire Rust ecosystem to customize it in
+countless ways. Also, the codebase is compact enough to be easily forked and
+maintained by a single person, a feature that might be particularly appealing to
+hackers like yourself!
 
 ## Feature flags
+
+You can selectively enable features by specifying them in your Cargo.toml file.
+This allows you to include only the functionalities your project needs, keeping
+your dependencies lean.
 
 ```toml
 [dependencies.hauchiwa]
 features = [
-    "asyncrt",  # add async runtime (tokio) and async loader
-    "styles",   # add sass loader
-    "images",   # add image loader + optimizer
-    "reload",   # add live reload in watch mode
-    "server",   # add http server for local development and writing in watch mode
+    "asyncrt",  # Adds an asynchronous runtime (Tokio) and an async loader.
+    "styles",   # Includes the Sass loader for CSS pre-processing.
+    "images",   # Enables image loading and optimization capabilities.
+    "reload",   # Activates live reloading in watch mode for a smoother development experience.
+    "server",   # Provides an HTTP server for local development and writing in watch mode.
 ]
 ```
 
 ## Get started
 
-To get started add the following snippet to your `Cargo.toml` file.
+To begin using Hauchiwa, add the following snippet to your Cargo.toml file.
+Remember to replace "*" with the latest version available on Crates.io.
 
 ```toml
 hauchiwa = "*" # change this version to the latest
@@ -36,11 +56,13 @@ hauchiwa = "*" # change this version to the latest
 
 ## Declarative configuration
 
-The configuration API is designed to be extremely minimal, but powerful and flexible.
+The configuration API is designed to be extremely minimal, yet powerful and
+flexible, allowing you to define your website's structure and behavior with
+clarity.
 
-Here's a small sample of how you can use this library to create your own
-generator. Let's start by defining the shape of front matter for a single post
-stored as a Markdown file.
+Here's a small sample demonstrating how you can use this library to create your
+own static site generator. Let's start by defining the shape of the front matter
+for a single post, typically stored as a Markdown file.
 
 ```rust ignore
 /// Represents a simple post, this is the metadata for your Markdown content.
@@ -71,11 +93,10 @@ enum Mode {
 }
 ```
 
-In the `main` function of your application you can configure how the website should be generated.
+Within your application's main function, you can configure precisely how the
+website should be generated, defining content loaders, tasks, and hooks.
 
 ```rust
-use std::env::Args;
-
 use serde::{self, Deserialize};
 use hauchiwa::{Website, Page, Hook};
 use hauchiwa::loader::{
@@ -93,13 +114,8 @@ struct Bibtex {
     data: String,
 };
 
+#[derive(Default)]
 struct MyData {};
-
-impl MyData {
-    fn new() -> Self {
-        Self {}
-    }
-}
 
 // Here we start by calling the `setup` function.
 let mut website = Website::config()
@@ -141,7 +157,7 @@ let mut website = Website::config()
     .add_task("posts", |ctx| {
         let mut pages = vec![];
 
-        for item in ctx.glob_files::<Content<Post>>("posts/**/*")? {
+        for item in ctx.glob_with_file::<Content<Post>>("posts/**/*")? {
             // Retrieve any assets required to build the page.
             let pattern = format!("{}/*", item.file.area);
             let library = ctx.get::<Bibtex>(&pattern)?;
@@ -165,14 +181,14 @@ let mut website = Website::config()
 
 
 // Start the library in either the *build* or the *watch* mode.
-website.build(MyData::new());
-// website.watch(MyData::new());
+website.build(MyData::default());
+// website.watch(MyData::default());
 ```
 
 The full documentation for this library is always available on
-[docs.rs](https://docs.rs/hauchiwa/latest/hauchiwa/), please feel free to take a
-look at it 😊
+[docs.rs](https://docs.rs/hauchiwa/latest/hauchiwa/). Please feel free to take a
+look! 😊
 
 ## License
 
-This library is available under GPL 2.0 (or later).
+This library is available under the GPL 2.0 (or later) license.

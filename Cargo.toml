@@ -1,6 +1,6 @@
 [package]
 name        = "hauchiwa"
-version     = "0.5.2"
+version     = "0.5.3"
 edition     = "2024"
 authors     = ["Maciej Jur <maciej@kamoshi.org>"]
 keywords    = ["ssg"]
@@ -27,8 +27,8 @@ serde_json              = "1"
 blake3                  = { version = "1.8.2", features = ["rayon", "mmap"] }
 
 # CLI
-console                 = { version = "0.15", default-features = false }
-indicatif               = { version = "0.17", features = ["rayon"] }
+console                 = { version = "0.16", default-features = false }
+indicatif               = { version = "0.18", features = ["rayon"] }
 
 # Error handling
 anyhow                  = "1.0"
@@ -57,7 +57,7 @@ optional = true
 default-features = false
 
 [dependencies.tungstenite]
-version = "0.26"
+version = "0.27"
 optional = true
 
 # Feature = "server"
