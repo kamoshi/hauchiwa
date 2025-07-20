@@ -118,33 +118,6 @@ socket.addEventListener("message", event => {{
         Ok(data)
     }
 
-    /// Finds the first matching item of type `T` using a glob pattern.
-    ///
-    /// Returns an error if no match is found, or if the match is of the wrong type.
-    /// Only the first match is returned; use `glob()` for multi-match patterns.
-    pub fn glob_one<T: 'static>(&self, pattern: &str) -> Result<&T, ContextError> {
-        let mut filter = FilterGlob::new(TypeId::of::<T>(), glob::Pattern::new(pattern)?);
-
-        let item = match filter.filter(self.items).next() {
-            Some(item) => item,
-            None => {
-                let other = filter.other_types(self.items).join(", ");
-                return Err(ContextError::NotFoundWrongShape(pattern.to_string(), other));
-            }
-        };
-
-        let data = match &*item.data.data {
-            Ok(ok) => ok,
-            Err(e) => return Err(ContextError::LazyAssetError(item.id.to_string(), e.clone())),
-        };
-
-        // save dependencies
-        filter.store(vec![item.hash]);
-        self.deps.write().unwrap().push(Tracker::Glob(filter));
-
-        Ok(data.downcast_ref().unwrap())
-    }
-
     /// Retrieves all items of type `T` matching the given glob pattern.
     ///
     /// Items must match both the pattern and the expected type.
@@ -177,8 +150,11 @@ socket.addEventListener("message", event => {{
         Ok(data)
     }
 
-    /// Like `glob_one`, but returns the matching item paired with its file metadata.
-    pub fn glob_file<T: 'static>(&self, pattern: &str) -> Result<WithFile<'_, T>, ContextError> {
+    /// Finds the first matching item of type `T` using a glob pattern.
+    ///
+    /// Returns an error if no match is found, or if the match is of the wrong type.
+    /// Only the first match is returned; use `glob()` for multi-match patterns.
+    pub fn glob_one<T: 'static>(&self, pattern: &str) -> Result<&T, ContextError> {
         let mut filter = FilterGlob::new(TypeId::of::<T>(), glob::Pattern::new(pattern)?);
 
         let item = match filter.filter(self.items).next() {
@@ -198,14 +174,11 @@ socket.addEventListener("message", event => {{
         filter.store(vec![item.hash]);
         self.deps.write().unwrap().push(Tracker::Glob(filter));
 
-        Ok(WithFile {
-            data: data.downcast_ref().unwrap(),
-            file: item.data.file.clone(),
-        })
+        Ok(data.downcast_ref().unwrap())
     }
 
     /// Like `glob`, but returns all matching items along with their file metadata.
-    pub fn glob_files<T>(&self, pattern: &str) -> Result<Vec<WithFile<'_, T>>, ContextError>
+    pub fn glob_with_file<T>(&self, pattern: &str) -> Result<Vec<WithFile<'_, T>>, ContextError>
     where
         T: 'static,
     {
@@ -236,6 +209,36 @@ socket.addEventListener("message", event => {{
         self.deps.write().unwrap().push(Tracker::Glob(filter));
 
         Ok(items)
+    }
+
+    /// Like `glob_one`, but returns the matching item paired with its file metadata.
+    pub fn glob_one_with_file<T: 'static>(
+        &self,
+        pattern: &str,
+    ) -> Result<WithFile<'_, T>, ContextError> {
+        let mut filter = FilterGlob::new(TypeId::of::<T>(), glob::Pattern::new(pattern)?);
+
+        let item = match filter.filter(self.items).next() {
+            Some(item) => item,
+            None => {
+                let other = filter.other_types(self.items).join(", ");
+                return Err(ContextError::NotFoundWrongShape(pattern.to_string(), other));
+            }
+        };
+
+        let data = match &*item.data.data {
+            Ok(ok) => ok,
+            Err(e) => return Err(ContextError::LazyAssetError(item.id.to_string(), e.clone())),
+        };
+
+        // save dependencies
+        filter.store(vec![item.hash]);
+        self.deps.write().unwrap().push(Tracker::Glob(filter));
+
+        Ok(WithFile {
+            data: data.downcast_ref().unwrap(),
+            file: item.data.file.clone(),
+        })
     }
 }
 
