@@ -7,10 +7,44 @@ use crate::{
     loader::{Loader, generic::LoaderGeneric},
 };
 
+/// Represents a hashed, losslessly compressed WebP image ready for use in templates.
+///
+/// The `path` points to the output location under the `/hash/img/` virtual namespace,
+/// suitable for use in `src` attributes or manifest generation. Images are
+/// content-addressed, allowing caching, deduplication, and incremental builds.
+///
+/// Created by `glob_images` from any raster input (e.g., PNG, JPEG, etc.).
 pub struct Image {
+    /// Relative path to the optimized WebP image, rooted at `/hash/img/`.
     pub path: Utf8PathBuf,
 }
 
+/// Constructs a loader that ingests raster images and emits lossless WebP variants.
+///
+/// Matches files using a glob pattern relative to `path_base`, reads each file,
+/// and re-encodes it as WebP using the [`image`] crate's lossless encoder. The
+/// resulting output is hashed and cached, then emitted into `dist`. The final
+/// [`Image`] contains a path pointing to the output asset.
+///
+/// ### Parameters
+/// - `path_base`: Base directory for relative glob resolution.
+/// - `path_glob`: Glob pattern matching source image files (e.g. `"**/*.png"`).
+///
+/// ### Returns
+/// A [`Loader`] that emits [`Image`] objects keyed by file content.
+///
+/// ### Example
+/// ```rust
+/// use hauchiwa::loader::glob_images;
+///
+/// let loader = glob_images("assets/images", "**/*.png");
+/// ```
+///
+/// ### Notes
+/// - Only lossless WebP encoding is currently supported.
+/// - All outputs are content-addressed: the same input will always yield
+///   the same output path.
+/// - Image decoding/encoding is synchronous; performance may vary with size and volume.
 pub fn glob_images(path_base: &'static str, path_glob: &'static str) -> Loader {
     Loader::with(move |_| {
         LoaderGeneric::new(

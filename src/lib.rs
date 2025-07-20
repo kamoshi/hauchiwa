@@ -448,13 +448,25 @@ impl<G: Send + Sync + 'static> Config<G> {
 // *           Tasks            *
 // ******************************
 
+/// Represents a rendered output page, including its destination path,
+/// content, and optional source file metadata.
+///
+/// This struct encapsulates the result of a build step (e.g., Markdown-to-HTML,
+/// template rendering) and serves as the primary unit passed to hooks or written
+/// to disk. If the page originates from a file, `from` retains its metadata.
 pub struct Page {
+    /// Relative output path where the page should be written.
     pub path: Utf8PathBuf,
+    /// The full textual contents of the page (typically HTML).
     pub text: String,
+    /// Optional source file metadata, if this page was generated from a file.
     pub from: Option<Arc<FileData>>,
 }
 
 impl Page {
+    /// Creates a new `Page` with the given path and content, without linking to any source file.
+    ///
+    /// Use this for synthetic or programmatically generated pages.
     pub fn text(path: Utf8PathBuf, text: String) -> Self {
         Self {
             path,
@@ -463,6 +475,10 @@ impl Page {
         }
     }
 
+    /// Creates a new `Page` with the given path, content, and originating file metadata.
+    ///
+    /// Use this when the page is derived from a file, such as a Markdown source,
+    /// and you want to retain provenance information for tooling or debugging.
     pub fn text_with_file(path: Utf8PathBuf, text: String, from: Arc<FileData>) -> Self {
         Self {
             path,
@@ -534,11 +550,25 @@ impl<G: Send + Sync> Debug for Task<G> {
 
 type HookCallback = Box<dyn Fn(&[&Page]) -> TaskResult<()> + Send + Sync>;
 
+/// Represents a lifecycle hook invoked at specific points in the build pipeline.
+///
+/// Currently only supports a `PostBuild` phase, allowing users to register a
+/// callback that runs after all pages have been generated. The hook receives
+/// a reference to all rendered pages and may return a `TaskResult`, enabling
+/// diagnostics, final transformations, or side-effects (e.g., search indexing,
+/// sitemap generation, etc.).
 pub enum Hook {
     PostBuild(HookCallback),
 }
 
 impl Hook {
+    /// Creates a new `PostBuild` hook from the given callback.
+    ///
+    /// The provided function is invoked with all rendered pages, and may return
+    /// an error to signal failure or abort subsequent tasks.
+    ///
+    /// Intended for use cases such as post-processing, validation, or export tasks
+    /// that depend on the final structure of the site.
     pub fn post_build<F>(fun: F) -> Self
     where
         F: Fn(&[&Page]) -> TaskResult<()> + Send + Sync + 'static,

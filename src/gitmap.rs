@@ -115,7 +115,7 @@ pub fn map(opts: Options) -> Result<GitRepo> {
         "--name-only --no-merges --format=format:\x1e%H\x1f%h\x1f%s\x1f%aN\x1f%aE\x1f%ai\x1f%ci\x1f%b\x1d {}",
         opts.revision
     );
-    // Split by whitespace (similar to Go’s strings.Fields).
+    // Split by whitespace (similar to Go's strings.Fields).
     let log_fields: Vec<&str> = git_log_format.split_whitespace().collect();
 
     // Prepend the additional git options.

@@ -12,6 +12,33 @@ use crate::{
     loader::{Loadable, Runtime},
 };
 
+/// Constructs a [`Loader`] from an async block that resolves to a typed asset.
+///
+/// This allows arbitrary
+/// [async](https://doc.rust-lang.org/std/keyword.async.html) logic—such as
+/// network fetches, API calls, or computational tasks to be embedded into the
+/// build graph as a single item. The asset is constructed eagerly via a
+/// single-threaded Tokio runtime.
+///
+/// ### Parameters
+/// - `id`: Logical identifier for this asset (ideally unique).
+/// - `async_closure`: An `async` function or block that returns a `T`.
+///
+/// ### Example
+/// ```rust
+/// use hauchiwa::loader::async_asset;
+///
+/// let loader = async_asset("remote", async |rt| {
+///     let data = async { 2 };
+///     let data = data.await;;
+///     Ok(data)
+/// });
+/// ```
+///
+/// ### Notes
+/// - This loader executes at build time; it is not reactive or incremental.
+/// - If reproducibility is critical, ensure that `async_closure` is deterministic.
+/// - Currently uses a local Tokio runtime per loader; avoid spawning nested tasks.
 pub fn async_asset<T, F, Fut>(id: &'static str, async_closure: F) -> Loader
 where
     T: Send + Sync + 'static,

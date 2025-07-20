@@ -13,13 +13,22 @@ const GLOB_OPTS: glob::MatchOptions = glob::MatchOptions {
     require_literal_leading_dot: true,
 };
 
+/// Associates runtime artifacts (e.g., parsed content, structured data or
+/// images) with its originating file metadata.
 pub struct WithFile<'a, D> {
     pub data: &'a D,
     pub file: Arc<FileData>,
 }
 
-/// A simple wrapper for all context data passed at runtime to tasks defined for
-/// the website. Use this struct's methods to query required data.
+/// Runtime container for all assets available to build tasks.
+///
+/// Encapsulates per-invocation build state, including the global configuration,
+/// all registered input items (typed assets, lazily evaluated), and a dependency
+/// tracker to record reads for incremental builds. This struct mediates safe,
+/// type-driven access to the task's data environment.
+///
+/// Use `get`, `glob`, and related methods to retrieve assets by identifier
+/// or glob pattern, while automatically tracking usage for fine-grained invalidation.
 pub struct Context<'a, G>
 where
     G: Send + Sync,
@@ -35,6 +44,7 @@ impl<'a, G> Context<'a, G>
 where
     G: Send + Sync,
 {
+    /// Constructs a new task-scoped context from global state and item registry.
     pub(crate) fn new(
         globals: &'a Globals<G>,
         items: &'a [&'a Item],
@@ -47,12 +57,17 @@ where
         }
     }
 
-    /// Retrieve the globals.
+    /// Returns a shared reference to the current build's global configuration.
+    ///
+    /// Useful for accessing user-specified parameters, environment info, or
+    /// other resources passed in at runtime.
     pub fn get_globals(&self) -> &Globals<G> {
         self.globals
     }
 
-    /// Get the JS script which enables live reloading.
+    /// If live reload is enabled, returns an inline JavaScript snippet to
+    /// establish a WebSocket connection for hot page refresh during
+    /// development.
     pub fn get_refresh_script(&self) -> Option<String> {
         self.globals.port.map(|port| {
             format!(
@@ -66,10 +81,98 @@ socket.addEventListener("message", event => {{
         })
     }
 
-    pub fn glob_with_file<T>(&self, pattern: &str) -> Result<WithFile<'_, T>, ContextError>
-    where
-        T: 'static,
-    {
+    /// Retrieves a single item of the specified type `T` by identifier.
+    ///
+    /// The requested type must match exactly the shape under which the item was registered.
+    /// If the identifier exists but the type is wrong, an error variant will indicate the
+    /// available types.
+    pub fn get<T: 'static>(&self, id: impl AsRef<str>) -> Result<&T, ContextError> {
+        let mut filter = FilterId::new(TypeId::of::<T>(), id.as_ref());
+        let item = match filter.filter(self.items) {
+            Some(item) => item,
+            None => {
+                let other = filter.other_types(self.items);
+                let id = id.as_ref().to_string();
+                return Err(match other.len() {
+                    0 => ContextError::NotFound(id),
+                    _ => ContextError::NotFoundWrongShape(id, other.join(", ")),
+                });
+            }
+        };
+
+        let data = match &*item.data.data {
+            Ok(ok) => ok.downcast_ref().unwrap(), // this won't ever fail
+            Err(e) => return Err(ContextError::LazyAssetError(item.id.to_string(), e.clone())),
+        };
+
+        // save dependencies
+        filter.store(item);
+        self.deps.write().unwrap().push(Tracker::Id(filter));
+
+        Ok(data)
+    }
+
+    /// Finds the first matching item of type `T` using a glob pattern.
+    ///
+    /// Returns an error if no match is found, or if the match is of the wrong type.
+    /// Only the first match is returned; use `glob()` for multi-match patterns.
+    pub fn glob_one<T: 'static>(&self, pattern: &str) -> Result<&T, ContextError> {
+        let mut filter = FilterGlob::new(TypeId::of::<T>(), glob::Pattern::new(pattern)?);
+
+        let item = match filter.filter(self.items).next() {
+            Some(item) => item,
+            None => {
+                let other = filter.other_types(self.items).join(", ");
+                return Err(ContextError::NotFoundWrongShape(pattern.to_string(), other));
+            }
+        };
+
+        let data = match &*item.data.data {
+            Ok(ok) => ok,
+            Err(e) => return Err(ContextError::LazyAssetError(item.id.to_string(), e.clone())),
+        };
+
+        // save dependencies
+        filter.store(vec![item.hash]);
+        self.deps.write().unwrap().push(Tracker::Glob(filter));
+
+        Ok(data.downcast_ref().unwrap())
+    }
+
+    /// Retrieves all items of type `T` matching the given glob pattern.
+    ///
+    /// Items must match both the pattern and the expected type.
+    pub fn glob<T: 'static>(&self, pattern: &str) -> Result<Vec<&T>, ContextError> {
+        let mut filter = FilterGlob::new(TypeId::of::<T>(), glob::Pattern::new(pattern)?);
+        let (data, hash) =
+            filter
+                .filter(self.items)
+                .try_fold((Vec::new(), Vec::new()), |mut acc, item| {
+                    let data = match &*item.data.data {
+                        Ok(ok) => ok,
+                        Err(e) => {
+                            return Err(ContextError::LazyAssetError(
+                                item.id.to_string(),
+                                e.clone(),
+                            ));
+                        }
+                    };
+
+                    acc.0.push(data.downcast_ref().unwrap());
+                    acc.1.push(item.hash);
+
+                    Ok(acc)
+                })?;
+
+        // save dependencies
+        filter.store(hash);
+        self.deps.write().unwrap().push(Tracker::Glob(filter));
+
+        Ok(data)
+    }
+
+    /// Like `glob_one`, but returns the matching item paired with its file metadata.
+    pub fn glob_file<T: 'static>(&self, pattern: &str) -> Result<WithFile<'_, T>, ContextError> {
         let mut filter = FilterGlob::new(TypeId::of::<T>(), glob::Pattern::new(pattern)?);
 
         let item = match filter.filter(self.items).next() {
@@ -95,7 +198,8 @@ socket.addEventListener("message", event => {{
         })
     }
 
-    pub fn glob_with_files<T>(&self, pattern: &str) -> Result<Vec<WithFile<'_, T>>, ContextError>
+    /// Like `glob`, but returns all matching items along with their file metadata.
+    pub fn glob_files<T>(&self, pattern: &str) -> Result<Vec<WithFile<'_, T>>, ContextError>
     where
         T: 'static,
     {
@@ -111,11 +215,10 @@ socket.addEventListener("message", event => {{
                     }
                 };
 
-                acc.0.push(WithFile {
-                    data: data.downcast_ref().unwrap(),
-                    file: item.data.file.clone(),
-                });
+                let data = data.downcast_ref().unwrap();
+                let file = item.data.file.clone();
 
+                acc.0.push(WithFile { data, file });
                 acc.1.push(item.hash);
 
                 Ok(acc)
@@ -127,55 +230,6 @@ socket.addEventListener("message", event => {{
         self.deps.write().unwrap().push(Tracker::Glob(filter));
 
         Ok(items)
-    }
-
-    /// Find the first on‐disk asset whose path matches `pattern`. This asset
-    /// will be built only on request and cached.
-    pub fn glob<T: 'static>(&self, pattern: &str) -> Result<Option<&T>, ContextError> {
-        let mut filter = FilterGlob::new(TypeId::of::<T>(), glob::Pattern::new(pattern)?);
-        let item = filter.filter(self.items).next();
-
-        let item = match item {
-            Some(item) => item,
-            None => return Ok(None),
-        };
-
-        let data = match &*item.data.data {
-            Ok(ok) => ok,
-            Err(e) => return Err(ContextError::LazyAssetError(item.id.to_string(), e.clone())),
-        };
-
-        // save dependencies
-        filter.store(vec![item.hash]);
-        self.deps.write().unwrap().push(Tracker::Glob(filter));
-
-        Ok(data.downcast_ref())
-    }
-
-    pub fn get<T: 'static>(&self, id: impl AsRef<str>) -> Result<&T, ContextError> {
-        let mut filter = FilterId::new(TypeId::of::<T>(), id.as_ref());
-        let item = match filter.filter(self.items) {
-            Some(item) => item,
-            None => {
-                let other = filter.other_types(self.items);
-                let id = id.as_ref().to_string();
-                return Err(match other.len() {
-                    0 => ContextError::NotFound(id),
-                    _ => ContextError::NotFoundWrongShape(id, other.join(", ")),
-                });
-            }
-        };
-
-        let data = match &*item.data.data {
-            Ok(ok) => ok.downcast_ref().unwrap(), // this won't ever fail
-            Err(e) => return Err(ContextError::LazyAssetError(item.id.to_string(), e.clone())),
-        };
-
-        // save dependencies
-        filter.store(item);
-        self.deps.write().unwrap().push(Tracker::Id(filter));
-
-        Ok(data)
     }
 }
 
@@ -269,6 +323,8 @@ impl FilterGlob {
                     None
                 }
             })
+            .collect::<HashSet<_>>()
+            .into_iter()
             .collect()
     }
 

@@ -90,10 +90,32 @@ impl Loader {
     }
 }
 
+/// Build execution context, providing facilities for storing artifacts in a
+/// content-addressed cache and output directory.
+///
+/// `Runtime` abstracts filesystem interactions related to build artifact
+/// storage, enabling immutability and reproducibility guarantees through
+/// content hashing.
 #[derive(Clone)]
 pub struct Runtime;
 
 impl Runtime {
+    /// Persist the given binary `data` under a hash-based path with the
+    /// specified file extension `ext`.
+    ///
+    /// This method computes a 32-bit hash of `data` to uniquely identify the
+    /// artifact. It stores the artifact in a local cache directory. The
+    /// returned path is a stable, canonicalized URI rooted at `/hash/`.
+    ///
+    /// # Parameters
+    /// - `data`: The raw bytes of the artifact to store.
+    /// - `ext`: The file extension (e.g., "js", "css", "webp") used for the
+    ///   output artifact, influencing MIME-type recognition and loader behavior.
+    ///
+    /// # Returns
+    /// - On success, returns the logical asset path as a `Utf8PathBuf` rooted
+    ///   under `/hash/`, suitable for inclusion in HTML.
+    /// - On failure, returns a `BuildError` for I/O or hashing errors.
     pub fn store(&self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuildError> {
         let hash = Hash32::hash(data);
         let hash = hash.to_hex();

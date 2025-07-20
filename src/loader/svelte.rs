@@ -9,14 +9,57 @@ use crate::{Hash32, Loader, loader::generic::LoaderGenericMultifile};
 
 type Prerender<P> = Box<dyn Fn(&P) -> anyhow::Result<String> + Send + Sync>;
 
-pub struct Svelte<P>
+/// Represents a pre-rendered Svelte component with client-side hydration.
+///
+/// The `html` field is a closure that accepts a serializable props struct `P`
+/// and returns the rendered HTML string using the compiled Svelte SSR bundle.
+/// The `init` field is a path to a browser-ready ES module responsible for
+/// hydrating the client-side component, scoped by hash.
+///
+/// This struct is constructed by the `glob_svelte` loader, which bundles both
+/// the SSR and client init code from `.svelte` sources using Deno and esbuild.
+pub struct Svelte<P = ()>
 where
     P: serde::Serialize,
 {
+    /// Function that renders the component to an HTML string given props.
     pub html: Prerender<P>,
+
+    /// Path to a JavaScript file that bootstraps client-side hydration. Written
+    /// to disk during the build and referenced in the rendered output.
     pub init: Utf8PathBuf,
 }
 
+/// Constructs a loader that processes Svelte components into pre-renderable assets.
+///
+/// This function takes a base path and a glob pattern to locate `.svelte` files.
+/// For each match, it:
+///
+/// - Compiles the file into a server-side rendering module (via Deno + esbuild).
+/// - Compiles a corresponding client-side hydration script with a unique class hash.
+/// - Stores both under a content hash derived from their output.
+///
+/// The returned loader emits a [`Svelte<P>`] object, where `P` is the expected
+/// props type. You can render it to HTML via the `html` closure and emit the
+/// associated `init` JS during the build.
+///
+/// ### Requirements
+///
+/// - Deno must be installed and in `$PATH`.
+/// - Props must be serializable to JSON (via [`serde::Serialize`]).
+///
+/// ### Example
+///
+/// ```rust
+/// use hauchiwa::loader::glob_svelte;
+///
+/// type MyProps = ();
+///
+/// let loader = glob_svelte::<MyProps>("src/components", "**/*.svelte");
+/// ```
+///
+/// The resulting items can be accessed through the build context and rendered
+/// as `Svelte<MyProps>` during templating.
 pub fn glob_svelte<P>(path_base: &'static str, path_glob: &'static str) -> Loader
 where
     P: serde::Serialize + 'static,

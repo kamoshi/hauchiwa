@@ -14,28 +14,43 @@ use crate::{
     loader::Loadable,
 };
 
+/// This is the canonical in-memory representation for markdown, or any textual
+/// content files parsed via front matter. Used as the payload type for
+/// [`glob_content`]-driven collections.
 pub struct Content<T>
 where
     T: Send + Sync + 'static,
 {
+    /// Deserialized front matter, typically JSON or YAML.
     pub meta: T,
+    /// The raw document body, stripped of metadata.
     pub text: String,
 }
 
-/// Create a new collection which draws content from the filesystem files
-/// via a glob pattern. Usually used to collect articles written as markdown
-/// files, however it is completely format agnostic.
+/// Constructs a new [`Loader`] instance that ingests a collection of content files
+/// matching a glob pattern and parses their front matter.
 ///
-/// The parameter `parse_matter` allows you to customize how the metadata
-/// should be parsed. Default functions for the most common formats are
-/// provided by library:
-/// * [`parse_matter_json`](`crate::parse_matter_json`) - parse JSON metadata
-/// * [`parse_matter_yaml`](`crate::parse_matter_yaml`) - parse YAML metadata
+/// This function is format-agnostic: metadata parsing is delegated to the `preload`
+/// function, which must return a `(meta, body)` tuple from the raw string. It is
+/// commonly used for blog posts, documentation pages, or other page-like content.
+///
+/// By design, this loader memoizes its results keyed by content hash, and gracefully
+/// handles partial reloads. If used with a git-backed repo, it can optionally include
+/// VCS metadata in each [`FileData`] node.
+///
+/// # Parameters
+/// - `path_base`: Root folder where content is stored, e.g. `"content"`.
+/// - `path_glob`: Relative glob pattern, e.g. `"posts/**/*.md"`.
+/// - `preload`: Function that parses the full content string and extracts metadata.
 ///
 /// # Examples
 ///
 /// ```rust
-/// Collection::glob_with("content", "posts/**/*", ["md"], parse_matter_yaml::<Post>);
+/// use hauchiwa::loader::{glob_content, yaml};
+///
+/// type PostFrontMatter = ();
+///
+/// let loader = glob_content("content", "posts/**/*.md", yaml::<PostFrontMatter>);
 /// ```
 pub fn glob_content<T>(
     path_base: &'static str,
