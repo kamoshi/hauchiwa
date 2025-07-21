@@ -85,6 +85,9 @@ pub enum BuildError {
 
     #[error("Hook:\n{0}")]
     Hook(anyhow::Error),
+
+    #[error(transparent)]
+    Other(anyhow::Error),
 }
 
 #[cfg(feature = "reload")]

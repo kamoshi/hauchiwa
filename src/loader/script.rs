@@ -42,7 +42,7 @@ pub fn glob_scripts(path_base: &'static str, path_glob: &'static str) -> Loader 
             path_base,
             path_glob,
             |path| {
-                let data = compile_esbuild(path);
+                let data = compile_esbuild(path)?;
                 let hash = Hash32::hash(&data);
 
                 Ok((hash, data))
@@ -56,7 +56,7 @@ pub fn glob_scripts(path_base: &'static str, path_glob: &'static str) -> Loader 
     })
 }
 
-fn compile_esbuild(file: &Utf8Path) -> Vec<u8> {
+fn compile_esbuild(file: &Utf8Path) -> std::io::Result<Vec<u8>> {
     let output = Command::new("esbuild")
         .arg(file.as_str())
         .arg("--format=esm")
@@ -64,8 +64,7 @@ fn compile_esbuild(file: &Utf8Path) -> Vec<u8> {
         .arg("--minify")
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
-        .output()
-        .expect("esbuild invocation failed");
+        .output()?;
 
-    output.stdout
+    Ok(output.stdout)
 }

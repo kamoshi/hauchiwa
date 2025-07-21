@@ -599,16 +599,21 @@ pub struct FileData {
     pub info: Option<gitmap::GitInfo>,
 }
 
-struct FromFile {
-    file: Arc<FileData>,
+struct Item {
+    /// Type ID for the type contained by this item. This is how you can filter
+    /// items without having to evalute and downcast lazy data.
+    refl_type: TypeId,
+    /// Type name just for diagnostics.
+    refl_name: &'static str,
+    /// Simple ID for the item, doesn't have to be unique. Either the file path
+    /// or user provided static string, used for querying context.
+    id: Box<str>,
+    /// Hash for the file contents. In the case of assets loaded from multiple
+    /// files, like bundled scripts or stylesheets this will be the hash of the
+    /// entire bundle. It's used for checking which task needs to be redone.
+    hash: Hash32,
+    /// If the item can be traced back to a filesystem entry this will be filled.
+    file: Option<Arc<FileData>>,
     /// Item computed on demand, cached in memory.
     data: LazyLock<DynamicResult, Box<dyn (FnOnce() -> DynamicResult) + Send + Sync>>,
-}
-
-struct Item {
-    refl_type: TypeId,
-    refl_name: &'static str,
-    id: Box<str>,
-    hash: Hash32,
-    data: FromFile,
 }

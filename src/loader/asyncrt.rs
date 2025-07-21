@@ -8,7 +8,7 @@ use std::{
 use camino::Utf8PathBuf;
 
 use crate::{
-    FileData, FromFile, Item, Loader, LoaderError,
+    Item, Loader, LoaderError,
     loader::{Loadable, Runtime},
 };
 
@@ -102,15 +102,8 @@ where
             refl_name: type_name::<T>(),
             id: self.id.into(),
             hash: Default::default(),
-            data: FromFile {
-                file: Arc::new(FileData {
-                    file: "".into(),
-                    slug: "".into(),
-                    area: "".into(),
-                    info: None,
-                }),
-                data: LazyLock::new(Box::new(move || Ok(Arc::new(data)))),
-            },
+            data: LazyLock::new(Box::new(move || Ok(Arc::new(data)))),
+            file: None,
         });
 
         Ok(())

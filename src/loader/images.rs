@@ -63,19 +63,17 @@ pub fn glob_images(path_base: &'static str, path_glob: &'static str) -> Loader {
     })
 }
 
-fn process_image(buffer: &[u8]) -> Vec<u8> {
-    let img = image::load_from_memory(buffer).expect("Couldn't load image");
+fn process_image(buffer: &[u8]) -> image::ImageResult<Vec<u8>> {
+    let img = image::load_from_memory(buffer)?;
     let w = img.width();
     let h = img.height();
 
     let mut out = Vec::new();
     let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
 
-    encoder
-        .encode(&img.to_rgba8(), w, h, image::ExtendedColorType::Rgba8)
-        .expect("Encoding error");
+    encoder.encode(&img.to_rgba8(), w, h, image::ExtendedColorType::Rgba8)?;
 
-    out
+    Ok(out)
 }
 
 fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, BuildError> {
@@ -93,7 +91,8 @@ fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, BuildError>
     // If this hash exists it means the work is already done.
     if !path_hash.exists() {
         let buffer = fs::read(file)?;
-        let buffer = process_image(&buffer);
+        let buffer = process_image(&buffer) //
+            .map_err(|err| BuildError::Other(err.into()))?;
 
         fs::create_dir_all(".cache/hash/img/")?;
         fs::write(&path_hash, buffer)?;

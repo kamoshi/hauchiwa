@@ -10,8 +10,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use gray_matter::engine::{JSON, YAML};
 
 use crate::{
-    FileData, FromFile, GitRepo, Hash32, Item, LazyAssetError, Loader, LoaderError,
-    loader::Loadable,
+    FileData, GitRepo, Hash32, Item, LazyAssetError, Loader, LoaderError, loader::Loadable,
 };
 
 /// This is the canonical in-memory representation for markdown, or any textual
@@ -106,9 +105,6 @@ where
     }
 
     /// Helper function, convert file into InputItem
-    /// TODO: based on loader cache, here we can use Hash32 to check if the
-    /// previously loaded content item already exists, and *if* we have it, we
-    /// can skip the `init.call`, because we can just reuse the old one.
     fn read_file(&self, path: Utf8PathBuf) -> Result<Option<Item>, LoaderError> {
         if path.is_dir() {
             return Ok(None);
@@ -120,11 +116,29 @@ where
             return Ok(None);
         }
 
+        // Generally content files should be special-cased. The index files are
+        // treated as if they were placed in parent directory.
+        let is_index = matches!(path.file_stem(), Some("index"));
+        let path_ext = path.extension();
+
+        let path_rel = path.strip_prefix(self.path_base).unwrap_or(&path);
+        let path_rel = if is_index {
+            path_rel.parent().unwrap_or(path_rel)
+        } else {
+            path_rel
+        };
+        let path_rel = match path_ext {
+            Some(ext) => path_rel.with_extension(ext),
+            None => path_rel.to_path_buf(),
+        };
+
+        // Area should match the area of items colocated with this content item.
         let area = match path.file_stem() {
-            Some("index") => path
-                .parent()
-                .map(ToOwned::to_owned)
-                .unwrap_or(path.with_extension("")),
+            Some("index") => {
+                let path = path.parent().unwrap_or(&path);
+                let path = path.strip_prefix(self.path_base).unwrap_or(path);
+                path.with_extension("")
+            }
             _ => path.with_extension(""),
         };
 
@@ -136,27 +150,25 @@ where
         Ok(Some(Item {
             refl_type: TypeId::of::<Content<T>>(),
             refl_name: type_name::<Content<T>>(),
-            id: path.as_str().into(),
+            id: path_rel.into_string().into(),
             hash,
-            data: FromFile {
-                file: Arc::new(FileData {
-                    info: self
-                        .repo
-                        .as_deref()
-                        .and_then(|repo| repo.files.get(path.as_str()).cloned()),
-                    file: path,
-                    slug,
-                    area,
-                }),
-                data: {
-                    let preload = self.preload;
-                    LazyLock::new(Box::new(move || {
-                        let text = String::from_utf8(bytes).map_err(LazyAssetError::new)?;
-                        let (meta, text) = preload(&text).map_err(LazyAssetError::new)?;
-                        Ok(Arc::new(Content { meta, text }))
-                    }))
-                },
+            data: {
+                let preload = self.preload;
+                LazyLock::new(Box::new(move || {
+                    let text = String::from_utf8(bytes).map_err(LazyAssetError::new)?;
+                    let (meta, text) = preload(&text).map_err(LazyAssetError::new)?;
+                    Ok(Arc::new(Content { meta, text }))
+                }))
             },
+            file: Some(Arc::new(FileData {
+                info: self
+                    .repo
+                    .as_deref()
+                    .and_then(|repo| repo.files.get(path.as_str()).cloned()),
+                file: path,
+                slug,
+                area,
+            })),
         }))
     }
 }
@@ -180,12 +192,12 @@ where
             let path = Utf8PathBuf::try_from(path?)?;
 
             if let Some(item) = self.read_file(path.clone())? {
-                vec.push(item);
+                vec.push((path, item));
             }
         }
 
-        for item in vec {
-            self.cached.insert(item.data.file.file.clone(), item);
+        for (path, item) in vec {
+            self.cached.insert(path, item);
         }
 
         Ok(())
@@ -202,7 +214,7 @@ where
             };
 
             if let Some(item) = self.read_file(path.clone())? {
-                self.cached.insert(item.data.file.file.clone(), item);
+                self.cached.insert(path.clone(), item);
                 changed |= true;
             }
         }

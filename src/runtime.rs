@@ -106,7 +106,7 @@ socket.addEventListener("message", event => {{
             }
         };
 
-        let data = match &*item.data.data {
+        let data = match &*item.data {
             Ok(ok) => ok.downcast_ref().unwrap(), // this won't ever fail
             Err(e) => return Err(ContextError::LazyAssetError(item.id.to_string(), e.clone())),
         };
@@ -127,7 +127,7 @@ socket.addEventListener("message", event => {{
             filter
                 .filter(self.items)
                 .try_fold((Vec::new(), Vec::new()), |mut acc, item| {
-                    let data = match &*item.data.data {
+                    let data = match &*item.data {
                         Ok(ok) => ok,
                         Err(e) => {
                             return Err(ContextError::LazyAssetError(
@@ -165,7 +165,7 @@ socket.addEventListener("message", event => {{
             }
         };
 
-        let data = match &*item.data.data {
+        let data = match &*item.data {
             Ok(ok) => ok,
             Err(e) => return Err(ContextError::LazyAssetError(item.id.to_string(), e.clone())),
         };
@@ -184,25 +184,30 @@ socket.addEventListener("message", event => {{
     {
         let mut filter = FilterGlob::new(TypeId::of::<T>(), glob::Pattern::new(pattern)?);
 
-        let (items, hashes) = filter.filter(self.items).try_fold(
-            (Vec::new(), Vec::new()),
-            |mut acc, item| -> Result<_, ContextError> {
-                let data = match &*item.data.data {
-                    Ok(ok) => ok,
-                    Err(e) => {
-                        return Err(ContextError::LazyAssetError(item.id.to_string(), e.clone()));
-                    }
-                };
+        let (items, hashes) = filter
+            .filter(self.items)
+            .filter_map(|item| item.file.as_ref().map(|file| (file.clone(), item)))
+            .try_fold(
+                (Vec::new(), Vec::new()),
+                |mut acc, (file, item)| -> Result<_, ContextError> {
+                    let data = match &*item.data {
+                        Ok(ok) => ok,
+                        Err(e) => {
+                            return Err(ContextError::LazyAssetError(
+                                item.id.to_string(),
+                                e.clone(),
+                            ));
+                        }
+                    };
 
-                let data = data.downcast_ref().unwrap();
-                let file = item.data.file.clone();
+                    let data = data.downcast_ref().unwrap();
 
-                acc.0.push(WithFile { data, file });
-                acc.1.push(item.hash);
+                    acc.0.push(WithFile { data, file });
+                    acc.1.push(item.hash);
 
-                Ok(acc)
-            },
-        )?;
+                    Ok(acc)
+                },
+            )?;
 
         // save dependencies
         filter.store(hashes);
@@ -218,7 +223,11 @@ socket.addEventListener("message", event => {{
     ) -> Result<WithFile<'_, T>, ContextError> {
         let mut filter = FilterGlob::new(TypeId::of::<T>(), glob::Pattern::new(pattern)?);
 
-        let item = match filter.filter(self.items).next() {
+        let (file, item) = match filter
+            .filter(self.items)
+            .filter_map(|item| item.file.as_ref().map(|file| (file.clone(), item)))
+            .next()
+        {
             Some(item) => item,
             None => {
                 let other = filter.other_types(self.items).join(", ");
@@ -226,7 +235,7 @@ socket.addEventListener("message", event => {{
             }
         };
 
-        let data = match &*item.data.data {
+        let data = match &*item.data {
             Ok(ok) => ok,
             Err(e) => return Err(ContextError::LazyAssetError(item.id.to_string(), e.clone())),
         };
@@ -237,7 +246,7 @@ socket.addEventListener("message", event => {{
 
         Ok(WithFile {
             data: data.downcast_ref().unwrap(),
-            file: item.data.file.clone(),
+            file,
         })
     }
 }
@@ -309,12 +318,7 @@ impl FilterGlob {
     fn filter<'ctx>(&self, items: &'ctx [&'ctx Item]) -> impl Iterator<Item = &'ctx Item> {
         items
             .iter()
-            .filter(|item| {
-                item.refl_type == self.ty
-                    && self
-                        .glob
-                        .matches_path_with(item.data.file.slug.as_std_path(), GLOB_OPTS)
-            })
+            .filter(|item| item.refl_type == self.ty && self.glob.matches_with(&item.id, GLOB_OPTS))
             .map(Deref::deref)
     }
 
@@ -322,11 +326,7 @@ impl FilterGlob {
         items
             .iter()
             .filter_map(|item| {
-                if item.refl_type != self.ty
-                    && self
-                        .glob
-                        .matches_path_with(item.data.file.slug.as_std_path(), GLOB_OPTS)
-                {
+                if item.refl_type != self.ty && self.glob.matches_with(&item.id, GLOB_OPTS) {
                     Some(item.refl_name)
                 } else {
                     None

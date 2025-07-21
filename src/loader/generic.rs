@@ -8,10 +8,12 @@ use std::{
 use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{
-    FileData, FromFile, Hash32, Item, LoaderError,
+    FileData, Hash32, Item, LoaderError,
     loader::{Loadable, Runtime},
 };
 
+/// Loader for independent, single-file items keyed by path. Avoids reprocessing
+/// unchanged files via content hash; supports fine-grained reloads.
 pub(crate) struct LoaderGeneric<T, R>
 where
     T: 'static + Send + Sync,
@@ -75,42 +77,42 @@ where
         let pattern = Utf8Path::new(path_base).join(path_glob);
         let iter = glob::glob(pattern.as_str())?;
 
-        let mut arr = vec![];
+        let mut paths = vec![];
         for entry in iter {
             let path = Utf8PathBuf::try_from(entry?)?;
-            arr.push(path);
+            paths.push(path);
         }
 
-        if arr.is_empty() {
+        if paths.is_empty() {
             return Ok(());
         }
 
-        for file in arr {
-            let area = file.with_extension("");
-            let (hash, data) = f1(&file)?;
-            if self.check_loaded(&file, hash) {
+        for path in paths {
+            let path_rel = path.strip_prefix(self.path_base).unwrap_or(&path);
+            let area = path.with_extension("");
+
+            let (hash, data) = f1(&path)?;
+            if self.check_loaded(&path, hash) {
                 continue;
             }
 
             self.cached.insert(
-                file.to_owned(),
+                path.to_owned(),
                 Item {
                     refl_type: TypeId::of::<R>(),
                     refl_name: type_name::<R>(),
-                    id: file.as_str().into(),
+                    id: path_rel.as_str().into(),
                     hash,
-                    data: FromFile {
-                        file: Arc::new(FileData {
-                            file: file.clone(),
-                            slug: file.clone(),
-                            area,
-                            info: None,
-                        }),
-                        data: {
-                            let rt = self.rt.clone();
-                            LazyLock::new(Box::new(move || Ok(Arc::new(f2(rt, data)?))))
-                        },
+                    data: {
+                        let rt = self.rt.clone();
+                        LazyLock::new(Box::new(move || Ok(Arc::new(f2(rt, data)?))))
                     },
+                    file: Some(Arc::new(FileData {
+                        file: path.clone(),
+                        slug: path.clone(),
+                        area,
+                        info: None,
+                    })),
                 },
             );
         }
@@ -146,18 +148,16 @@ where
                     refl_name: type_name::<R>(),
                     id: file.as_str().into(),
                     hash,
-                    data: FromFile {
-                        file: Arc::new(FileData {
-                            file: file.clone(),
-                            slug: file.clone(),
-                            area,
-                            info: None,
-                        }),
-                        data: {
-                            let rt = self.rt.clone();
-                            LazyLock::new(Box::new(move || Ok(Arc::new(f2(rt, data)?))))
-                        },
+                    data: {
+                        let rt = self.rt.clone();
+                        LazyLock::new(Box::new(move || Ok(Arc::new(f2(rt, data)?))))
                     },
+                    file: Some(Arc::new(FileData {
+                        file: file.clone(),
+                        slug: file.clone(),
+                        area,
+                        info: None,
+                    })),
                 },
             );
             changed = true;
@@ -181,6 +181,9 @@ where
     }
 }
 
+/// Loader for multifile items where any change under path_base triggers full
+/// reload. Optimized for batch-like or interdependent file sets (e.g. Sass,
+/// JavaScript, Svelte).
 pub(crate) struct LoaderGenericMultifile<T, R>
 where
     T: 'static + Send + Sync,
@@ -244,42 +247,41 @@ where
         let pattern = Utf8Path::new(path_base).join(path_glob);
         let iter = glob::glob(pattern.as_str())?;
 
-        let mut arr = vec![];
+        let mut paths = vec![];
         for entry in iter {
             let path = Utf8PathBuf::try_from(entry?)?;
-            arr.push(path);
+            paths.push(path);
         }
 
-        if arr.is_empty() {
+        if paths.is_empty() {
             return Ok(());
         }
 
-        for file in arr {
-            let area = file.with_extension("");
-            let (hash, data) = f1(&file)?;
-            if self.check_loaded(&file, hash) {
+        for path in paths {
+            let path_rel = path.strip_prefix(self.path_base).unwrap_or(&path);
+            let area = path.with_extension("");
+            let (hash, data) = f1(&path)?;
+            if self.check_loaded(&path, hash) {
                 continue;
             }
 
             self.cached.insert(
-                file.to_owned(),
+                path.to_owned(),
                 Item {
                     refl_type: TypeId::of::<R>(),
                     refl_name: type_name::<R>(),
-                    id: file.as_str().into(),
+                    id: path_rel.as_str().into(),
                     hash,
-                    data: FromFile {
-                        file: Arc::new(FileData {
-                            file: file.clone(),
-                            slug: file.clone(),
-                            area,
-                            info: None,
-                        }),
-                        data: {
-                            let rt = self.rt.clone();
-                            LazyLock::new(Box::new(move || Ok(Arc::new(f2(rt, data)?))))
-                        },
+                    data: {
+                        let rt = self.rt.clone();
+                        LazyLock::new(Box::new(move || Ok(Arc::new(f2(rt, data)?))))
                     },
+                    file: Some(Arc::new(FileData {
+                        file: path.clone(),
+                        slug: path.clone(),
+                        area,
+                        info: None,
+                    })),
                 },
             );
         }

@@ -195,9 +195,7 @@ fn run_ssr(server: &str, props: &str) -> anyhow::Result<String> {
         stdin.flush()?;
     }
 
-    let output = child
-        .wait_with_output()
-        .expect("failed to read Deno output");
+    let output = child.wait_with_output()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

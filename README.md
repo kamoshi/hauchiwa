@@ -189,6 +189,10 @@ The full documentation for this library is always available on
 [docs.rs](https://docs.rs/hauchiwa/latest/hauchiwa/). Please feel free to take a
 look! 😊
 
+## Examples
+
+- [kamoshi.org](https://git.kamoshi.org/kamov/kamoshi.org)
+
 ## License
 
 This library is available under the GPL 2.0 (or later) license.
