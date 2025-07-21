@@ -129,30 +129,31 @@ where
         let matcher = glob::Pattern::new(pattern.as_str())?;
         let mut changed = false;
 
-        for file in set {
-            if !matcher.matches_path(file.as_std_path()) {
+        for path in set {
+            let path_rel = path.strip_prefix(self.path_base).unwrap_or(path);
+            if !matcher.matches_path(path.as_std_path()) {
                 continue;
             }
 
-            let area = file.with_extension("");
-            let (hash, data) = f1(file)?;
-            if self.check_loaded(file, hash) {
+            let area = path.with_extension("");
+            let (hash, data) = f1(path)?;
+            if self.check_loaded(path, hash) {
                 continue;
             }
 
             self.cached.insert(
-                file.to_owned(),
+                path.to_owned(),
                 Item {
                     refl_type: TypeId::of::<R>(),
                     refl_name: type_name::<R>(),
-                    id: file.as_str().into(),
+                    id: path_rel.as_str().into(),
                     hash,
                     data: {
                         let rt = self.rt.clone();
                         LazyLock::new(Box::new(move || Ok(Arc::new(f2(rt, data)?))))
                     },
                     file: Some(Arc::new(FileData {
-                        file: file.clone(),
+                        file: path.clone(),
                         area,
                         info: None,
                     })),
