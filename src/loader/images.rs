@@ -35,9 +35,19 @@ pub struct Image {
 ///
 /// ### Example
 /// ```rust
-/// use hauchiwa::loader::glob_images;
+/// use hauchiwa::{Context, TaskResult, Page, loader::{Image, glob_images}};
 ///
+/// // loader
 /// let loader = glob_images("assets/images", "**/*.png");
+///
+/// // task
+/// fn task(ctx: Context) -> TaskResult<Vec<Page>> {
+///     let Image { path } = ctx.get::<Image>("image.png")?;
+///
+///     Ok(vec![
+///         Page::text("index.html".into(), format!("<img src='{path}'>"))
+///     ])
+/// }
 /// ```
 ///
 /// ### Notes

@@ -26,13 +26,27 @@ use crate::{
 ///
 /// ### Example
 /// ```rust
-/// use hauchiwa::loader::async_asset;
+/// use hauchiwa::{Context, TaskResult, Page, loader::async_asset};
 ///
-/// let loader = async_asset("remote", async |rt| {
+/// struct Asset {
+///     data: i32,
+/// }
+///
+/// //loader
+/// let loader = async_asset("async", async |rt| {
 ///     let data = async { 2 };
 ///     let data = data.await;;
-///     Ok(data)
+///     Ok(Asset { data })
 /// });
+///
+/// // task
+/// fn task(ctx: Context) -> TaskResult<Vec<Page>> {
+///     let Asset { data } = ctx.get::<Asset>("async")?;
+///
+///     Ok(vec![
+///         Page::text("index.html".into(), format!("<h1>{data}</h1>"))
+///     ])
+/// }
 /// ```
 ///
 /// ### Notes

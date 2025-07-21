@@ -51,15 +51,28 @@ where
 /// ### Example
 ///
 /// ```rust
-/// use hauchiwa::loader::glob_svelte;
+/// use hauchiwa::{Context, TaskResult, Page, loader::{Svelte, glob_svelte}};
 ///
 /// type MyProps = ();
 ///
+/// // loader
 /// let loader = glob_svelte::<MyProps>("src/components", "**/*.svelte");
+///
+/// // task
+/// fn task(ctx: Context) -> TaskResult<Vec<Page>> {
+///     let Svelte { html, init } = ctx.get::<Svelte>("App.svelte")?;
+///
+///     // prerender HTML component
+///     let html = html(&())?;
+///
+///     Ok(vec![
+///         Page::text("index.html".into(), format!("{html} <script type='module' src='{init}'></script>"))
+///     ])
+/// }
 /// ```
 ///
 /// The resulting items can be accessed through the build context and rendered
-/// as `Svelte<MyProps>` during templating.
+/// as [`Svelte<MyProps>`] during templating.
 pub fn glob_svelte<P>(path_base: &'static str, path_glob: &'static str) -> Loader
 where
     P: serde::Serialize + 'static,

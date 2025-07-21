@@ -27,9 +27,19 @@ pub struct Style {
 ///
 /// ### Example
 /// ```rust
-/// use hauchiwa::loader::glob_styles;
+/// use hauchiwa::{Context, TaskResult, Page, loader::{Style, glob_styles}};
 ///
+/// // loader
 /// let loader = glob_styles("src/styles", "**/*.scss");
+///
+/// // task
+/// fn task(ctx: Context) -> TaskResult<Vec<Page>> {
+///     let Style { path } = ctx.get::<Style>("styles.scss")?;
+///
+///     Ok(vec![
+///         Page::text("index.html".into(), format!("<link rel='stylesheet' href='{path}'>"))
+///     ])
+/// }
 /// ```
 pub fn glob_styles(path_base: &'static str, path_glob: &'static str) -> Loader {
     Loader::with(move |_| {

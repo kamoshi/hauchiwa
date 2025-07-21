@@ -167,7 +167,7 @@ let mut website = Website::config()
             // Generate the HTML page, bring your own library.
             let rendered = todo!("whatever you want to use, e.g maud");
             // Return the path and content as a tuple.
-            pages.push(Page::text(item.file.slug.join("index.html"), rendered))
+            pages.push(Page::text(item.file.area.join("index.html"), rendered))
         }
 
         Ok(pages)
@@ -186,8 +186,9 @@ website.build(MyData::default());
 ```
 
 The full documentation for this library is always available on
-[docs.rs](https://docs.rs/hauchiwa/latest/hauchiwa/). Please feel free to take a
-look! 😊
+[docs.rs](https://docs.rs/hauchiwa/latest/hauchiwa/). The loader submodule
+contains all the available loader implementations along with documentation.
+Please feel free to take a look! 😊
 
 ## Examples
 

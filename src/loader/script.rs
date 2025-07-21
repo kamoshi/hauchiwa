@@ -32,9 +32,19 @@ pub struct Script {
 ///
 /// ### Example
 /// ```rust
-/// use hauchiwa::loader::glob_scripts;
+/// use hauchiwa::{Context, TaskResult, Page, loader::{Script, glob_scripts}};
 ///
+/// // loader
 /// let loader = glob_scripts("src/scripts", "**/*.ts");
+///
+/// // task
+/// fn task(ctx: Context) -> TaskResult<Vec<Page>> {
+///     let Script { path } = ctx.get::<Script>("main.ts")?;
+///
+///     Ok(vec![
+///         Page::text("index.html".into(), format!("<script type='module' src='{path}'></script>"))
+///     ])
+/// }
 /// ```
 pub fn glob_scripts(path_base: &'static str, path_glob: &'static str) -> Loader {
     Loader::with(move |_| {

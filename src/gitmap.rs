@@ -1,4 +1,4 @@
-//! Adapted from https://github.com/bep/gitmap/blob/master/gitmap.go
+//! Adapted from <https://github.com/bep/gitmap/blob/master/gitmap.go>
 //! Copyright 2024 Bjørn Erik Pedersen <bjorn.erik.pedersen@gmail.com>.
 use std::collections::HashMap;
 use std::path::Path;

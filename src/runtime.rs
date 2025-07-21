@@ -18,6 +18,7 @@ const GLOB_OPTS: glob::MatchOptions = glob::MatchOptions {
 
 /// Associates runtime artifacts (e.g., parsed content, structured data or
 /// images) with its originating file metadata.
+#[derive(Debug)]
 pub struct WithFile<'a, D> {
     pub data: &'a D,
     pub file: Arc<FileData>,
@@ -32,7 +33,7 @@ pub struct WithFile<'a, D> {
 ///
 /// Use `get`, `glob`, and related methods to retrieve assets by identifier
 /// or glob pattern, while automatically tracking usage for fine-grained invalidation.
-pub struct Context<'a, G>
+pub struct Context<'a, G = ()>
 where
     G: Send + Sync,
 {

@@ -109,7 +109,6 @@ where
                     },
                     file: Some(Arc::new(FileData {
                         file: path.clone(),
-                        slug: path.clone(),
                         area,
                         info: None,
                     })),
@@ -154,7 +153,6 @@ where
                     },
                     file: Some(Arc::new(FileData {
                         file: file.clone(),
-                        slug: file.clone(),
                         area,
                         info: None,
                     })),
@@ -278,7 +276,6 @@ where
                     },
                     file: Some(Arc::new(FileData {
                         file: path.clone(),
-                        slug: path.clone(),
                         area,
                         info: None,
                     })),

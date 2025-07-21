@@ -45,11 +45,21 @@ where
 /// # Examples
 ///
 /// ```rust
-/// use hauchiwa::loader::{glob_content, yaml};
+/// use hauchiwa::{Context, TaskResult, Page, loader::{Content, glob_content, yaml}};
 ///
 /// type PostFrontMatter = ();
 ///
+/// //loader
 /// let loader = glob_content("content", "posts/**/*.md", yaml::<PostFrontMatter>);
+///
+/// // task
+/// fn task(ctx: Context) -> TaskResult<Vec<Page>> {
+///     let posts = ctx.glob_with_file::<Content<PostFrontMatter>>("posts/**/*")?;
+///
+///     // transform the content...
+///
+///     Ok(vec![])
+/// }
 /// ```
 pub fn glob_content<T>(
     path_base: &'static str,
@@ -134,18 +144,11 @@ where
 
         // Area should match the area of items colocated with this content item.
         let area = match path.file_stem() {
-            Some("index") => {
-                let path = path.parent().unwrap_or(&path);
-                let path = path.strip_prefix(self.path_base).unwrap_or(path);
-                path.with_extension("")
-            }
-            _ => path.with_extension(""),
+            Some("index") => path.parent().unwrap_or(&path),
+            _ => &path,
         };
-
-        let slug = area
-            .strip_prefix(self.path_base)
-            .unwrap_or(&path)
-            .to_owned();
+        let area = area.strip_prefix(self.path_base).unwrap_or(area);
+        let area = area.with_extension("");
 
         Ok(Some(Item {
             refl_type: TypeId::of::<Content<T>>(),
@@ -166,7 +169,6 @@ where
                     .as_deref()
                     .and_then(|repo| repo.files.get(path.as_str()).cloned()),
                 file: path,
-                slug,
                 area,
             })),
         }))

@@ -592,9 +592,9 @@ impl Debug for Hook {
 type Dynamic = Arc<dyn Any + Send + Sync>;
 type DynamicResult = Result<Dynamic, LazyAssetError>;
 
+#[derive(Debug)]
 pub struct FileData {
     pub file: Utf8PathBuf,
-    pub slug: Utf8PathBuf,
     pub area: Utf8PathBuf,
     pub info: Option<gitmap::GitInfo>,
 }
