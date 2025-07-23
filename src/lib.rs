@@ -5,6 +5,7 @@ mod error;
 mod gitmap;
 mod io;
 pub mod loader;
+mod plugin;
 mod runtime;
 #[cfg(feature = "reload")]
 mod watch;
@@ -26,6 +27,7 @@ pub use crate::error::*;
 pub use crate::gitmap::{GitInfo, GitRepo};
 pub use crate::loader::Loader;
 use crate::loader::{Loadable, LoaderOpts};
+pub use crate::plugin::{Plugin, PluginConfig};
 use crate::runtime::Tracker;
 pub use crate::runtime::{Context, WithFile};
 
@@ -377,6 +379,7 @@ fn format_active(active: &HashSet<Cow<str>>) -> String {
 
 /// A builder struct for creating a `Website` with specified settings.
 pub struct Config<G: Send + Sync> {
+    plugins: Vec<Plugin<G>>,
     loaders: Vec<Loader>,
     tasks: Vec<Task<G>>,
     hooks: Vec<Hook>,
@@ -386,11 +389,17 @@ pub struct Config<G: Send + Sync> {
 impl<G: Send + Sync + 'static> Config<G> {
     fn new() -> Self {
         Self {
+            plugins: Vec::default(),
             loaders: Vec::default(),
             tasks: Vec::default(),
-            hooks: Vec::new(),
+            hooks: Vec::default(),
             repo: None,
         }
+    }
+
+    pub fn add_plugins(mut self, plugins: impl IntoIterator<Item = Plugin<G>>) -> Self {
+        self.plugins.extend(plugins);
+        self
     }
 
     /// Load git repository data from path.
@@ -422,7 +431,11 @@ impl<G: Send + Sync + 'static> Config<G> {
         self
     }
 
-    pub fn finish(self) -> Website<G> {
+    pub fn finish(mut self) -> Website<G> {
+        for plugin in std::mem::take(&mut self.plugins) {
+            (plugin.func)(&mut PluginConfig { config: &mut self });
+        }
+
         Website {
             loaders: self
                 .loaders
