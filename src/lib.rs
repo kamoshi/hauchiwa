@@ -18,6 +18,7 @@ use std::fs;
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::time::Instant;
 
+pub use anyhow::Error as RuntimeError;
 use camino::{Utf8Path, Utf8PathBuf};
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -425,7 +426,7 @@ impl<G: Send + Sync + 'static> Config<G> {
     pub fn add_task(
         mut self,
         name: &'static str,
-        task: fn(Context<G>) -> TaskResult<Vec<Page>>,
+        task: fn(Context<G>) -> Result<Vec<Page>, RuntimeError>,
     ) -> Self {
         self.tasks.push(Task::new(name, task));
         self
@@ -477,13 +478,45 @@ pub struct Page {
 }
 
 impl Page {
+    pub fn html(path: impl AsRef<Utf8Path>, text: impl AsRef<str>) -> Self {
+        let path = path.as_ref();
+        let text = text.as_ref();
+        Self {
+            path: if matches!(path.extension(), Some("html")) {
+                path.to_path_buf()
+            } else {
+                path.join("index.html")
+            },
+            text: text.to_string(),
+            from: None,
+        }
+    }
+
+    pub fn html_with_file(
+        path: impl AsRef<Utf8Path>,
+        text: impl AsRef<str>,
+        from: Arc<FileData>,
+    ) -> Self {
+        let path = path.as_ref();
+        let text = text.as_ref();
+        Self {
+            path: if matches!(path.extension(), Some("html")) {
+                path.to_path_buf()
+            } else {
+                path.join("index.html")
+            },
+            text: text.to_string(),
+            from: Some(from),
+        }
+    }
+
     /// Creates a new `Page` with the given path and content, without linking to any source file.
     ///
     /// Use this for synthetic or programmatically generated pages.
-    pub fn text(path: Utf8PathBuf, text: String) -> Self {
+    pub fn text(path: impl AsRef<Utf8Path>, text: impl AsRef<str>) -> Self {
         Self {
-            path,
-            text,
+            path: path.as_ref().to_path_buf(),
+            text: text.as_ref().to_string(),
             from: None,
         }
     }
@@ -501,13 +534,10 @@ impl Page {
     }
 }
 
-/// Result from a single executed task.
-pub type TaskResult<T> = anyhow::Result<T, anyhow::Error>;
-
 /// Task function pointer used to dynamically generate a website page. This
 /// function is provided by the user from the userland, but it is used
 /// internally during the build process.
-type TaskFnPtr<D> = Arc<dyn Fn(Context<D>) -> TaskResult<Vec<Page>> + Send + Sync>;
+type TaskFnPtr<D> = Arc<dyn Fn(Context<D>) -> Result<Vec<Page>, RuntimeError> + Send + Sync>;
 
 /// Wraps `TaskFnPtr` and implements `Debug` trait for function pointer.
 struct Task<D: Send + Sync> {
@@ -523,7 +553,7 @@ impl<D: Send + Sync> Task<D> {
     fn new<F>(name: &'static str, func: F) -> Self
     where
         D: Send + Sync,
-        F: Fn(Context<D>) -> TaskResult<Vec<Page>> + Send + Sync + 'static,
+        F: Fn(Context<D>) -> Result<Vec<Page>, RuntimeError> + Send + Sync + 'static,
     {
         Self {
             name,
@@ -561,7 +591,7 @@ impl<G: Send + Sync> Debug for Task<G> {
 // *           Hooks            *
 // ******************************
 
-type HookCallback = Box<dyn Fn(&[&Page]) -> TaskResult<()> + Send + Sync>;
+type HookCallback = Box<dyn Fn(&[&Page]) -> Result<(), RuntimeError> + Send + Sync>;
 
 /// Represents a lifecycle hook invoked at specific points in the build pipeline.
 ///
@@ -584,7 +614,7 @@ impl Hook {
     /// that depend on the final structure of the site.
     pub fn post_build<F>(fun: F) -> Self
     where
-        F: Fn(&[&Page]) -> TaskResult<()> + Send + Sync + 'static,
+        F: Fn(&[&Page]) -> Result<(), RuntimeError> + Send + Sync + 'static,
     {
         Hook::PostBuild(Box::new(fun))
     }
