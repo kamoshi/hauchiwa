@@ -211,6 +211,7 @@ fn run_ssr(server: &str, props: &str) -> anyhow::Result<String> {
 
     let mut child = Command::new("deno")
         .arg("run")
+        .arg("--allow-env")
         .arg("--quiet")
         .arg("-")
         .arg(props)
