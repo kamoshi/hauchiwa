@@ -1,20 +1,12 @@
-use std::collections::HashSet;
-use std::env;
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
 
-use camino::Utf8PathBuf;
-use notify::{EventKind, RecursiveMode};
-use notify_debouncer_full::new_debouncer;
 use tungstenite::WebSocket;
 
 use crate::build;
 use crate::error::WatchError;
-use crate::loader::Loadable;
 use crate::{Globals, Mode, Website};
 
 fn reserve_port() -> Result<(TcpListener, u16), WatchError> {
@@ -32,24 +24,12 @@ pub fn watch<G>(website: &mut Website<G>, data: G) -> Result<(), WatchError>
 where
     G: Send + Sync + 'static,
 {
-    let root = env::current_dir()?;
-    let (tcp, port) = reserve_port()?;
+    let (_tcp, port) = reserve_port()?;
     let client = Arc::new(Mutex::new(vec![]));
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut debouncer = new_debouncer(Duration::from_millis(250), None, tx)?;
+    let (_tx, rx) = std::sync::mpsc::channel::<Result<notify::Event, notify::Error>>();
 
-    for base in website
-        .loaders
-        .iter()
-        .map(Loadable::path_base)
-        .collect::<HashSet<_>>()
-    {
-        debouncer.watch(Path::new(base), RecursiveMode::Recursive)?;
-    }
-
-    let thread_i = new_thread_ws_incoming(tcp, client.clone());
-    let (tx_reload, thread_o) = new_thread_ws_reload(client.clone());
+    let (_tx_reload, thread_o) = new_thread_ws_reload(client.clone());
 
     let globals = Globals {
         mode: Mode::Watch,
@@ -62,112 +42,16 @@ where
     #[cfg(feature = "server")]
     let thread_http = server::start();
 
-    while let Ok(events) = rx.recv()? {
-        let mut dirty = false;
+    while let Ok(_events) = rx.recv()? {
 
-        let obsolete = match events
-            .iter()
-            .filter(|de| {
-                matches!(
-                    de.event.kind,
-                    EventKind::Create(..) | EventKind::Modify(..) | EventKind::Remove(..)
-                )
-            })
-            .flat_map(|de| &de.event.paths)
-            .try_fold(
-                HashSet::new(),
-                |mut acc, path| -> Result<_, anyhow::Error> {
-                    let path = path.strip_prefix(&root)?;
-                    let path = Utf8PathBuf::try_from(path.to_path_buf())?;
-                    acc.insert(path);
-                    Ok(acc)
-                },
-            ) {
-            Ok(ok) => ok,
-            Err(e) => {
-                eprintln!("{e}");
-                continue;
-            }
-        };
-
-        let modified = match events
-            .iter()
-            .filter(|de| {
-                matches!(
-                    de.event.kind,
-                    EventKind::Create(..) | EventKind::Modify(..) | EventKind::Remove(..)
-                )
-            })
-            .flat_map(|de| &de.event.paths)
-            .filter(|path| path.exists())
-            .try_fold(
-                HashSet::new(),
-                |mut acc, path| -> Result<_, anyhow::Error> {
-                    let path = path.strip_prefix(&root)?;
-                    let path = Utf8PathBuf::try_from(path.to_path_buf())?;
-                    acc.insert(path);
-                    Ok(acc)
-                },
-            ) {
-            Ok(ok) => ok,
-            Err(e) => {
-                eprintln!("{e}");
-                continue;
-            }
-        };
-
-        if obsolete.is_empty() && modified.is_empty() {
-            continue;
-        }
-
-        if !obsolete.is_empty() {
-            dirty |= website.loaders_remove(&obsolete);
-        }
-
-        if !modified.is_empty() {
-            dirty |= match website.loaders_reload(&modified) {
-                Ok(ok) => ok,
-                Err(e) => {
-                    eprintln!("Error while reloading:\n{e}");
-                    continue;
-                }
-            };
-        }
-
-        if dirty {
-            let start = Instant::now();
-
-            match build(website, &globals) {
-                Ok(()) => tx_reload.send(())?,
-                Err(e) => {
-                    eprintln!("Encountered an error while rebuilding: {e}")
-                }
-            };
-
-            let duration = start.elapsed();
-            println!("Refreshed in {duration:?}");
-        }
     }
 
-    thread_i.join().unwrap();
     thread_o.join().unwrap();
 
     #[cfg(feature = "server")]
     thread_http.join().unwrap().unwrap();
 
     Ok(())
-}
-
-fn new_thread_ws_incoming(
-    server: TcpListener,
-    client: Arc<Mutex<Vec<WebSocket<TcpStream>>>>,
-) -> JoinHandle<()> {
-    std::thread::spawn(move || {
-        for stream in server.incoming() {
-            let socket = tungstenite::accept(stream.unwrap()).unwrap();
-            client.lock().unwrap().push(socket);
-        }
-    })
 }
 
 fn new_thread_ws_reload(

@@ -1,15 +1,10 @@
-use crate::{Config, Context, Hook, Loader, Page, RuntimeError, Task};
+use crate::{Config, Context, Hook, Page, RuntimeError, Task};
 
 pub struct PluginConfig<'a, G: Send + Sync> {
     pub(crate) config: &'a mut Config<G>,
 }
 
 impl<G: Send + Sync + 'static> PluginConfig<'_, G> {
-    pub fn add_loaders(&mut self, processors: impl IntoIterator<Item = Loader>) -> &mut Self {
-        self.config.loaders.extend(processors);
-        self
-    }
-
     pub fn add_task(
         &mut self,
         name: &'static str,

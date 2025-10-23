@@ -4,7 +4,6 @@
 mod error;
 mod gitmap;
 mod io;
-pub mod loader;
 mod plugin;
 mod runtime;
 #[cfg(feature = "reload")]
@@ -26,8 +25,6 @@ use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelI
 
 pub use crate::error::*;
 pub use crate::gitmap::{GitInfo, GitRepo};
-pub use crate::loader::Loader;
-use crate::loader::{Loadable, LoaderOpts};
 pub use crate::plugin::{Plugin, PluginConfig};
 use crate::runtime::Tracker;
 pub use crate::runtime::{Context, WithFile};
@@ -73,20 +70,6 @@ where
 }
 
 impl Hash32 {
-    fn hash(buffer: impl AsRef<[u8]>) -> Self {
-        blake3::Hasher::new()
-            .update(buffer.as_ref())
-            .finalize()
-            .into()
-    }
-
-    fn hash_file(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
-        Ok(blake3::Hasher::new()
-            .update_mmap_rayon(path)?
-            .finalize()
-            .into())
-    }
-
     fn to_hex(self) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut acc = vec![0u8; 64];
@@ -106,14 +89,12 @@ impl Debug for Hash32 {
     }
 }
 
-fn init<G>(website: &mut Website<G>) -> Result<(), HauchiwaError>
+fn init<G>(_website: &mut Website<G>) -> Result<(), HauchiwaError>
 where
     G: Send + Sync + 'static,
 {
     crate::io::clear_dist()?;
     crate::io::clone_static()?;
-
-    website.loaders_load()?;
 
     Ok(())
 }
@@ -165,8 +146,6 @@ where
 /// The `G` type parameter is the global data container accessible in every page renderer as `ctx.data`,
 /// though it can be replaced with the `()` Unit if you don't need to pass any data.
 pub struct Website<G: Send + Sync> {
-    /// Preprocessors for files
-    loaders: Vec<Box<dyn Loadable>>,
     /// Build tasks which can be used to generate pages.
     tasks: Vec<Task<G>>,
     /// Hooks
@@ -212,115 +191,10 @@ impl<G: Send + Sync + 'static> Website<G> {
         Ok(())
     }
 
-    fn loaders_load(&mut self) -> Result<(), HauchiwaError> {
-        let s = Instant::now();
-
-        let len = self.loaders.len();
-        let bar = ProgressBar::new(len as u64).with_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-                .expect("Error setting progress bar template")
-                .progress_chars("#>-"),
-        );
-
-        let active = Arc::new(Mutex::new(HashSet::new()));
-
-        self.loaders
-            .par_iter_mut()
-            .map(|loader| {
-                let name = loader.name();
-
-                {
-                    let mut active = active.lock().unwrap();
-                    active.insert(name.clone());
-                    let msg = format_active(&active);
-                    bar.set_message(msg);
-                }
-
-                let result = loader
-                    .load()
-                    .map_err(|err| HauchiwaError::Loader(name.to_string(), err));
-
-                {
-                    let mut active = active.lock().unwrap();
-                    active.remove(&name);
-                    let msg = format_active(&active);
-                    bar.set_message(msg);
-                    bar.inc(1);
-                }
-
-                result
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        bar.finish_with_message(format!("Loaded assets {}", crate::io::as_overhead(s)));
-
-        Ok(())
-    }
-
-    fn loaders_remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool {
-        self.loaders
-            .par_iter_mut()
-            .any(|loader| loader.remove(obsolete))
-    }
-
-    fn loaders_reload(&mut self, modified: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError>
-    where
-        G: Send + Sync + 'static,
-    {
-        let len = self.loaders.len();
-        let bar = ProgressBar::new(len as u64).with_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-                .expect("Error setting progress bar template")
-                .progress_chars("#>-"),
-        );
-
-        let active = Arc::new(Mutex::new(HashSet::new()));
-
-        let changed = self
-            .loaders
-            .par_iter_mut()
-            .try_fold(
-                || false,
-                |acc, loader| -> Result<_, LoaderError> {
-                    let name = loader.name();
-
-                    {
-                        let mut active = active.lock().unwrap();
-                        active.insert(name.clone());
-                        let msg = format_active(&active);
-                        bar.set_message(msg);
-                    }
-
-                    let result = loader.reload(modified)?;
-
-                    {
-                        let mut active = active.lock().unwrap();
-                        active.remove(&name);
-                        let msg = format_active(&active);
-                        bar.set_message(msg);
-                        bar.inc(1);
-                    }
-
-                    Ok(acc || result)
-                },
-            )
-            .try_reduce(|| false, |a, b| Ok(a || b))?;
-
-        bar.finish_with_message("Reloaded assets");
-
-        Ok(changed)
-    }
-
     fn run_tasks(&mut self, globals: &Globals<G>) -> Result<(), BuildError> {
         let s = Instant::now();
 
-        let items = self
-            .loaders
-            .iter()
-            .flat_map(Loadable::items)
-            .collect::<Vec<_>>();
+        let items = Vec::new();
 
         let total = self.tasks.len();
         let bar = ProgressBar::new(total as u64);
@@ -381,7 +255,6 @@ fn format_active(active: &HashSet<Cow<str>>) -> String {
 /// A builder struct for creating a `Website` with specified settings.
 pub struct Config<G: Send + Sync> {
     plugins: Vec<Plugin<G>>,
-    loaders: Vec<Loader>,
     tasks: Vec<Task<G>>,
     hooks: Vec<Hook>,
     repo: Option<Arc<GitRepo>>,
@@ -391,7 +264,6 @@ impl<G: Send + Sync + 'static> Config<G> {
     fn new() -> Self {
         Self {
             plugins: Vec::default(),
-            loaders: Vec::default(),
             tasks: Vec::default(),
             hooks: Vec::default(),
             repo: None,
@@ -418,11 +290,6 @@ impl<G: Send + Sync + 'static> Config<G> {
         Ok(self)
     }
 
-    pub fn add_loaders(mut self, processors: impl IntoIterator<Item = Loader>) -> Self {
-        self.loaders.extend(processors);
-        self
-    }
-
     pub fn add_task(
         mut self,
         name: &'static str,
@@ -438,15 +305,6 @@ impl<G: Send + Sync + 'static> Config<G> {
         }
 
         Website {
-            loaders: self
-                .loaders
-                .into_iter()
-                .map(|loader| {
-                    loader.init(LoaderOpts {
-                        repo: self.repo.clone(),
-                    })
-                })
-                .collect(),
             tasks: self.tasks,
             hooks: self.hooks,
         }
@@ -512,6 +370,7 @@ impl Page {
 
     /// Creates a new `Page` with the given path and content, without linking to any source file.
     ///
+
     /// Use this for synthetic or programmatically generated pages.
     pub fn text(path: impl AsRef<Utf8Path>, text: impl AsRef<str>) -> Self {
         Self {
@@ -660,3 +519,8 @@ struct Item {
     /// Item computed on demand, cached in memory.
     data: LazyLock<DynamicResult, Box<dyn (FnOnce() -> DynamicResult) + Send + Sync>>,
 }
+
+pub mod builder;
+pub mod core_structs;
+pub mod executor;
+pub mod task_deps;

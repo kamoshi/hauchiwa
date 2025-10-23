@@ -8,11 +8,7 @@ use thiserror::Error;
 #[error(transparent)]
 pub struct LazyAssetError(#[from] pub(crate) Arc<anyhow::Error>);
 
-impl LazyAssetError {
-    pub(crate) fn new(err: impl Into<anyhow::Error>) -> Self {
-        Self(Arc::new(err.into()))
-    }
-}
+impl LazyAssetError {}
 
 impl From<anyhow::Error> for LazyAssetError {
     fn from(e: anyhow::Error) -> Self {

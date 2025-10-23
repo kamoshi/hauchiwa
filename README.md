@@ -97,92 +97,33 @@ Within your application's main function, you can configure precisely how the
 website should be generated, defining content loaders, tasks, and hooks.
 
 ```rust
-use serde::{self, Deserialize};
-use hauchiwa::{Website, Page, Hook};
-use hauchiwa::loader::{
-    self, glob_content, glob_images, glob_assets, glob_scripts, glob_styles, glob_svelte,
-    yaml, Content
+use hauchiwa::{
+    core_structs::WebsiteBuilder,
+    core_structs::{Website,Sack,DependencyGraph},
 };
+use std::collections::HashMap;
+use std::path::PathBuf;
 
-const BASE: &str = "content";
+type PostFrontMatter = ();
 
-type Props = ();
-type Post = ();
+fn main() {
+    let mut builder = WebsiteBuilder::new();
 
-struct Bibtex {
-    path: camino::Utf8PathBuf,
-    data: String,
-};
+    let posts = builder.add_collection("posts/**/*.md", |path: PathBuf, bytes: Vec<u8>| {
+        (path, String::from_utf8_lossy(&bytes).to_string())
+    });
 
-#[derive(Default)]
-struct MyData {};
-
-// Here we start by calling the `setup` function.
-let mut website = Website::config()
-    .add_loaders([
-        // We can configure the collections of files used to build the pages.
-        loader::glob_content(BASE, "posts/**/*.md", yaml::<Post>),
-        // We can configure the generator to process additional files like images or custom assets.
-        loader::glob_images(BASE, "**/*.jpg"),
-        loader::glob_images(BASE, "**/*.png"),
-        loader::glob_images(BASE, "**/*.gif"),
-        loader::glob_assets(BASE, "**/*.bib", |rt, data| {
-            // save the raw data in cache and return path
-            let path = rt.store(&data, "bib").unwrap();
-            let text = String::from_utf8_lossy(&data);
-            let data = todo!(); // TODO: load bibtex via `hayagriva`
-
-            // return data (path to file + parsed bibtex)
-            Ok(Bibtex { path, data })
-        }),
-        // We can add directories containing global stylesheets, either CSS or SCSS.
-        loader::glob_styles("styles", "**/[!_]*.scss"),
-        // We can add JavaScript scripts compiled via ESBuild
-        loader::glob_scripts("scripts", "src/*/main.ts"),
-        // We can add Svelte component compiled via ESbuild. We can use type
-        // parameter to specify the shape of props passed to the component,
-        // or we can use `()` if we don't need anything.
-        loader::glob_svelte::<Props>("scripts", "src/*/App.svelte"),
-    ])
-    // We can add a simple task to generate the `index.html` page with arbitrary
-    // content, here it's `<h1>hello world!</h1>`.
-    .add_task("index page", |_| {
-        let pages = vec![Page::text("index.html".into(), String::from("<h1>hello world!</h1>"))];
-
-        Ok(pages)
-    })
-    // We can retrieve any loaded content from the `ctx` provided to the task.
-    // Note that you have to bring your own markdown parser and HTML templating
-    // engine here.
-    .add_task("posts", |ctx| {
-        let mut pages = vec![];
-
-        for item in ctx.glob_with_file::<Content<Post>>("posts/**/*")? {
-            // Retrieve any assets required to build the page.
-            let pattern = format!("{}/*", item.file.area);
-            let library = ctx.get::<Bibtex>(&pattern)?;
-            // Parse the content of a Markdown file, bring your own library.
-            let (parsed, outline, bibliography): (String, (), ()) =
-                todo!("whatever you want to use, e.g pulldown_cmark");
-            // Generate the HTML page, bring your own library.
-            let rendered = todo!("whatever you want to use, e.g maud");
-            // Return the path and content as a tuple.
-            pages.push(Page::text(item.file.area.join("index.html"), rendered))
+    builder.add_task((posts,), move |(posts,): (Vec<(PathBuf, String)>,)| {
+        let mut content = String::new();
+        for (path, body) in posts {
+            content.push_str(&format!("<h1>{:?}</h1><p>{}</p>", path, body));
         }
+        (vec![(PathBuf::from("index.html"), content)], "index.html".to_string())
+    });
 
-        Ok(pages)
-    })
-    // Do something after build
-    .add_hook(Hook::post_build(|pages| {
-        Ok(())
-    }))
-    // Complete the configuration process.
-    .finish();
-
-
-// Start the library in either the *build* or the *watch* mode.
-website.build(MyData::default());
-// website.watch(MyData::default());
+    let website = builder.finish().unwrap();
+    website.build().unwrap();
+}
 ```
 
 The full documentation for this library is always available on
