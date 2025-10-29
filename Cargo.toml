@@ -25,6 +25,7 @@ rayon                   = "1.11"
 serde                   = { version = "1.0", default-features = false }
 serde_json              = "1.0"
 blake3                  = { version = "1.8", features = ["rayon", "mmap"] }
+petgraph                = "0.8.3"
 
 # CLI
 console                 = { version = "0.16", default-features = false }

@@ -14,7 +14,9 @@ use std::{borrow::Cow, collections::HashSet, fs, sync::Arc};
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::{BuildError, GitRepo, Hash32, Item, error::LoaderError};
+use crate::error::{BuildError, LoaderError};
+use crate::gitmap::GitRepo;
+use crate::{Hash32, Item};
 
 pub use assets::glob_assets;
 #[cfg(feature = "asyncrt")]

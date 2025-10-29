@@ -8,7 +8,7 @@ use std::{
 use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{
-    FileData, Hash32, Item, LoaderError,
+    FileMetadata, Hash32, Item, LoaderError,
     loader::{Loadable, Runtime},
 };
 
@@ -107,7 +107,7 @@ where
                         let rt = self.rt.clone();
                         LazyLock::new(Box::new(move || Ok(Arc::new(f2(rt, data)?))))
                     },
-                    file: Some(Arc::new(FileData {
+                    file: Some(Arc::new(FileMetadata {
                         file: path.clone(),
                         area,
                         info: None,
@@ -152,7 +152,7 @@ where
                         let rt = self.rt.clone();
                         LazyLock::new(Box::new(move || Ok(Arc::new(f2(rt, data)?))))
                     },
-                    file: Some(Arc::new(FileData {
+                    file: Some(Arc::new(FileMetadata {
                         file: path.clone(),
                         area,
                         info: None,
@@ -275,7 +275,7 @@ where
                         let rt = self.rt.clone();
                         LazyLock::new(Box::new(move || Ok(Arc::new(f2(rt, data)?))))
                     },
-                    file: Some(Arc::new(FileData {
+                    file: Some(Arc::new(FileMetadata {
                         file: path.clone(),
                         area,
                         info: None,

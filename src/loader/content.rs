@@ -10,7 +10,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use gray_matter::engine::{JSON, YAML};
 
 use crate::{
-    FileData, GitRepo, Hash32, Item, LazyAssetError, Loader, LoaderError, loader::Loadable,
+    FileMetadata, GitRepo, Hash32, Item, LazyAssetError, Loader, LoaderError, loader::Loadable,
 };
 
 /// This is the canonical in-memory representation for markdown, or any textual
@@ -163,7 +163,7 @@ where
                     Ok(Arc::new(Content { meta, text }))
                 }))
             },
-            file: Some(Arc::new(FileData {
+            file: Some(Arc::new(FileMetadata {
                 info: self
                     .repo
                     .as_deref()
