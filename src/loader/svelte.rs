@@ -5,9 +5,15 @@ use std::{
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::{Hash32, Loader, loader::generic::LoaderGenericMultifile};
+use crate::{
+    loader::{File, FileLoaderTask, Runtime},
+    task::Handle,
+    Hash32, SiteConfig,
+};
 
-type Prerender<P> = Box<dyn Fn(&P) -> anyhow::Result<String> + Send + Sync>;
+use std::sync::Arc;
+
+type Prerender<P> = Arc<dyn Fn(&P) -> anyhow::Result<String> + Send + Sync>;
 
 /// Represents a pre-rendered Svelte component with client-side hydration.
 ///
@@ -18,6 +24,7 @@ type Prerender<P> = Box<dyn Fn(&P) -> anyhow::Result<String> + Send + Sync>;
 ///
 /// This struct is constructed by the `glob_svelte` loader, which bundles both
 /// the SSR and client init code from `.svelte` sources using Deno and esbuild.
+#[derive(Clone)]
 pub struct Svelte<P = ()>
 where
     P: serde::Serialize,
@@ -29,85 +36,34 @@ where
     /// to disk during the build and referenced in the rendered output.
     pub init: Utf8PathBuf,
 }
-
-/// Constructs a loader that processes Svelte components into pre-renderable assets.
-///
-/// This function takes a base path and a glob pattern to locate `.svelte` files.
-/// For each match, it:
-///
-/// - Compiles the file into a server-side rendering module (via Deno + esbuild).
-/// - Compiles a corresponding client-side hydration script with a unique class hash.
-/// - Stores both under a content hash derived from their output.
-///
-/// The returned loader emits a [`Svelte<P>`] object, where `P` is the expected
-/// props type. You can render it to HTML via the `html` closure and emit the
-/// associated `init` JS during the build.
-///
-/// ### Requirements
-///
-/// - Deno must be installed and in `$PATH`.
-/// - Props must be serializable to JSON (via [`serde::Serialize`]).
-///
-/// ### Example
-///
-/// ```rust
-/// use hauchiwa::{Context, TaskResult, Page, loader::{Svelte, glob_svelte}};
-///
-/// type MyProps = ();
-///
-/// // loader
-/// let loader = glob_svelte::<MyProps>("src/components", "**/*.svelte");
-///
-/// // task
-/// fn task(ctx: Context) -> TaskResult<Vec<Page>> {
-///     let Svelte { html, init } = ctx.get::<Svelte>("App.svelte")?;
-///
-///     // prerender HTML component
-///     let html = html(&())?;
-///
-///     Ok(vec![
-///         Page::text("index.html".into(), format!("{html} <script type='module' src='{init}'></script>"))
-///     ])
-/// }
-/// ```
-///
-/// The resulting items can be accessed through the build context and rendered
-/// as [`Svelte<MyProps>`] during templating.
-pub fn glob_svelte<P>(path_base: &'static str, path_glob: &'static str) -> Loader
+pub fn glob_svelte<P>(
+    site_config: &mut SiteConfig,
+    path_base: &'static str,
+    path_glob: &'static str,
+) -> Handle<Vec<Svelte<P>>>
 where
-    P: serde::Serialize + 'static,
+    P: serde::Serialize + Clone + Send + Sync + 'static,
 {
-    Loader::with(move |_| {
-        LoaderGenericMultifile::new(
-            path_base,
-            path_glob,
-            |path| {
-                let server = compile_svelte_server(path)?;
-                let anchor = Hash32::hash(&server);
-                let client = compile_svelte_init(path, anchor)?;
-                let hash = Hash32::hash(&client);
+    let task = FileLoaderTask::new(path_base, path_glob, move |file: File<Vec<u8>>| {
+        let server = compile_svelte_server(&file.path)?;
+        let anchor = Hash32::hash(&server);
+        let client = compile_svelte_init(&file.path, anchor)?;
+        let rt = Runtime;
+        let init = rt.store(client.as_bytes(), "js")?;
 
-                let html = Box::new({
-                    let anchor = anchor.to_hex();
+        let html = Arc::new({
+            let anchor = anchor.to_hex();
 
-                    move |props: &P| {
-                        let json = serde_json::to_string(props)?;
-                        let html = run_ssr(&server, &json)?;
-                        let html =
-                            format!("<div class='_{anchor}' data-props='{json}'>{html}</div>");
-                        Ok(html)
-                    }
-                });
-
-                Ok((hash, (html, client)))
-            },
-            |rt, (html, init)| {
-                let init = rt.store(init.as_bytes(), "js")?;
-
-                Ok(Svelte { html, init })
-            },
-        )
-    })
+            move |props: &P| {
+                let json = serde_json::to_string(props)?;
+                let html = run_ssr(&server, &json)?;
+                let html = format!("<div class='_{anchor}' data-props='{json}'>{html}</div>");
+                Ok(html)
+            }
+        });
+        Ok(Svelte { html, init })
+    });
+    site_config.add_task_boxed(Box::new(task))
 }
 
 fn compile_svelte_server(file: &Utf8Path) -> anyhow::Result<String> {

@@ -8,8 +8,9 @@ use std::{
 use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{
-    FileMetadata, Hash32, Item, LoaderError,
+    error::LoaderError,
     loader::{Loadable, Runtime},
+    FileMetadata, Hash32, Item,
 };
 
 /// Loader for independent, single-file items keyed by path. Avoids reprocessing

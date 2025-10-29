@@ -1,8 +1,9 @@
+#![cfg(not(doctest))]
+
 mod assets;
 #[cfg(feature = "asyncrt")]
 mod asyncrt;
 mod content;
-mod generic;
 #[cfg(feature = "images")]
 mod images;
 mod script;
@@ -10,13 +11,22 @@ mod script;
 mod styles;
 mod svelte;
 
-use std::{borrow::Cow, collections::HashSet, fs, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    sync::Arc,
+};
 
 use camino::{Utf8Path, Utf8PathBuf};
+use glob::Pattern;
+use petgraph::graph::NodeIndex;
 
-use crate::error::{BuildError, LoaderError};
-use crate::gitmap::GitRepo;
-use crate::{Hash32, Item};
+use crate::{
+    error::{BuildError, LoaderError},
+    gitmap::GitRepo,
+    task::Dynamic,
+    Hash32, Item, Task,
+};
 
 pub use assets::glob_assets;
 #[cfg(feature = "asyncrt")]
@@ -29,73 +39,92 @@ pub use script::{Script, glob_scripts};
 pub use styles::{Style, glob_styles};
 pub use svelte::{Svelte, glob_svelte};
 
-pub(crate) trait Loadable: 'static + Send {
-    fn name(&self) -> Cow<'static, str>;
-    fn load(&mut self) -> Result<(), LoaderError>;
-    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError>;
-    fn items(&self) -> Vec<&Item>;
-    fn path_base(&self) -> &'static str;
-    fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool;
-}
-
-impl Loadable for Box<dyn Loadable> {
-    #[inline]
-    fn name(&self) -> Cow<'static, str> {
-        (**self).name()
-    }
-
-    #[inline]
-    fn load(&mut self) -> Result<(), LoaderError> {
-        (**self).load()
-    }
-
-    #[inline]
-    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError> {
-        (**self).reload(set)
-    }
-
-    #[inline]
-    fn items(&self) -> Vec<&Item> {
-        (**self).items()
-    }
-
-    #[inline]
-    fn path_base(&self) -> &'static str {
-        (**self).path_base()
-    }
-
-    #[inline]
-    fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool {
-        (**self).remove(obsolete)
-    }
-}
-
-pub struct Loader(Box<dyn FnOnce(LoaderOpts) -> Box<dyn Loadable>>);
-
-pub struct LoaderOpts {
-    pub repo: Option<Arc<GitRepo>>,
-}
-
-impl Loader {
-    #[inline]
-    pub(crate) fn with<F, R>(f: F) -> Self
-    where
-        F: FnOnce(LoaderOpts) -> R + 'static,
-        R: Loadable,
-    {
-        Self(Box::new(move |init| Box::new(f(init))))
-    }
-
-    #[inline]
-    pub(crate) fn init(self, opts: LoaderOpts) -> Box<dyn Loadable> {
-        (self.0)(opts)
-    }
-}
-
 /// Build execution context, providing facilities for storing artifacts in a
 /// content-addressed cache and output directory.
 ///
 /// `Runtime` abstracts filesystem interactions related to build artifact
+pub struct File<T> {
+    pub path: Utf8PathBuf,
+    pub metadata: T,
+}
+
+pub struct FileLoaderTask<R>
+where
+    R: Send + Sync + 'static,
+{
+    path_base: &'static str,
+    path_glob: &'static str,
+    pattern: Pattern,
+    callback: Box<dyn Fn(File<Vec<u8>>) -> anyhow::Result<R> + Send + Sync>,
+    is_dirty: bool,
+}
+
+impl<R> FileLoaderTask<R>
+where
+    R: Send + Sync + 'static,
+{
+    pub fn new<F>(
+        path_base: &'static str,
+        path_glob: &'static str,
+        callback: F,
+    ) -> Self
+    where
+        F: Fn(File<Vec<u8>>) -> anyhow::Result<R> + Send + Sync + 'static,
+    {
+        let pattern = Utf8Path::new(path_base).join(path_glob);
+        let pattern = Pattern::new(pattern.as_str()).unwrap();
+
+        Self {
+            path_base,
+            path_glob,
+            pattern,
+            callback: Box::new(callback),
+            is_dirty: true,
+        }
+    }
+}
+
+impl<R> Task for FileLoaderTask<R>
+where
+    R: Clone + Send + Sync + 'static,
+{
+    fn dependencies(&self) -> Vec<NodeIndex> {
+        vec![]
+    }
+
+    fn execute(&self, _dependencies: &[Dynamic]) -> Dynamic {
+        let mut results = Vec::new();
+
+        let pattern = Utf8Path::new(self.path_base).join(self.path_glob);
+        for path in glob::glob(pattern.as_str()).expect("Failed to read glob pattern") {
+            match path {
+                Ok(path) => {
+                    let path = Utf8PathBuf::try_from(path).expect("Invalid UTF-8 path");
+                    let data = fs::read(&path).expect("Unable to read file");
+                    let file = File {
+                        path,
+                        metadata: data,
+                    };
+                    let result = (self.callback)(file).expect("File processing failed");
+                    results.push(result);
+                }
+                Err(e) => eprintln!("Error processing path: {}", e),
+            }
+        }
+
+        Arc::new(results)
+    }
+
+    fn on_file_change(&mut self, path: &Utf8Path) -> bool {
+        if self.pattern.matches_path(path.as_std_path()) {
+            self.is_dirty = true;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// storage, enabling immutability and reproducibility guarantees through
 /// content hashing.
 #[derive(Clone)]

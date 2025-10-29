@@ -3,8 +3,10 @@ use std::fs;
 use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{
-    BuildError, Hash32,
-    loader::{Loader, generic::LoaderGeneric},
+    error::BuildError,
+    loader::{File, FileLoaderTask},
+    task::Handle,
+    Hash32, SiteConfig,
 };
 
 /// Represents a hashed, losslessly compressed WebP image ready for use in templates.
@@ -14,63 +16,22 @@ use crate::{
 /// content-addressed, allowing caching, deduplication, and incremental builds.
 ///
 /// Created by `glob_images` from any raster input (e.g., PNG, JPEG, etc.).
+#[derive(Clone)]
 pub struct Image {
     /// Relative path to the optimized WebP image, rooted at `/hash/img/`.
     pub path: Utf8PathBuf,
 }
 
-/// Constructs a loader that ingests raster images and emits lossless WebP variants.
-///
-/// Matches files using a glob pattern relative to `path_base`, reads each file,
-/// and re-encodes it as WebP using the [`image`] crate's lossless encoder. The
-/// resulting output is hashed and cached, then emitted into `dist`. The final
-/// [`Image`] contains a path pointing to the output asset.
-///
-/// ### Parameters
-/// - `path_base`: Base directory for relative glob resolution.
-/// - `path_glob`: Glob pattern matching source image files (e.g. `"**/*.png"`).
-///
-/// ### Returns
-/// A [`Loader`] that emits [`Image`] objects keyed by file content.
-///
-/// ### Example
-/// ```rust
-/// use hauchiwa::{Context, TaskResult, Page, loader::{Image, glob_images}};
-///
-/// // loader
-/// let loader = glob_images("assets/images", "**/*.png");
-///
-/// // task
-/// fn task(ctx: Context) -> TaskResult<Vec<Page>> {
-///     let Image { path } = ctx.get::<Image>("image.png")?;
-///
-///     Ok(vec![
-///         Page::text("index.html".into(), format!("<img src='{path}'>"))
-///     ])
-/// }
-/// ```
-///
-/// ### Notes
-/// - Only lossless WebP encoding is currently supported.
-/// - All outputs are content-addressed: the same input will always yield
-///   the same output path.
-/// - Image decoding/encoding is synchronous; performance may vary with size and volume.
-pub fn glob_images(path_base: &'static str, path_glob: &'static str) -> Loader {
-    Loader::with(move |_| {
-        LoaderGeneric::new(
-            path_base,
-            path_glob,
-            |path| {
-                let hash = Hash32::hash_file(path)?;
-
-                Ok((hash, (hash, path.to_owned())))
-            },
-            |_, (hash, path)| {
-                let path = build_image(hash, &path)?;
-                Ok(Image { path })
-            },
-        )
-    })
+pub fn glob_images(
+    site_config: &mut SiteConfig,
+    path_base: &'static str,
+    path_glob: &'static str,
+) -> Handle<Vec<Image>> {
+    let task = FileLoaderTask::new(path_base, path_glob, move |file| {
+        let path = build_image(&file.metadata)?;
+        Ok(Image { path })
+    });
+    site_config.add_task_boxed(Box::new(task))
 }
 
 fn process_image(buffer: &[u8]) -> image::ImageResult<Vec<u8>> {
@@ -86,7 +47,8 @@ fn process_image(buffer: &[u8]) -> image::ImageResult<Vec<u8>> {
     Ok(out)
 }
 
-fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, BuildError> {
+fn build_image(buffer: &[u8]) -> Result<Utf8PathBuf, BuildError> {
+    let hash = Hash32::hash(buffer);
     let hash = hash.to_hex();
     let path_root = Utf8Path::new("/hash/img/")
         .join(&hash)
@@ -100,8 +62,7 @@ fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, BuildError>
 
     // If this hash exists it means the work is already done.
     if !path_hash.exists() {
-        let buffer = fs::read(file)?;
-        let buffer = process_image(&buffer) //
+        let buffer = process_image(buffer) //
             .map_err(|err| BuildError::Other(err.into()))?;
 
         fs::create_dir_all(".cache/hash/img/")?;

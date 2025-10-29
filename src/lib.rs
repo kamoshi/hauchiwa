@@ -1,11 +1,19 @@
 mod error;
 mod gitmap;
-mod loader;
+pub mod executor;
+pub mod loader;
+pub mod task;
 
-use std::{any::Any, fmt::Debug, sync::Arc};
+use std::{
+    any::{Any, TypeId},
+    fmt::Debug,
+    future::Future,
+    sync::{Arc, LazyLock},
+};
 
 use camino::Utf8PathBuf;
-use petgraph::{Graph, graph::NodeIndex};
+use petgraph::{graph::NodeIndex, Graph};
+use task::TaskDependencies;
 
 /// 32 bytes length generic hash
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -83,17 +91,44 @@ struct Item {
     data: LazyLock<DynamicResult, Box<dyn (FnOnce() -> DynamicResult) + Send + Sync>>,
 }
 
-struct Task {
-    dependencies: Vec<NodeIndex>,
+pub trait Task: Send + Sync {
+    fn dependencies(&self) -> Vec<NodeIndex>;
+    fn execute(&self, dependencies: &[Dynamic]) -> Dynamic;
+    fn on_file_change(&mut self, _path: &camino::Utf8Path) -> bool {
+        false
+    }
 }
 
-pub struct Handle {
-    pub(crate) index: NodeIndex,
+struct TaskNode<D, F, O>
+where
+    D: TaskDependencies,
+    F: Fn(D::Output) -> O + Send + Sync,
+    O: Send + Sync + 'static,
+{
+    dependencies: D,
+    callback: F,
+}
+
+impl<D, F, O> Task for TaskNode<D, F, O>
+where
+    D: TaskDependencies + Send + Sync,
+    F: Fn(D::Output) -> O + Send + Sync + 'static,
+    O: Clone + Send + Sync + 'static,
+{
+    fn dependencies(&self) -> Vec<NodeIndex> {
+        self.dependencies.dependencies()
+    }
+
+    fn execute(&self, dependencies: &[Dynamic]) -> Dynamic {
+        let dependencies = self.dependencies.resolve(dependencies);
+        let output = (self.callback)(dependencies);
+        Arc::new(output)
+    }
 }
 
 /// A builder struct for creating a `Website` with specified settings.
 pub struct SiteConfig {
-    graph: Graph<Task, ()>,
+    graph: Graph<Box<dyn Task>, ()>,
 }
 
 impl SiteConfig {
@@ -103,20 +138,40 @@ impl SiteConfig {
         }
     }
 
-    pub fn add_task(mut self, task: Task) -> Handle {
-        let dependencies = task.dependencies.clone();
+    pub fn add_task<D, F, O>(
+        &mut self,
+        dependencies: D,
+        callback: F,
+    ) -> task::Handle<O>
+    where
+        D: TaskDependencies + Send + Sync + 'static,
+        F: Fn(D::Output) -> O + Send + Sync + 'static,
+        O: Clone + Send + Sync + 'static,
+    {
+        let task = TaskNode {
+            dependencies,
+            callback,
+        };
+        self.add_task_boxed(Box::new(task))
+    }
+
+    pub fn add_task_boxed<O: 'static>(
+        &mut self,
+        task: Box<dyn Task>,
+    ) -> task::Handle<O> {
+        let dependencies = task.dependencies();
         let index = self.graph.add_node(task);
 
         for dependency in dependencies {
-            self.graph.add_edge(index, dependency, ());
+            self.graph.add_edge(dependency, index, ());
         }
 
-        Handle { index }
+        task::Handle::new(index)
     }
 }
 
 pub struct Site {
-    graph: Graph<Task, ()>,
+    pub graph: Graph<Box<dyn Task>, ()>,
 }
 
 impl Site {
