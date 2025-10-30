@@ -19,12 +19,12 @@ pub struct Script {
     pub path: Utf8PathBuf,
 }
 
-pub fn glob_scripts(
-    site_config: &mut SiteConfig,
+pub fn glob_scripts<G: Send + Sync + 'static>(
+    site_config: &mut SiteConfig<G>,
     path_base: &'static str,
     path_glob: &'static str,
 ) -> Handle<Vec<Script>> {
-    let task = FileLoaderTask::new(path_base, path_glob, move |file| {
+    let task = FileLoaderTask::new(path_base, path_glob, move |_globals, file| {
         let data = compile_esbuild(&file.path)?;
         let rt = Runtime;
         let path = rt.store(&data, "js")?;

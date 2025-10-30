@@ -48,19 +48,24 @@ pub struct File<T> {
     pub metadata: T,
 }
 
-pub struct FileLoaderTask<R>
+use crate::Globals;
+
+pub struct FileLoaderTask<G, R>
 where
+    G: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
     path_base: &'static str,
     path_glob: &'static str,
     pattern: Pattern,
-    callback: Box<dyn Fn(File<Vec<u8>>) -> anyhow::Result<R> + Send + Sync>,
+    callback: Box<dyn Fn(&Globals<G>, File<Vec<u8>>) -> anyhow::Result<R> + Send + Sync>,
     is_dirty: bool,
+    _phantom: std::marker::PhantomData<G>,
 }
 
-impl<R> FileLoaderTask<R>
+impl<G, R> FileLoaderTask<G, R>
 where
+    G: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
     pub fn new<F>(
@@ -69,7 +74,7 @@ where
         callback: F,
     ) -> Self
     where
-        F: Fn(File<Vec<u8>>) -> anyhow::Result<R> + Send + Sync + 'static,
+        F: Fn(&Globals<G>, File<Vec<u8>>) -> anyhow::Result<R> + Send + Sync + 'static,
     {
         let pattern = Utf8Path::new(path_base).join(path_glob);
         let pattern = Pattern::new(pattern.as_str()).unwrap();
@@ -80,19 +85,21 @@ where
             pattern,
             callback: Box::new(callback),
             is_dirty: true,
+            _phantom: std::marker::PhantomData,
         }
     }
 }
 
-impl<R> Task for FileLoaderTask<R>
+impl<G, R> Task<G> for FileLoaderTask<G, R>
 where
+    G: Send + Sync + 'static,
     R: Clone + Send + Sync + 'static,
 {
     fn dependencies(&self) -> Vec<NodeIndex> {
         vec![]
     }
 
-    fn execute(&self, _dependencies: &[Dynamic]) -> Dynamic {
+    fn execute(&self, globals: &Globals<G>, _dependencies: &[Dynamic]) -> Dynamic {
         let mut results = Vec::new();
 
         let pattern = Utf8Path::new(self.path_base).join(self.path_glob);
@@ -105,7 +112,7 @@ where
                         path,
                         metadata: data,
                     };
-                    let result = (self.callback)(file).expect("File processing failed");
+                    let result = (self.callback)(globals, file).expect("File processing failed");
                     results.push(result);
                 }
                 Err(e) => eprintln!("Error processing path: {}", e),

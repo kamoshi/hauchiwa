@@ -2,6 +2,7 @@ mod error;
 mod gitmap;
 pub mod executor;
 pub mod loader;
+pub mod page;
 pub mod task;
 
 use std::{
@@ -65,6 +66,27 @@ impl Debug for Hash32 {
 type Dynamic = Arc<dyn Any + Send + Sync>;
 type DynamicResult = Result<Dynamic, error::LazyAssetError>;
 
+#[derive(Debug, Clone, Copy)]
+pub enum Mode {
+    Build,
+    Watch,
+}
+
+/// `G` represents any additional data that should be globally available during
+/// the HTML rendering process. If no such data is needed, it can be substituted
+/// with `()`.
+#[derive(Debug, Clone)]
+pub struct Globals<G: Send + Sync = ()> {
+    /// Generator name and version.
+    pub generator: &'static str,
+    /// Generator mode.
+    pub mode: Mode,
+    /// Watch port
+    pub port: Option<u16>,
+    /// Any additional data.
+    pub data: G,
+}
+
 #[derive(Debug)]
 pub struct FileMetadata {
     pub file: Utf8PathBuf,
@@ -91,47 +113,50 @@ struct Item {
     data: LazyLock<DynamicResult, Box<dyn (FnOnce() -> DynamicResult) + Send + Sync>>,
 }
 
-pub trait Task: Send + Sync {
+pub trait Task<G: Send + Sync = ()>: Send + Sync {
     fn dependencies(&self) -> Vec<NodeIndex>;
-    fn execute(&self, dependencies: &[Dynamic]) -> Dynamic;
+    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Dynamic;
     fn on_file_change(&mut self, _path: &camino::Utf8Path) -> bool {
         false
     }
 }
 
-struct TaskNode<D, F, O>
+struct TaskNode<G, D, F, O>
 where
+    G: Send + Sync,
     D: TaskDependencies,
-    F: Fn(D::Output) -> O + Send + Sync,
+    F: Fn(&Globals<G>, D::Output) -> O + Send + Sync,
     O: Send + Sync + 'static,
 {
     dependencies: D,
     callback: F,
+    _phantom: std::marker::PhantomData<G>,
 }
 
-impl<D, F, O> Task for TaskNode<D, F, O>
+impl<G, D, F, O> Task<G> for TaskNode<G, D, F, O>
 where
+    G: Send + Sync + 'static,
     D: TaskDependencies + Send + Sync,
-    F: Fn(D::Output) -> O + Send + Sync + 'static,
+    F: Fn(&Globals<G>, D::Output) -> O + Send + Sync + 'static,
     O: Clone + Send + Sync + 'static,
 {
     fn dependencies(&self) -> Vec<NodeIndex> {
         self.dependencies.dependencies()
     }
 
-    fn execute(&self, dependencies: &[Dynamic]) -> Dynamic {
+    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Dynamic {
         let dependencies = self.dependencies.resolve(dependencies);
-        let output = (self.callback)(dependencies);
+        let output = (self.callback)(globals, dependencies);
         Arc::new(output)
     }
 }
 
 /// A builder struct for creating a `Website` with specified settings.
-pub struct SiteConfig {
-    graph: Graph<Box<dyn Task>, ()>,
+pub struct SiteConfig<G: Send + Sync = ()> {
+    graph: Graph<Box<dyn Task<G>>, ()>,
 }
 
-impl SiteConfig {
+impl<G: Send + Sync + 'static> SiteConfig<G> {
     pub fn new() -> Self {
         Self {
             graph: Graph::new(),
@@ -145,19 +170,20 @@ impl SiteConfig {
     ) -> task::Handle<O>
     where
         D: TaskDependencies + Send + Sync + 'static,
-        F: Fn(D::Output) -> O + Send + Sync + 'static,
+        F: Fn(&Globals<G>, D::Output) -> O + Send + Sync + 'static,
         O: Clone + Send + Sync + 'static,
     {
         let task = TaskNode {
             dependencies,
             callback,
+            _phantom: std::marker::PhantomData,
         };
         self.add_task_boxed(Box::new(task))
     }
 
     pub fn add_task_boxed<O: 'static>(
         &mut self,
-        task: Box<dyn Task>,
+        task: Box<dyn Task<G>>,
     ) -> task::Handle<O> {
         let dependencies = task.dependencies();
         let index = self.graph.add_node(task);
@@ -170,12 +196,12 @@ impl SiteConfig {
     }
 }
 
-pub struct Site {
-    pub graph: Graph<Box<dyn Task>, ()>,
+pub struct Site<G: Send + Sync = ()> {
+    pub graph: Graph<Box<dyn Task<G>>, ()>,
 }
 
-impl Site {
-    pub fn new(config: SiteConfig) -> Self {
+impl<G: Send + Sync> Site<G> {
+    pub fn new(config: SiteConfig<G>) -> Self {
         Self {
             graph: config.graph,
         }

@@ -6,16 +6,17 @@ use crate::{
     SiteConfig,
 };
 
-pub fn async_asset<T, F, Fut>(
-    site_config: &mut SiteConfig,
+pub fn async_asset<G, T, F, Fut>(
+    site_config: &mut SiteConfig<G>,
     async_closure: F,
 ) -> Handle<T>
 where
+    G: Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
     F: Fn(Runtime) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = anyhow::Result<T>> + Send + 'static,
 {
-    site_config.add_task((), move |_| {
+    site_config.add_task((), move |_, _| {
         let rt = Runtime;
         let tokio_rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()

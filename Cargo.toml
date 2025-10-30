@@ -14,7 +14,7 @@ asyncrt = ["tokio"]
 styles = ["grass"]
 images = ["image"]
 reload = ["notify", "notify-debouncer-full", "tungstenite"]
-server = ["asyncrt", "axum", "tower-http"]
+server = ["asyncrt", "axum", "tower-http", "console"]
 
 [dependencies]
 camino                  = "1.2"
@@ -28,7 +28,7 @@ blake3                  = { version = "1.8", features = ["rayon", "mmap"] }
 petgraph                = "0.8.3"
 
 # CLI
-console                 = { version = "0.16", default-features = false }
+console                 = { version = "0.16", default-features = false, optional = true }
 indicatif               = { version = "0.18", features = ["rayon"] }
 
 # Error handling
@@ -83,3 +83,11 @@ features = ["fs"]
 [[example]]
 name = "tree"
 path = "examples/tree.rs"
+
+[[example]]
+name = "pages"
+path = "examples/pages.rs"
+
+[[example]]
+name = "live-reload"
+path = "examples/live-reload.rs"

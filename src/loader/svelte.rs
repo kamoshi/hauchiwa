@@ -36,33 +36,38 @@ where
     /// to disk during the build and referenced in the rendered output.
     pub init: Utf8PathBuf,
 }
-pub fn glob_svelte<P>(
-    site_config: &mut SiteConfig,
+pub fn glob_svelte<G, P>(
+    site_config: &mut SiteConfig<G>,
     path_base: &'static str,
     path_glob: &'static str,
 ) -> Handle<Vec<Svelte<P>>>
 where
+    G: Send + Sync + 'static,
     P: serde::Serialize + Clone + Send + Sync + 'static,
 {
-    let task = FileLoaderTask::new(path_base, path_glob, move |file: File<Vec<u8>>| {
-        let server = compile_svelte_server(&file.path)?;
-        let anchor = Hash32::hash(&server);
-        let client = compile_svelte_init(&file.path, anchor)?;
-        let rt = Runtime;
-        let init = rt.store(client.as_bytes(), "js")?;
+    let task = FileLoaderTask::new(
+        path_base,
+        path_glob,
+        move |_globals, file: File<Vec<u8>>| {
+            let server = compile_svelte_server(&file.path)?;
+            let anchor = Hash32::hash(&server);
+            let client = compile_svelte_init(&file.path, anchor)?;
+            let rt = Runtime;
+            let init = rt.store(client.as_bytes(), "js")?;
 
-        let html = Arc::new({
-            let anchor = anchor.to_hex();
+            let html = Arc::new({
+                let anchor = anchor.to_hex();
 
-            move |props: &P| {
-                let json = serde_json::to_string(props)?;
-                let html = run_ssr(&server, &json)?;
-                let html = format!("<div class='_{anchor}' data-props='{json}'>{html}</div>");
-                Ok(html)
-            }
-        });
-        Ok(Svelte { html, init })
-    });
+                move |props: &P| {
+                    let json = serde_json::to_string(props)?;
+                    let html = run_ssr(&server, &json)?;
+                    let html = format!("<div class='_{anchor}' data-props='{json}'>{html}</div>");
+                    Ok(html)
+                }
+            });
+            Ok(Svelte { html, init })
+        },
+    );
     site_config.add_task_boxed(Box::new(task))
 }
 

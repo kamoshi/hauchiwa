@@ -17,12 +17,12 @@ pub struct Style {
     pub path: Utf8PathBuf,
 }
 
-pub fn glob_styles(
-    site_config: &mut SiteConfig,
+pub fn glob_styles<G: Send + Sync + 'static>(
+    site_config: &mut SiteConfig<G>,
     path_base: &'static str,
     path_glob: &'static str,
 ) -> Handle<Vec<Style>> {
-    let task = FileLoaderTask::new(path_base, path_glob, move |file| {
+    let task = FileLoaderTask::new(path_base, path_glob, move |_globals, file| {
         let opts = Options::default().style(OutputStyle::Compressed);
         let data = grass::from_string(String::from_utf8(file.metadata)?, &opts)?;
         let rt = Runtime;

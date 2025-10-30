@@ -22,12 +22,12 @@ pub struct Image {
     pub path: Utf8PathBuf,
 }
 
-pub fn glob_images(
-    site_config: &mut SiteConfig,
+pub fn glob_images<G: Send + Sync + 'static>(
+    site_config: &mut SiteConfig<G>,
     path_base: &'static str,
     path_glob: &'static str,
 ) -> Handle<Vec<Image>> {
-    let task = FileLoaderTask::new(path_base, path_glob, move |file| {
+    let task = FileLoaderTask::new(path_base, path_glob, move |_globals, file| {
         let path = build_image(&file.metadata)?;
         Ok(Image { path })
     });

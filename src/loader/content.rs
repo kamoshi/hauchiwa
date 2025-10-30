@@ -22,16 +22,17 @@ where
     pub text: String,
 }
 
-pub fn glob_content<T>(
-    site_config: &mut SiteConfig,
+pub fn glob_content<G, T>(
+    site_config: &mut SiteConfig<G>,
     path_base: &'static str,
     path_glob: &'static str,
     preload: fn(&str) -> Result<(T, String), anyhow::Error>,
 ) -> Handle<Vec<Content<T>>>
 where
+    G: Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
 {
-    let task = FileLoaderTask::new(path_base, path_glob, move |file| {
+    let task = FileLoaderTask::new(path_base, path_glob, move |_globals, file| {
         let text = String::from_utf8(file.metadata)?;
         let (meta, text) = preload(&text)?;
         Ok(Content { meta, text })
