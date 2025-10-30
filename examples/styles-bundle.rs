@@ -2,7 +2,7 @@
 
 use hauchiwa::{
     executor,
-    loader::styles::{build_style, Style},
+    loader::styles::{build_styles, Styles},
     page::Page,
     {Site, SiteConfig},
 };
@@ -10,13 +10,16 @@ use hauchiwa::{
 fn main() {
     let mut config = SiteConfig::new();
 
-    let style_handle = build_style(
+    let styles_handle = build_styles(
         &mut config,
-        "examples/styles_bundle_data/main.scss",
+        "examples/styles_bundle_data/**/[!_]*.scss",
         "examples/styles_bundle_data/**/*.scss",
     );
 
-    config.add_task((style_handle,), |_, (style,): (&Style,)| {
+    config.add_task((styles_handle,), |_, (styles,): (&Styles,)| {
+        let style = styles
+            .get("examples/styles_bundle_data/main.scss")
+            .unwrap();
         Page {
             url: "/".to_string(),
             content: format!(

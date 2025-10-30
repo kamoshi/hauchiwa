@@ -2,7 +2,7 @@
 
 use hauchiwa::{
     executor,
-    loader::{build_script, Script},
+    loader::{build_scripts, Scripts},
     page::Page,
     {Site, SiteConfig},
 };
@@ -10,13 +10,16 @@ use hauchiwa::{
 fn main() {
     let mut config = SiteConfig::new();
 
-    let script_handle = build_script(
+    let scripts_handle = build_scripts(
         &mut config,
-        "examples/script_bundle_data/main.js",
+        "examples/script_bundle_data/**/[!_]*.js",
         "examples/script_bundle_data/**/*.js",
     );
 
-    config.add_task((script_handle,), |_, (script,): (&Script,)| {
+    config.add_task((scripts_handle,), |_, (scripts,): (&Scripts,)| {
+        let script = scripts
+            .get("examples/script_bundle_data/main.js")
+            .unwrap();
         Page {
             url: "/".to_string(),
             content: format!(

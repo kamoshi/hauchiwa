@@ -1,39 +1,46 @@
 use crate::{
-    loader::{BundleLoaderTask, File, FileLoaderTask, Runtime},
+    loader::{glob::GlobLoaderTask, Runtime},
     task::Handle,
     SiteConfig,
 };
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct Style {
     pub path: camino::Utf8PathBuf,
 }
 
-pub fn glob_styles<G: Send + Sync + 'static>(
-    site_config: &mut SiteConfig<G>,
-    path_base: &'static str,
-    path_glob: &'static str,
-) -> Handle<Vec<Style>> {
-    let task = FileLoaderTask::new(path_base, path_glob, move |_globals, file| {
-        let data = grass::from_path(file.path, &grass::Options::default())?;
-        let rt = Runtime {};
-        let path = rt.store(data.as_bytes(), "css")?;
-        Ok(Style { path })
-    });
-    site_config.add_task_opaque(task)
+#[derive(Clone)]
+pub struct Styles {
+    map: HashMap<camino::Utf8PathBuf, Style>,
 }
 
-pub fn build_style<G: Send + Sync + 'static>(
+impl Styles {
+    pub fn get(&self, path: impl AsRef<Utf8Path>) -> Option<&Style> {
+        self.map.get(path.as_ref())
+    }
+}
+
+pub fn build_styles<G: Send + Sync + 'static>(
     site_config: &mut SiteConfig<G>,
-    entry_point: &'static str,
+    entry_point_glob: &'static str,
     watch_glob: &'static str,
-) -> Handle<Style> {
-    let task = BundleLoaderTask::new(entry_point, watch_glob, move |_globals, file| {
-        let data = grass::from_path(file.path, &grass::Options::default())?;
-        let rt = Runtime {};
-        let path = rt.store(data.as_bytes(), "css")?;
-        Ok(Style { path })
-    });
-    site_config.add_task_opaque(task)
+) -> Handle<Styles> {
+    let styles_vec_handle: Handle<Vec<(Utf8PathBuf, Style)>> = {
+        let task = GlobLoaderTask::new(entry_point_glob, watch_glob, move |_globals, file| {
+            let data = grass::from_path(&file.path, &grass::Options::default())?;
+            let rt = Runtime {};
+            let path = rt.store(data.as_bytes(), "css")?;
+            Ok((file.path, Style { path }))
+        });
+        site_config.add_task_opaque(task)
+    };
+
+    site_config.add_task(
+        (styles_vec_handle,),
+        |_, (styles_vec,): (&Vec<(Utf8PathBuf, Style)>,)| Styles {
+            map: styles_vec.iter().cloned().collect(),
+        },
+    )
 }

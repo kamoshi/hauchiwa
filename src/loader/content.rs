@@ -1,78 +1,89 @@
-use std::sync::LazyLock;
-
-use gray_matter::engine::{JSON, YAML};
-
 use crate::{
-    loader::{File, FileLoaderTask},
+    loader::{glob::GlobLoaderTask, File},
     task::Handle,
     SiteConfig,
 };
+use camino::Utf8PathBuf;
+use gray_matter::{engine::YAML, Matter};
+use serde::{de::DeserializeOwned, Deserialize};
+use std::{fs, marker::PhantomData};
 
-/// This is the canonical in-memory representation for markdown, or any textual
-/// content files parsed via front matter. Used as the payload type for
-/// [`glob_content`]-driven collections.
-#[derive(Clone)]
-pub struct Content<T>
-where
-    T: Send + Sync + 'static,
-{
-    /// Deserialized front matter, typically JSON or YAML.
-    pub meta: T,
-    /// The raw document body, stripped of metadata.
-    pub text: String,
+#[derive(Deserialize)]
+struct ContentData<T> {
+    #[serde(default)]
+    path: String,
+    metadata: T,
+    content: String,
 }
 
-pub fn glob_content<G, T>(
+pub struct Content<T> {
+    pub path: Utf8PathBuf,
+    pub metadata: T,
+    pub content: String,
+}
+
+pub fn glob_content<T, G>(
     site_config: &mut SiteConfig<G>,
     path_base: &'static str,
     path_glob: &'static str,
-    preload: fn(&str) -> Result<(T, String), anyhow::Error>,
 ) -> Handle<Vec<Content<T>>>
 where
+    T: DeserializeOwned + Send + Sync + 'static,
     G: Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
 {
-    let task = FileLoaderTask::new(path_base, path_glob, move |_globals, file| {
-        let text = String::from_utf8(file.metadata)?;
-        let (meta, text) = preload(&text)?;
-        Ok(Content { meta, text })
+    let task = GlobLoaderTask::new(path_base, path_glob, move |_globals, file: File<Vec<u8>>| {
+        let matter = Matter::<YAML>::new();
+        let parsed = matter.parse(std::str::from_utf8(&file.metadata)?);
+        let metadata: T = parsed.data.unwrap().deserialize()?;
+        Ok(Content {
+            path: file.path,
+            metadata,
+            content: parsed.content,
+        })
     });
     site_config.add_task_opaque(task)
 }
 
-/// Generate the functions used to initialize content files. These functions can
-/// be used to parse the front matter using engines from crate `gray_matter`.
-macro_rules! matter_parser {
-    ($name:ident, $engine:path) => {
-        #[doc = concat!(
-            "This function can be used to extract metadata from a document with `D` as the frontmatter shape.\n",
-            "Configured to use [`", stringify!($engine), "`] as the engine of the parser."
-        )]
-        pub fn $name<D>(content: &str) -> Result<(D, String), anyhow::Error>
-        where
-            D: for<'de> serde::Deserialize<'de> + Send + Sync + 'static,
-        {
-            use gray_matter::{Matter, Pod};
+#[derive(Clone, Default)]
+pub struct Yaml<T>(PhantomData<T>);
 
-            // We can cache the creation of the parser
-            static PARSER: LazyLock<Matter<$engine>> = LazyLock::new(Matter::<$engine>::new);
-
-            let entity = PARSER.parse(content)?;
-            let object = entity
-                .data
-                .unwrap_or_else(Pod::new_hash)
-                .deserialize::<D>()
-                .map_err(|e| anyhow::anyhow!("Malformed frontmatter:\n{e}"))?;
-
-            Ok((
-                // Just the front matter
-                object,
-                // The rest of the content
-                entity.content,
-            ))
-        }
-    };
+impl<T: Default + 'static> Yaml<T> {
+    pub fn new() -> Self {
+        Self(PhantomData)
+    }
 }
 
-matter_parser!(yaml, YAML);
-matter_parser!(json, JSON);
+pub fn yaml<T: DeserializeOwned + Clone + Send + Sync + 'static, G: Send + Sync + 'static>(
+    site_config: &mut SiteConfig<G>,
+    path: &'static str,
+) -> Handle<T> {
+    site_config.add_task(
+        (),
+        move |_, _| -> T {
+            let content = fs::read_to_string(path).unwrap();
+            serde_yaml::from_str(&content).unwrap()
+        },
+    )
+}
+
+#[derive(Clone, Default)]
+pub struct Json<T>(PhantomData<T>);
+
+impl<T: Default + 'static> Json<T> {
+    pub fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+pub fn json<T: DeserializeOwned + Clone + Send + Sync + 'static, G: Send + Sync + 'static>(
+    site_config: &mut SiteConfig<G>,
+    path: &'static str,
+) -> Handle<T> {
+    site_config.add_task(
+        (),
+        move |_, _| -> T {
+            let content = fs::read_to_string(path).unwrap();
+            serde_json::from_str(&content).unwrap()
+        },
+    )
+}
