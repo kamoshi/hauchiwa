@@ -11,18 +11,18 @@ fn main() {
         "Hello from the root!".to_string()
     });
 
-    let child_task_1 = site_config.add_task((root_task,), |_, (root_message,)| {
+    let child_task_1 = site_config.add_task((root_task,), |_, (root_message,): (&String,)| {
         println!("Executing Child Task 1");
         format!("{} | Child 1 processed it.", root_message)
     });
 
-    let child_task_2 = site_config.add_task((root_task,), |_, (root_message,)| {
+    let child_task_2 = site_config.add_task((root_task,), |_, (root_message,): (&String,)| {
         println!("Executing Child Task 2");
         root_message.len()
     });
 
     let grandchild_task =
-        site_config.add_task((child_task_1, child_task_2), |_, (msg, len)| {
+        site_config.add_task((child_task_1, child_task_2), |_, (msg, len): (&String, &usize)| {
             println!("Executing Grandchild Task");
             format!(
                 "The Grandchild received a message of length {}: '{}'",

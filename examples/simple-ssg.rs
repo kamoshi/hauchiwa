@@ -37,9 +37,9 @@ fn main() {
         },
     ));
 
-    let posts_handle = config.add_task((raw_posts_handle,), |_, (raw_posts,): (Vec<RawPost>,)| {
+    let posts_handle = config.add_task((raw_posts_handle,), |_, (raw_posts,): (&Vec<RawPost>,)| {
         raw_posts
-            .into_iter()
+            .iter()
             .map(|raw_post| {
                 let title = raw_post
                     .content
@@ -54,16 +54,16 @@ fn main() {
 
                 Post {
                     title,
-                    content: raw_post.content,
+                    content: raw_post.content.clone(),
                     url,
                 }
             })
             .collect::<Vec<_>>()
     });
 
-    config.add_task((posts_handle,), |_, (posts,): (Vec<Post>,)| {
+    config.add_task((posts_handle,), |_, (posts,): (&Vec<Post>,)| {
         posts
-            .into_iter()
+            .iter()
             .map(|post| Page {
                 url: post.url.clone(),
                 content: format!("<h1>{}</h1><pre><code>{}</code></pre>", post.title, post.content),
@@ -71,7 +71,7 @@ fn main() {
             .collect::<Vec<_>>()
     });
 
-    config.add_task((posts_handle,), |_, (posts,): (Vec<Post>,)| {
+    config.add_task((posts_handle,), |_, (posts,): (&Vec<Post>,)| {
         let post_links = posts
             .iter()
             .map(|post| format!("<li><a href=\"{}\">{}</a></li>", post.url, post.title))

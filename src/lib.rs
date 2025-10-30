@@ -8,10 +8,9 @@ pub mod task;
 pub use camino;
 
 use std::{
-    any::{Any, TypeId},
+    any::Any,
     fmt::Debug,
-    future::Future,
-    sync::{Arc, LazyLock},
+    sync::Arc,
 };
 
 use camino::Utf8PathBuf;
@@ -39,13 +38,6 @@ impl Hash32 {
             .into()
     }
 
-    fn hash_file(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
-        Ok(blake3::Hasher::new()
-            .update_mmap_rayon(path)?
-            .finalize()
-            .into())
-    }
-
     fn to_hex(self) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut acc = vec![0u8; 64];
@@ -66,7 +58,6 @@ impl Debug for Hash32 {
 }
 
 type Dynamic = Arc<dyn Any + Send + Sync>;
-type DynamicResult = Result<Dynamic, error::LazyAssetError>;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Mode {
@@ -96,25 +87,6 @@ pub struct FileMetadata {
     pub info: Option<gitmap::GitInfo>,
 }
 
-struct Item {
-    /// Type ID for the type contained by this item. This is how you can filter
-    /// items without having to evalute and downcast lazy data.
-    refl_type: TypeId,
-    /// Type name just for diagnostics.
-    refl_name: &'static str,
-    /// Simple ID for the item, doesn't have to be unique. Either the file path
-    /// or user provided static string, used for querying context.
-    id: Box<str>,
-    /// Hash for the file contents. In the case of assets loaded from multiple
-    /// files, like bundled scripts or stylesheets this will be the hash of the
-    /// entire bundle. It's used for checking which task needs to be redone.
-    hash: Hash32,
-    /// If the item can be traced back to a filesystem entry this will be filled.
-    file: Option<Arc<FileMetadata>>,
-    /// Item computed on demand, cached in memory.
-    data: LazyLock<DynamicResult, Box<dyn (FnOnce() -> DynamicResult) + Send + Sync>>,
-}
-
 pub trait Task<G: Send + Sync = ()>: Send + Sync {
     fn dependencies(&self) -> Vec<NodeIndex>;
     fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Dynamic;
@@ -127,7 +99,7 @@ struct TaskNode<G, D, F, O>
 where
     G: Send + Sync,
     D: TaskDependencies,
-    F: Fn(&Globals<G>, D::Output) -> O + Send + Sync,
+    F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> O + Send + Sync,
     O: Send + Sync + 'static,
 {
     dependencies: D,
@@ -139,7 +111,7 @@ impl<G, D, F, O> Task<G> for TaskNode<G, D, F, O>
 where
     G: Send + Sync + 'static,
     D: TaskDependencies + Send + Sync,
-    F: Fn(&Globals<G>, D::Output) -> O + Send + Sync + 'static,
+    F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> O + Send + Sync + 'static,
     O: Clone + Send + Sync + 'static,
 {
     fn dependencies(&self) -> Vec<NodeIndex> {
@@ -172,7 +144,7 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
     ) -> task::Handle<O>
     where
         D: TaskDependencies + Send + Sync + 'static,
-        F: Fn(&Globals<G>, D::Output) -> O + Send + Sync + 'static,
+        F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> O + Send + Sync + 'static,
         O: Clone + Send + Sync + 'static,
     {
         let task = TaskNode {

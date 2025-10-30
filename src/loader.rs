@@ -22,10 +22,9 @@ use glob::Pattern;
 use petgraph::graph::NodeIndex;
 
 use crate::{
-    error::{BuildError, LoaderError},
-    gitmap::GitRepo,
+    error::{BuildError},
     task::Dynamic,
-    Hash32, Item, Task,
+    Hash32, Task,
 };
 
 pub use assets::glob_assets;

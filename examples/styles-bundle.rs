@@ -16,7 +16,7 @@ fn main() {
         "examples/styles_bundle_data/**/*.scss",
     );
 
-    config.add_task((style_handle,), |_, (style,): (Style,)| {
+    config.add_task((style_handle,), |_, (style,): (&Style,)| {
         Page {
             url: "/".to_string(),
             content: format!(

@@ -36,7 +36,7 @@ impl<T> Handle<T> {
 /// A trait that represents the dependencies of a task.
 pub trait TaskDependencies {
     /// The type of the resolved dependencies. For a tuple of `Handle<T>`s, this will be a tuple of `T`s.
-    type Output;
+    type Output<'a>;
 
     /// Returns the `NodeIndex`s of the dependencies.
     fn dependencies(&self) -> Vec<NodeIndex>;
@@ -45,17 +45,17 @@ pub trait TaskDependencies {
     /// The order of the `Dynamic`s must match the order of the dependencies.
     /// # Panics
     /// This function may panic if the `Dynamic`s cannot be downcast to the expected types.
-    fn resolve(&self, outputs: &[Dynamic]) -> Self::Output;
+    fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> Self::Output<'a>;
 }
 
 impl TaskDependencies for () {
-    type Output = ();
+    type Output<'a> = ();
 
     fn dependencies(&self) -> Vec<NodeIndex> {
         vec![]
     }
 
-    fn resolve(&self, _outputs: &[Dynamic]) -> Self::Output {
+    fn resolve<'a>(&self, _outputs: &'a [Dynamic]) -> Self::Output<'a> {
         ()
     }
 }
@@ -63,19 +63,21 @@ impl TaskDependencies for () {
 macro_rules! impl_deps {
     ($($T:ident),*) => {
         #[allow(non_snake_case)]
-        impl<$($T: Clone + Send + Sync + 'static),*> TaskDependencies for ($(Handle<$T>,)*) {
-            type Output = ($($T,)*);
+        impl<$($T: Send + Sync + 'static),*> TaskDependencies for ($(Handle<$T>,)*) {
+            type Output<'a> = ($(&'a $T,)*);
 
             fn dependencies(&self) -> Vec<NodeIndex> {
                 let ($($T,)*) = self;
                 vec![$($T.index),*]
             }
 
-            fn resolve(&self, outputs: &[Dynamic]) -> Self::Output {
+
+
+            fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> Self::Output<'a> {
                 let mut iter = outputs.iter();
                 ($({
                     let out = iter.next().unwrap();
-                    out.downcast_ref::<$T>().unwrap().clone()
+                    out.downcast_ref::<$T>().unwrap()
                 },)*)
             }
         }

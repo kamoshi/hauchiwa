@@ -16,7 +16,7 @@ fn main() {
         "examples/script_bundle_data/**/*.js",
     );
 
-    config.add_task((script_handle,), |_, (script,): (Script,)| {
+    config.add_task((script_handle,), |_, (script,): (&Script,)| {
         Page {
             url: "/".to_string(),
             content: format!(
