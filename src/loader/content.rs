@@ -37,7 +37,7 @@ where
         let (meta, text) = preload(&text)?;
         Ok(Content { meta, text })
     });
-    site_config.add_task_boxed(Box::new(task))
+    site_config.add_task_opaque(task)
 }
 
 /// Generate the functions used to initialize content files. These functions can

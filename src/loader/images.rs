@@ -31,7 +31,7 @@ pub fn glob_images<G: Send + Sync + 'static>(
         let path = build_image(&file.metadata)?;
         Ok(Image { path })
     });
-    site_config.add_task_boxed(Box::new(task))
+    site_config.add_task_opaque(task)
 }
 
 fn process_image(buffer: &[u8]) -> image::ImageResult<Vec<u8>> {

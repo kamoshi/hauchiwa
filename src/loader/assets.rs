@@ -15,5 +15,5 @@ where
     R: Clone + Send + Sync + 'static,
 {
     let task = FileLoaderTask::new(path_base, path_glob, callback);
-    site_config.add_task_boxed(Box::new(task))
+    site_config.add_task_opaque(task)
 }

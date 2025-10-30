@@ -91,3 +91,15 @@ path = "examples/pages.rs"
 [[example]]
 name = "live-reload"
 path = "examples/live-reload.rs"
+
+[[example]]
+name = "simple-ssg"
+path = "examples/simple-ssg.rs"
+
+[[example]]
+name = "styles-bundle"
+path = "examples/styles-bundle.rs"
+
+[[example]]
+name = "script-bundle"
+path = "examples/script-bundle.rs"

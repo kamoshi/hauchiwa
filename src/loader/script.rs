@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{
-    loader::{File, FileLoaderTask, Runtime},
+    loader::{BundleLoaderTask, File, FileLoaderTask, Runtime},
     task::Handle,
     SiteConfig,
 };
@@ -30,7 +30,21 @@ pub fn glob_scripts<G: Send + Sync + 'static>(
         let path = rt.store(&data, "js")?;
         Ok(Script { path })
     });
-    site_config.add_task_boxed(Box::new(task))
+    site_config.add_task_opaque(task)
+}
+
+pub fn build_script<G: Send + Sync + 'static>(
+    site_config: &mut SiteConfig<G>,
+    entry_point: &'static str,
+    watch_glob: &'static str,
+) -> Handle<Script> {
+    let task = BundleLoaderTask::new(entry_point, watch_glob, move |_globals, file| {
+        let data = compile_esbuild(&file.path)?;
+        let rt = Runtime;
+        let path = rt.store(&data, "js")?;
+        Ok(Script { path })
+    });
+    site_config.add_task_opaque(task)
 }
 
 fn compile_esbuild(file: &Utf8Path) -> std::io::Result<Vec<u8>> {

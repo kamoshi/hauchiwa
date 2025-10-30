@@ -8,7 +8,7 @@ mod content;
 mod images;
 mod script;
 #[cfg(feature = "styles")]
-mod styles;
+pub mod styles;
 mod svelte;
 
 use std::{
@@ -34,10 +34,10 @@ pub use asyncrt::async_asset;
 pub use content::{Content, glob_content, json, yaml};
 #[cfg(feature = "images")]
 pub use images::{Image, glob_images};
-pub use script::{Script, glob_scripts};
+pub use script::{build_script, glob_scripts, Script};
 #[cfg(feature = "styles")]
-pub use styles::{Style, glob_styles};
-pub use svelte::{Svelte, glob_svelte};
+pub use styles::{build_style, glob_styles, Style};
+pub use svelte::{build_svelte, glob_svelte, Svelte};
 
 /// Build execution context, providing facilities for storing artifacts in a
 /// content-addressed cache and output directory.
@@ -131,6 +131,76 @@ where
         }
     }
 }
+
+pub struct BundleLoaderTask<G, R>
+where
+    G: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+{
+    entry_point: Utf8PathBuf,
+    watch_glob: &'static str,
+    pattern: Pattern,
+    callback: Box<dyn Fn(&Globals<G>, File<Vec<u8>>) -> anyhow::Result<R> + Send + Sync>,
+    is_dirty: bool,
+    _phantom: std::marker::PhantomData<G>,
+}
+
+impl<G, R> BundleLoaderTask<G, R>
+where
+    G: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+{
+    pub fn new<F>(
+        entry_point: &'static str,
+        watch_glob: &'static str,
+        callback: F,
+    ) -> Self
+    where
+        F: Fn(&Globals<G>, File<Vec<u8>>) -> anyhow::Result<R> + Send + Sync + 'static,
+    {
+        let pattern = Pattern::new(watch_glob).unwrap();
+
+        Self {
+            entry_point: Utf8PathBuf::from(entry_point),
+            watch_glob,
+            pattern,
+            callback: Box::new(callback),
+            is_dirty: true,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<G, R> Task<G> for BundleLoaderTask<G, R>
+where
+    G: Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+{
+    fn dependencies(&self) -> Vec<NodeIndex> {
+        vec![]
+    }
+
+    fn execute(&self, globals: &Globals<G>, _dependencies: &[Dynamic]) -> Dynamic {
+        let path = &self.entry_point;
+        let data = fs::read(path).expect("Unable to read file");
+        let file = File {
+            path: path.clone(),
+            metadata: data,
+        };
+        let result = (self.callback)(globals, file).expect("File processing failed");
+        Arc::new(result)
+    }
+
+    fn on_file_change(&mut self, path: &Utf8Path) -> bool {
+        if self.pattern.matches_path(path.as_std_path()) {
+            self.is_dirty = true;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 
 /// storage, enabling immutability and reproducibility guarantees through
 /// content hashing.

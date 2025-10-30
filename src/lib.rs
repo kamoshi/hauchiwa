@@ -5,6 +5,8 @@ pub mod loader;
 pub mod page;
 pub mod task;
 
+pub use camino;
+
 use std::{
     any::{Any, TypeId},
     fmt::Debug,
@@ -178,15 +180,15 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
             callback,
             _phantom: std::marker::PhantomData,
         };
-        self.add_task_boxed(Box::new(task))
+        self.add_task_opaque(task)
     }
 
-    pub fn add_task_boxed<O: 'static>(
+    pub fn add_task_opaque<O: 'static, T: Task<G> + 'static>(
         &mut self,
-        task: Box<dyn Task<G>>,
+        task: T,
     ) -> task::Handle<O> {
         let dependencies = task.dependencies();
-        let index = self.graph.add_node(task);
+        let index = self.graph.add_node(Box::new(task));
 
         for dependency in dependencies {
             self.graph.add_edge(dependency, index, ());
