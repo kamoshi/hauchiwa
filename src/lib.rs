@@ -1,20 +1,16 @@
-mod error;
-mod gitmap;
+pub mod error;
 pub mod executor;
+mod gitmap;
 pub mod loader;
 pub mod page;
 pub mod task;
 
 pub use camino;
 
-use std::{
-    any::Any,
-    fmt::Debug,
-    sync::Arc,
-};
+use std::{any::Any, fmt::Debug, sync::Arc};
 
 use camino::Utf8PathBuf;
-use petgraph::{graph::NodeIndex, Graph};
+use petgraph::{Graph, graph::NodeIndex};
 use task::TaskDependencies;
 
 /// 32 bytes length generic hash
@@ -137,22 +133,17 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
         }
     }
 
-    pub fn add_task<D, F, O>(
-        &mut self,
-        dependencies: D,
-        callback: F,
-    ) -> task::Handle<O>
+    pub fn add_task<D, F, R>(&mut self, dependencies: D, callback: F) -> task::Handle<R>
     where
         D: TaskDependencies + Send + Sync + 'static,
-        F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> O + Send + Sync + 'static,
-        O: Clone + Send + Sync + 'static,
+        F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> R + Send + Sync + 'static,
+        R: Clone + Send + Sync + 'static,
     {
-        let task = TaskNode {
+        self.add_task_opaque(TaskNode {
             dependencies,
             callback,
             _phantom: std::marker::PhantomData,
-        };
-        self.add_task_opaque(task)
+        })
     }
 
     pub fn add_task_opaque<O: 'static, T: Task<G> + 'static>(

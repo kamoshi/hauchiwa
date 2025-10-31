@@ -1,45 +1,35 @@
 use crate::{
-    loader::{glob::GlobLoaderTask, Runtime},
-    task::{Handle, },
     SiteConfig,
+    loader::{Runtime, glob::GlobLoaderTask},
+    task::Handle,
 };
 use camino::{Utf8Path, Utf8PathBuf};
-use std::{collections::HashMap, process::{Command, Stdio}};
+use std::process::{Command, Stdio};
 
 #[derive(Clone)]
-pub struct Script {
+pub struct JS {
     pub path: Utf8PathBuf,
-}
-
-#[derive(Clone)]
-pub struct Scripts {
-    map: HashMap<Utf8PathBuf, Script>,
-}
-
-impl Scripts {
-    pub fn get(&self, path: impl AsRef<Utf8Path>) -> Option<&Script> {
-        self.map.get(path.as_ref())
-    }
 }
 
 pub fn build_scripts<G: Send + Sync + 'static>(
     site_config: &mut SiteConfig<G>,
-    entry_point_glob: &'static str,
-    watch_glob: &'static str,
-) -> Handle<Scripts> {
-    let scripts_vec_handle: Handle<Vec<(Utf8PathBuf, Script)>> = {
-        let task = GlobLoaderTask::new(entry_point_glob, watch_glob, move |_globals, file| {
+    glob_entry: &'static str,
+    glob_watch: &'static str,
+) -> Handle<super::Registry<JS>> {
+    let scripts_vec_handle = site_config.add_task_opaque(GlobLoaderTask::new(
+        glob_entry,
+        glob_watch,
+        move |_, file| {
             let data = compile_esbuild(&file.path)?;
             let rt = Runtime;
             let path = rt.store(&data, "js")?;
-            Ok((file.path, Script { path }))
-        });
-        site_config.add_task_opaque(task)
-    };
+            Ok((file.path, JS { path }))
+        },
+    ));
 
     site_config.add_task(
         (scripts_vec_handle,),
-        |_, (scripts_vec,): (&Vec<(Utf8PathBuf, Script)>,)| Scripts {
+        |_, (scripts_vec,): (&Vec<(Utf8PathBuf, JS)>,)| super::Registry {
             map: scripts_vec.iter().cloned().collect(),
         },
     )

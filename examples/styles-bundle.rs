@@ -2,7 +2,7 @@
 
 use hauchiwa::{
     executor,
-    loader::styles::{build_styles, Styles},
+    loader::styles::{Registry, build_styles},
     page::Page,
     {Site, SiteConfig},
 };
@@ -16,7 +16,7 @@ fn main() {
         "examples/styles_bundle_data/**/*.scss",
     );
 
-    config.add_task((styles_handle,), |_, (styles,): (&Styles,)| {
+    config.add_task((styles_handle,), |_, (styles,): (&Registry,)| {
         let style = styles
             .get("examples/styles_bundle_data/main.scss")
             .unwrap();

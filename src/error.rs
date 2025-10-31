@@ -2,6 +2,7 @@ use std::sync::Arc;
 #[cfg(feature = "reload")]
 use std::sync::mpsc::{RecvError, SendError};
 
+pub use anyhow::Error as RuntimeError;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone)]

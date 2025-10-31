@@ -1,34 +1,40 @@
-#![cfg(not(doctest))]
-
 mod assets;
 #[cfg(feature = "asyncrt")]
 mod asyncrt;
 mod content;
+pub mod glob;
 #[cfg(feature = "images")]
 mod images;
-pub mod glob;
 mod script;
 #[cfg(feature = "styles")]
 pub mod styles;
 mod svelte;
 
-use crate::{
-    error::{BuildError},
-    Hash32,
-};
-use camino::{Utf8Path, Utf8PathBuf};
-use std::fs;
-
 pub use assets::glob_assets;
 #[cfg(feature = "asyncrt")]
 pub use asyncrt::async_asset;
-pub use content::{glob_content, json, yaml, Content};
+pub use content::{Content, glob_content, json, yaml};
 #[cfg(feature = "images")]
-pub use images::{glob_images, Image};
-pub use script::{build_scripts, Script, Scripts};
+pub use images::{Image, glob_images};
+pub use script::{JS, build_scripts};
 #[cfg(feature = "styles")]
-pub use styles::{build_styles, Style, Styles};
-pub use svelte::{build_svelte, glob_svelte, Svelte};
+pub use styles::{CSS, build_styles};
+pub use svelte::{Svelte, build_svelte};
+
+use crate::{Hash32, error::BuildError};
+use camino::{Utf8Path, Utf8PathBuf};
+use std::{collections::HashMap, fs};
+
+#[derive(Clone)]
+pub struct Registry<T: Clone> {
+    map: HashMap<camino::Utf8PathBuf, T>,
+}
+
+impl<T: Clone> Registry<T> {
+    pub fn get(&self, path: impl AsRef<Utf8Path>) -> Option<&T> {
+        self.map.get(path.as_ref())
+    }
+}
 
 /// Build execution context, providing facilities for storing artifacts in a
 /// content-addressed cache and output directory.

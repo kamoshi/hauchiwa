@@ -2,7 +2,7 @@
 
 use hauchiwa::{
     executor,
-    loader::{build_scripts, Scripts},
+    loader::{Registry, build_scripts},
     page::Page,
     {Site, SiteConfig},
 };
@@ -16,7 +16,7 @@ fn main() {
         "examples/script_bundle_data/**/*.js",
     );
 
-    config.add_task((scripts_handle,), |_, (scripts,): (&Scripts,)| {
+    config.add_task((scripts_handle,), |_, (scripts,): (&Registry,)| {
         let script = scripts
             .get("examples/script_bundle_data/main.js")
             .unwrap();
