@@ -1,11 +1,10 @@
-use camino::Utf8PathBuf;
-use image::{EncodableLayout, io::Reader};
-use std::io::Cursor;
-use webp;
+use camino::{Utf8Path, Utf8PathBuf};
+use std::fs;
 
 use crate::{
-    SiteConfig,
-    loader::{File, Runtime, glob::GlobRegistryTask},
+    Hash32, SiteConfig,
+    error::BuildError,
+    loader::{File, Registry, glob::GlobRegistryTask},
     task::Handle,
 };
 
@@ -16,24 +15,57 @@ pub struct Image {
 
 pub fn glob_images<G: Send + Sync + 'static>(
     site_config: &mut SiteConfig<G>,
-    path_base: &'static str,
     path_glob: &'static str,
-) -> Handle<Vec<Image>> {
+) -> Handle<Registry<Image>> {
     site_config.add_task_opaque(GlobRegistryTask::new(
-        path_base,
         path_glob,
-        move |_globals, file: File<Vec<u8>>| {
-            let mut webp_bytes: Vec<u8> = Vec::new();
-            let image = Reader::new(Cursor::new(&file.metadata))
-                .with_guessed_format()?
-                .decode()?;
-            let encoder = webp::Encoder::from_image(&image).unwrap();
-            let webp = encoder.encode(80.0);
-            webp_bytes.extend_from_slice(webp.as_bytes());
-
-            let rt = Runtime;
-            let path = rt.store(&webp_bytes, "webp")?;
+        path_glob,
+        move |_, file: File<Vec<u8>>| {
+            let hash = Hash32::hash_file(&file.path)?;
+            let path = build_image(hash, &file.path)?;
             Ok((file.path, Image { path }))
         },
     ))
+}
+
+fn process_image(buffer: &[u8]) -> image::ImageResult<Vec<u8>> {
+    let img = image::load_from_memory(buffer)?;
+    let w = img.width();
+    let h = img.height();
+
+    let mut out = Vec::new();
+    let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
+
+    encoder.encode(&img.to_rgba8(), w, h, image::ExtendedColorType::Rgba8)?;
+
+    Ok(out)
+}
+
+fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, BuildError> {
+    let hash = hash.to_hex();
+    let path_root = Utf8Path::new("/hash/img/")
+        .join(&hash)
+        .with_extension("webp");
+    let path_hash = Utf8Path::new(".cache/hash/img/")
+        .join(&hash)
+        .with_extension("webp");
+    let path_dist = Utf8Path::new("dist/hash/img/")
+        .join(&hash)
+        .with_extension("webp");
+
+    // If this hash exists it means the work is already done.
+    if !path_hash.exists() {
+        let buffer = fs::read(file)?;
+        let buffer = process_image(&buffer) //
+            .map_err(|err| BuildError::Other(err.into()))?;
+
+        fs::create_dir_all(".cache/hash/img/")?;
+        fs::write(&path_hash, buffer)?;
+    }
+
+    let dir = path_dist.parent().unwrap_or(&path_dist);
+    fs::create_dir_all(dir)?;
+    fs::copy(&path_hash, &path_dist)?;
+
+    Ok(path_root)
 }

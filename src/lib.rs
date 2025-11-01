@@ -1,6 +1,6 @@
 pub mod error;
 pub mod executor;
-mod gitmap;
+pub mod gitmap;
 pub mod loader;
 pub mod page;
 pub mod task;
@@ -32,6 +32,13 @@ impl Hash32 {
             .update(buffer.as_ref())
             .finalize()
             .into()
+    }
+
+    fn hash_file(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
+        Ok(blake3::Hasher::new()
+            .update_mmap_rayon(path)?
+            .finalize()
+            .into())
     }
 
     fn to_hex(self) -> String {
