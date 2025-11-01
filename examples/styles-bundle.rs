@@ -1,10 +1,9 @@
 //! An example that demonstrates how to bundle SCSS files.
 
 use hauchiwa::{
-    executor,
-    loader::styles::{Registry, build_styles},
+    Site, SiteConfig, executor,
+    loader::{CSS, Registry, styles::build_styles},
     page::Page,
-    {Site, SiteConfig},
 };
 
 fn main() {
@@ -16,7 +15,7 @@ fn main() {
         "examples/styles_bundle_data/**/*.scss",
     );
 
-    config.add_task((styles_handle,), |_, (styles,): (&Registry,)| {
+    config.add_task((styles_handle,), |_, (styles,): (&Registry<CSS>,)| {
         let style = styles
             .get("examples/styles_bundle_data/main.scss")
             .unwrap();

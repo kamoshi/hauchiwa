@@ -71,13 +71,13 @@ macro_rules! impl_deps {
                 vec![$($T.index),*]
             }
 
-
-
             fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> Self::Output<'a> {
                 let mut iter = outputs.iter();
                 ($({
                     let out = iter.next().unwrap();
-                    out.downcast_ref::<$T>().unwrap()
+                    out.downcast_ref::<$T>().unwrap_or_else(|| {
+                        panic!("Expected {} but got something else", std::any::type_name::<$T>())
+                    })
                 },)*)
             }
         }

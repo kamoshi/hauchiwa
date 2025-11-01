@@ -1,30 +1,33 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::{Pattern, glob};
 use petgraph::graph::NodeIndex;
-use std::{fs, sync::Arc};
+use std::{collections::HashMap, fs, sync::Arc};
 
-use crate::{Globals, Task, task::Dynamic};
+use crate::{Globals, Task, loader::Registry, task::Dynamic};
 
-pub struct GlobLoaderTask<G, R>
+pub struct GlobRegistryTask<G, R>
 where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
     glob_entry: &'static str,
     glob_watch: Pattern,
-    callback:
-        Box<dyn Fn(&Globals<G>, crate::loader::File<Vec<u8>>) -> anyhow::Result<R> + Send + Sync>,
+    callback: Box<
+        dyn Fn(&Globals<G>, crate::loader::File<Vec<u8>>) -> anyhow::Result<(Utf8PathBuf, R)>
+            + Send
+            + Sync,
+    >,
     is_dirty: bool,
 }
 
-impl<G, R> GlobLoaderTask<G, R>
+impl<G, R> GlobRegistryTask<G, R>
 where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
     pub fn new<F>(glob_entry: &'static str, glob_watch: &'static str, callback: F) -> Self
     where
-        F: Fn(&Globals<G>, crate::loader::File<Vec<u8>>) -> anyhow::Result<R>
+        F: Fn(&Globals<G>, crate::loader::File<Vec<u8>>) -> anyhow::Result<(Utf8PathBuf, R)>
             + Send
             + Sync
             + 'static,
@@ -38,7 +41,7 @@ where
     }
 }
 
-impl<G, R> Task<G> for GlobLoaderTask<G, R>
+impl<G, R> Task<G> for GlobRegistryTask<G, R>
 where
     G: Send + Sync + 'static,
     R: Clone + Send + Sync + 'static,
@@ -59,6 +62,7 @@ where
                         path,
                         metadata: data,
                     };
+
                     let result = (self.callback)(globals, file).expect("File processing failed");
                     results.push(result);
                 }
@@ -66,7 +70,10 @@ where
             }
         }
 
-        Arc::new(results)
+        let registry = HashMap::from_iter(results.iter().cloned());
+        let registry = Registry { map: registry };
+
+        Arc::new(registry)
     }
 
     fn on_file_change(&mut self, path: &Utf8Path) -> bool {

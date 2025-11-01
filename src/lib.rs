@@ -76,6 +76,24 @@ pub struct Globals<G: Send + Sync = ()> {
     pub data: G,
 }
 
+impl<G: Send + Sync> Globals<G> {
+    /// If live reload is enabled, returns an inline JavaScript snippet to
+    /// establish a WebSocket connection for hot page refresh during
+    /// development.
+    pub fn get_refresh_script(&self) -> Option<String> {
+        self.port.map(|port| {
+            format!(
+                r#"
+const socket = new WebSocket("ws://localhost:{port}");
+socket.addEventListener("message", event => {{
+    window.location.reload();
+}});
+"#
+            )
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct FileMetadata {
     pub file: Utf8PathBuf,
@@ -146,7 +164,7 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
         })
     }
 
-    pub fn add_task_opaque<O: 'static, T: Task<G> + 'static>(
+    pub(crate) fn add_task_opaque<O: 'static, T: Task<G> + 'static>(
         &mut self,
         task: T,
     ) -> task::Handle<O> {

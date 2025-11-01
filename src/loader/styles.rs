@@ -1,11 +1,10 @@
 use crate::{
     SiteConfig,
-    loader::{Runtime, glob::GlobLoaderTask},
+    loader::{Runtime, glob::GlobRegistryTask},
     task::Handle,
 };
-use camino::Utf8PathBuf;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CSS {
     pub path: camino::Utf8PathBuf,
 }
@@ -15,7 +14,7 @@ pub fn build_styles<G: Send + Sync + 'static>(
     glob_entry: &'static str,
     glob_watch: &'static str,
 ) -> Handle<super::Registry<CSS>> {
-    let handle_styles = site_config.add_task_opaque(GlobLoaderTask::new(
+    site_config.add_task_opaque(GlobRegistryTask::new(
         glob_entry,
         glob_watch,
         move |_, file| {
@@ -24,12 +23,5 @@ pub fn build_styles<G: Send + Sync + 'static>(
             let path = rt.store(data.as_bytes(), "css")?;
             Ok((file.path, CSS { path }))
         },
-    ));
-
-    site_config.add_task(
-        (handle_styles,),
-        |_, (styles_vec,): (&Vec<(Utf8PathBuf, CSS)>,)| super::Registry {
-            map: styles_vec.iter().cloned().collect(),
-        },
-    )
+    ))
 }

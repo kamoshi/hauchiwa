@@ -1,10 +1,9 @@
 //! An example that demonstrates how to bundle JavaScript files.
 
 use hauchiwa::{
-    executor,
-    loader::{Registry, build_scripts},
+    Site, SiteConfig, executor,
+    loader::{JS, Registry, build_scripts},
     page::Page,
-    {Site, SiteConfig},
 };
 
 fn main() {
@@ -16,7 +15,7 @@ fn main() {
         "examples/script_bundle_data/**/*.js",
     );
 
-    config.add_task((scripts_handle,), |_, (scripts,): (&Registry,)| {
+    config.add_task((scripts_handle,), |_, (scripts,): (&Registry<JS>,)| {
         let script = scripts
             .get("examples/script_bundle_data/main.js")
             .unwrap();

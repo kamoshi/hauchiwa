@@ -4,7 +4,7 @@
 use hauchiwa::{
     camino::Utf8PathBuf,
     executor,
-    loader::{File, FileLoaderTask},
+    loader::File,
     page::Page,
     {Site, SiteConfig},
 };
@@ -66,7 +66,10 @@ fn main() {
             .iter()
             .map(|post| Page {
                 url: post.url.clone(),
-                content: format!("<h1>{}</h1><pre><code>{}</code></pre>", post.title, post.content),
+                content: format!(
+                    "<h1>{}</h1><pre><code>{}</code></pre>",
+                    post.title, post.content
+                ),
             })
             .collect::<Vec<_>>()
     });
@@ -79,10 +82,7 @@ fn main() {
 
         Page {
             url: "/index.html".to_string(),
-            content: format!(
-                "<h1>Posts</h1><ul>{}</ul>",
-                post_links
-            ),
+            content: format!("<h1>Posts</h1><ul>{}</ul>", post_links),
         }
     });
 
