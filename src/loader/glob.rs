@@ -17,7 +17,6 @@ where
             + Send
             + Sync,
     >,
-    is_dirty: bool,
 }
 
 impl<G, R> GlobRegistryTask<G, R>
@@ -40,7 +39,6 @@ where
                 .collect::<Result<_, _>>()
                 .unwrap(),
             callback: Box::new(callback),
-            is_dirty: true,
         }
     }
 }
@@ -50,6 +48,10 @@ where
     G: Send + Sync + 'static,
     R: Clone + Send + Sync + 'static,
 {
+    fn get_name(&self) -> String {
+        self.glob_entry.join(", ")
+    }
+
     fn dependencies(&self) -> Vec<NodeIndex> {
         vec![]
     }

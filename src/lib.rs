@@ -8,7 +8,11 @@ mod utils;
 
 pub use camino;
 
-use std::{any::Any, fmt::Debug, sync::Arc};
+use std::{
+    any::{Any, type_name},
+    fmt::Debug,
+    sync::Arc,
+};
 
 use camino::Utf8PathBuf;
 use petgraph::{Graph, graph::NodeIndex};
@@ -110,6 +114,7 @@ pub struct FileMetadata {
 }
 
 pub trait Task<G: Send + Sync = ()>: Send + Sync {
+    fn get_name(&self) -> String;
     fn dependencies(&self) -> Vec<NodeIndex>;
     fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Dynamic;
     fn on_file_change(&mut self, _path: &camino::Utf8Path) -> bool {
@@ -124,6 +129,7 @@ where
     F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> O + Send + Sync,
     O: Send + Sync + 'static,
 {
+    name: &'static str,
     dependencies: D,
     callback: F,
     _phantom: std::marker::PhantomData<G>,
@@ -136,6 +142,10 @@ where
     F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> O + Send + Sync + 'static,
     O: Clone + Send + Sync + 'static,
 {
+    fn get_name(&self) -> String {
+        self.name.to_string()
+    }
+
     fn dependencies(&self) -> Vec<NodeIndex> {
         self.dependencies.dependencies()
     }
@@ -166,6 +176,7 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
         R: Clone + Send + Sync + 'static,
     {
         self.add_task_opaque(TaskNode {
+            name: type_name::<F>(),
             dependencies,
             callback,
             _phantom: std::marker::PhantomData,

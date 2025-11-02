@@ -7,6 +7,7 @@ use std::{
 };
 
 use camino::Utf8Path;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use notify::RecursiveMode;
 use notify_debouncer_full::new_debouncer;
 use petgraph::graph::NodeIndex;
@@ -26,6 +27,23 @@ pub fn run_once_parallel<G: Send + Sync>(
     // We run toposort primarily to detect any cycles in the graph.
     toposort(&site.graph, None).expect("Cycle detected in task graph");
 
+    // Setup MultiProgress and the main overall progress bar
+    let mp = MultiProgress::new();
+    let total_tasks = site.graph.node_count() as u64;
+    let main_pb = mp.add(ProgressBar::new(total_tasks));
+    main_pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
+            .unwrap()
+            .progress_chars("=>-"),
+    );
+    main_pb.set_message("Building tasks...");
+
+    // We clone this style for each new spinner inside the parallel map.
+    let spinner_style = ProgressStyle::default_spinner()
+        .template("{spinner:.blue} {msg}")
+        .unwrap();
+
     while !pending_nodes.is_empty() {
         let ready_nodes: Vec<NodeIndex> = pending_nodes
             .iter()
@@ -40,20 +58,36 @@ pub fn run_once_parallel<G: Send + Sync>(
 
         if ready_nodes.is_empty() && !pending_nodes.is_empty() {
             // This should not happen in a valid DAG.
+            main_pb.abandon_with_message("Execution deadlock!");
             panic!("Execution deadlock: no tasks are ready to run, but tasks are still pending.");
         }
 
         let new_results: Vec<(NodeIndex, Dynamic)> = ready_nodes
             .par_iter()
             .map(|&node_index| {
+                // Create a new spinner for this specific task
+                let task_pb = mp.add(ProgressBar::new_spinner());
+                task_pb.set_style(spinner_style.clone());
+                task_pb.enable_steady_tick(Duration::from_millis(100));
+
                 let task = &site.graph[node_index];
+
+                // Set the spinner's message to the task name
+                task_pb.set_message(format!("Running: {}", task.get_name()));
+
+                // Grab the inputs for this task
                 let inputs = task
                     .dependencies()
                     .iter()
                     .map(|dep_index| cache.get(dep_index).unwrap().clone())
                     .collect::<Vec<_>>();
 
+                // This is where the actual work happens
                 let output = task.execute(globals, &inputs);
+
+                // Task is finished, remove its spinner
+                task_pb.finish_and_clear();
+
                 (node_index, output)
             })
             .collect();
@@ -61,8 +95,14 @@ pub fn run_once_parallel<G: Send + Sync>(
         for (node_index, output) in new_results {
             cache.insert(node_index, output);
             pending_nodes.remove(&node_index);
+
+            // Increment the main overall progress bar
+            main_pb.inc(1);
         }
     }
+
+    // Mark the main progress bar as complete
+    main_pb.finish_with_message("Build complete!");
 
     let pages = collect_pages(&cache);
     (cache, pages)
