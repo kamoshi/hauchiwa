@@ -197,3 +197,22 @@ impl<G: Send + Sync> Site<G> {
         }
     }
 }
+
+/// Usage:
+/// ```rust
+/// task!(cfg, |ctx, a, b: &T, c| { ... })
+/// ```
+/// Types (when present) are enforced via body-local assertions, not in the param tuple.
+#[macro_export]
+macro_rules! task {
+    ($config:expr, |$ctx:pat_param $(, $($dep:ident $( : $ty:ty )? ),* )? | $body:block) => {
+        $config.add_task(
+            ( $( $($dep),* )? ),
+            |$ctx, ( $( $($dep),* )? )| {
+                // For each `ident: Ty`, emit: `let _: Ty = ident;`
+                $( $( $( let _: $ty = $dep; )? )* )?
+                $body
+            }
+        )
+    };
+}

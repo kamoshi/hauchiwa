@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     net::{TcpListener, TcpStream},
-    sync::{mpsc::Sender, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc::Sender},
     thread::JoinHandle,
     time::Duration,
 };
@@ -9,11 +9,64 @@ use std::{
 use camino::Utf8Path;
 use notify::RecursiveMode;
 use notify_debouncer_full::new_debouncer;
+use petgraph::graph::NodeIndex;
 use petgraph::{algo::toposort, visit::Dfs};
-use petgraph::{graph::NodeIndex, Direction};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use tungstenite::WebSocket;
 
-use crate::{page::Page, task::Dynamic, Globals, Mode, Site};
+use crate::{Globals, Mode, Site, page::Page, task::Dynamic};
+
+pub fn run_once_parallel<G: Send + Sync>(
+    site: &mut Site<G>,
+    globals: &Globals<G>,
+) -> (HashMap<NodeIndex, Dynamic>, Vec<Page>) {
+    let mut cache: HashMap<NodeIndex, Dynamic> = HashMap::new();
+    let mut pending_nodes: HashSet<NodeIndex> = site.graph.node_indices().collect();
+
+    // We run toposort primarily to detect any cycles in the graph.
+    toposort(&site.graph, None).expect("Cycle detected in task graph");
+
+    while !pending_nodes.is_empty() {
+        let ready_nodes: Vec<NodeIndex> = pending_nodes
+            .iter()
+            .filter(|&&node_index| {
+                site.graph[node_index]
+                    .dependencies()
+                    .iter()
+                    .all(|dep| cache.contains_key(dep))
+            })
+            .cloned()
+            .collect();
+
+        if ready_nodes.is_empty() && !pending_nodes.is_empty() {
+            // This should not happen in a valid DAG.
+            panic!("Execution deadlock: no tasks are ready to run, but tasks are still pending.");
+        }
+
+        let new_results: Vec<(NodeIndex, Dynamic)> = ready_nodes
+            .par_iter()
+            .map(|&node_index| {
+                let task = &site.graph[node_index];
+                let inputs = task
+                    .dependencies()
+                    .iter()
+                    .map(|dep_index| cache.get(dep_index).unwrap().clone())
+                    .collect::<Vec<_>>();
+
+                let output = task.execute(globals, &inputs);
+                (node_index, output)
+            })
+            .collect();
+
+        for (node_index, output) in new_results {
+            cache.insert(node_index, output);
+            pending_nodes.remove(&node_index);
+        }
+    }
+
+    let pages = collect_pages(&cache);
+    (cache, pages)
+}
 
 pub fn run_once<G: Send + Sync>(
     site: &mut Site<G>,
@@ -236,22 +289,22 @@ mod server {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use petgraph::graph::NodeIndex;
+    use std::sync::Arc;
 
     #[test]
     fn test_collect_pages() {
         let mut cache: HashMap<NodeIndex, Dynamic> = HashMap::new();
         let page1 = Page {
-            url: "/".to_string(),
+            url: "/".into(),
             content: "Home".to_string(),
         };
         let page2 = Page {
-            url: "/about".to_string(),
+            url: "/about".into(),
             content: "About".to_string(),
         };
         let page3 = Page {
-            url: "/contact".to_string(),
+            url: "/contact".into(),
             content: "Contact".to_string(),
         };
 
