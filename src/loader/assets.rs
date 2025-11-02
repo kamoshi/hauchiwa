@@ -1,22 +1,26 @@
 use crate::{
-    Globals, SiteConfig,
-    loader::{File, glob::GlobRegistryTask},
+    loader::{File, glob::GlobRegistryTask, Registry},
     task::Handle,
+    Globals, SiteConfig,
 };
 
-pub fn glob_assets<G: Send + Sync + 'static, R: Clone + Send + Sync + 'static>(
-    site_config: &mut SiteConfig<G>,
-    path_glob: &'static str,
-    callback: impl Fn(&Globals<G>, File<Vec<u8>>) -> Result<R, anyhow::Error> + Send + Sync + 'static,
-) -> Handle<super::Registry<R>> {
-    site_config.add_task_opaque(GlobRegistryTask::new(
-        vec![path_glob],
-        vec![path_glob],
-        move |ctx, file| {
-            let path = file.path.clone();
-            let res = callback(ctx, file).unwrap();
+pub fn glob_assets<
+    G: Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    F: Fn(&Globals<G>, File<Vec<u8>>) -> anyhow::Result<R> + Send + Sync + 'static,
+>(
+    config: &mut SiteConfig<G>,
+    glob: &'static str,
+    callback: F,
+) -> Handle<Registry<R>>
+where
+    R: 'static,
+{
+    let task = GlobRegistryTask::new(vec![glob], vec![glob], move |globals, file| {
+        let path = file.path.clone();
+        let result = callback(globals, file)?;
+        Ok((path, result))
+    });
 
-            Ok((path, res))
-        },
-    ))
+    config.add_task_opaque(task)
 }

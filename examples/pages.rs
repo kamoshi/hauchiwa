@@ -8,18 +8,18 @@ fn main() {
     let mut config = SiteConfig::new();
 
     config.add_task((), |_, _| Page {
-        url: "/".to_string(),
+        url: "/".into(),
         content: "<h1>Hello, world!</h1>".to_string(),
     });
 
     config.add_task((), |_, _| {
         vec![
             Page {
-                url: "/about".to_string(),
+                url: "/about".into(),
                 content: "<h1>About us</h1>".to_string(),
             },
             Page {
-                url: "/contact".to_string(),
+                url: "/contact".into(),
                 content: "<h1>Contact us</h1>".to_string(),
             },
         ]

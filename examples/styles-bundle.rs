@@ -20,7 +20,7 @@ fn main() {
             .get("examples/styles_bundle_data/main.scss")
             .unwrap();
         Page {
-            url: "/".to_string(),
+            url: "/".into(),
             content: format!(
                 "<html><head><link rel=\"stylesheet\" href=\"{}\"></head><body><h1>Hello, world!</h1></body></html>",
                 style.path

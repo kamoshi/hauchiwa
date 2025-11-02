@@ -16,7 +16,7 @@ fn main() {
         }
         fs::write("dist/index.html", &content).unwrap();
         Page {
-            url: "/".to_string(),
+            url: "/".into(),
             content,
         }
     });

@@ -3,7 +3,7 @@ use glob::{Pattern, glob};
 use petgraph::graph::NodeIndex;
 use std::{collections::HashMap, fs, sync::Arc};
 
-use crate::{Globals, Task, loader::Registry, task::Dynamic};
+use crate::{loader::Registry, task::Dynamic, Globals, Task};
 
 pub struct GlobRegistryTask<G, R>
 where
@@ -12,11 +12,25 @@ where
 {
     glob_entry: Vec<&'static str>,
     glob_watch: Vec<Pattern>,
-    callback: Box<
+    callback: Arc<
         dyn Fn(&Globals<G>, crate::loader::File<Vec<u8>>) -> anyhow::Result<(Utf8PathBuf, R)>
             + Send
             + Sync,
     >,
+}
+
+impl<G, R> Clone for GlobRegistryTask<G, R>
+where
+    G: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            glob_entry: self.glob_entry.clone(),
+            glob_watch: self.glob_watch.clone(),
+            callback: self.callback.clone(),
+        }
+    }
 }
 
 impl<G, R> GlobRegistryTask<G, R>
@@ -38,7 +52,7 @@ where
                 .map(Pattern::new)
                 .collect::<Result<_, _>>()
                 .unwrap(),
-            callback: Box::new(callback),
+            callback: Arc::new(callback),
         }
     }
 }
@@ -85,7 +99,11 @@ where
         Arc::new(registry)
     }
 
-    fn on_file_change(&mut self, path: &Utf8Path) -> bool {
+    fn on_file_change(&mut self, _path: &Utf8Path) -> bool {
         true
+    }
+
+    fn clone_box(&self) -> Box<dyn Task<G>> {
+        Box::new((*self).clone())
     }
 }

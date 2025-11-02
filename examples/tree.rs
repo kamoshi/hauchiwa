@@ -1,4 +1,4 @@
-use hauchiwa::{executor, task::Handle, Site, SiteConfig};
+use hauchiwa::{executor, Site, SiteConfig};
 
 fn main() {
     // 1. Initialize a new SiteConfig. This holds the task graph.

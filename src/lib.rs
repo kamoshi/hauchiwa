@@ -120,6 +120,7 @@ pub trait Task<G: Send + Sync = ()>: Send + Sync {
     fn on_file_change(&mut self, _path: &camino::Utf8Path) -> bool {
         false
     }
+    fn clone_box(&self) -> Box<dyn Task<G>>;
 }
 
 struct TaskNode<G, D, F, O>
@@ -131,14 +132,31 @@ where
 {
     name: &'static str,
     dependencies: D,
-    callback: F,
-    _phantom: std::marker::PhantomData<G>,
+    callback: Arc<F>,
+    _phantom: std::marker::PhantomData<(G, O)>,
+}
+
+impl<G, D, F, O> Clone for TaskNode<G, D, F, O>
+where
+    G: Send + Sync,
+    D: TaskDependencies + Clone,
+    F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> O + Send + Sync,
+    O: Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name,
+            dependencies: self.dependencies.clone(),
+            callback: self.callback.clone(),
+            _phantom: std::marker::PhantomData,
+        }
+    }
 }
 
 impl<G, D, F, O> Task<G> for TaskNode<G, D, F, O>
 where
     G: Send + Sync + 'static,
-    D: TaskDependencies + Send + Sync,
+    D: TaskDependencies + Clone + Send + Sync + 'static,
     F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> O + Send + Sync + 'static,
     O: Clone + Send + Sync + 'static,
 {
@@ -154,6 +172,10 @@ where
         let dependencies = self.dependencies.resolve(dependencies);
         let output = (self.callback)(globals, dependencies);
         Arc::new(output)
+    }
+
+    fn clone_box(&self) -> Box<dyn Task<G>> {
+        Box::new((*self).clone())
     }
 }
 
@@ -171,14 +193,14 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
 
     pub fn add_task<D, F, R>(&mut self, dependencies: D, callback: F) -> task::Handle<R>
     where
-        D: TaskDependencies + Send + Sync + 'static,
+        D: TaskDependencies + Clone + Send + Sync + 'static,
         F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> R + Send + Sync + 'static,
         R: Clone + Send + Sync + 'static,
     {
         self.add_task_opaque(TaskNode {
             name: type_name::<F>(),
             dependencies,
-            callback,
+            callback: Arc::new(callback),
             _phantom: std::marker::PhantomData,
         })
     }
@@ -202,7 +224,7 @@ pub struct Site<G: Send + Sync = ()> {
     pub graph: Graph<Box<dyn Task<G>>, ()>,
 }
 
-impl<G: Send + Sync> Site<G> {
+impl<G: Send + Sync + Clone + 'static> Site<G> {
     pub fn new(config: SiteConfig<G>) -> Self {
         Self {
             graph: config.graph,
@@ -217,22 +239,40 @@ impl<G: Send + Sync> Site<G> {
             data,
         };
 
-        utils::clear_dist();
-        utils::clone_static();
+        utils::clear_dist().expect("Failed to clear dist directory");
+        utils::clone_static().expect("Failed to clone static directory");
 
         let (_, pages) = crate::executor::run_once_parallel(self, &globals);
 
-        crate::page::save_pages_to_dist(&pages);
+        crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
     }
 
-    pub fn watch(&self, data: G) {
-        todo!()
+    pub fn watch(&mut self, data: G) {
+        executor::watch(self, data);
     }
 }
 
 /// Usage:
-/// ```rust
-/// task!(cfg, |ctx, a, b: &T, c| { ... })
+/// ```rust,ignore
+/// use hauchiwa::task;
+/// # use hauchiwa::Globals;
+/// # struct Cfg;
+/// # impl Cfg {
+/// #     fn add_task<D, F, R>(&self, dependencies: D, callback: F) -> R
+/// #     where
+/// #         F: for<'a> Fn(&Globals<()>, D::Output<'a>) -> R,
+/// #         D: hauchiwa::task::TaskDependencies,
+/// #     {
+/// #         todo!()
+/// #     }
+/// # }
+/// # let cfg = Cfg;
+/// # use hauchiwa::task::Handle;
+/// # let a = Handle::new(petgraph::graph::NodeIndex::new(0));
+/// # let b = Handle::new(petgraph::graph::NodeIndex::new(0));
+/// # let c = Handle::new(petgraph::graph::NodeIndex::new(0));
+/// # type T = ();
+/// task!(cfg, |ctx, a: &(), b: &T, c: &()| { })
 /// ```
 /// Types (when present) are enforced via body-local assertions, not in the param tuple.
 #[macro_export]

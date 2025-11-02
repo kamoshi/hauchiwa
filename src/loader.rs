@@ -1,4 +1,5 @@
-mod assets;
+pub mod assets;
+pub use assets::glob_assets;
 #[cfg(feature = "asyncrt")]
 mod asyncrt;
 mod content;
@@ -10,7 +11,6 @@ mod script;
 pub mod styles;
 mod svelte;
 
-pub use assets::glob_assets;
 #[cfg(feature = "asyncrt")]
 pub use asyncrt::async_asset;
 pub use content::{Content, glob_content};
