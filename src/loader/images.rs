@@ -15,11 +15,11 @@ pub struct Image {
 
 pub fn glob_images<G: Send + Sync + 'static>(
     site_config: &mut SiteConfig<G>,
-    path_glob: &'static str,
+    path_glob: &'static [&'static str],
 ) -> Handle<Registry<Image>> {
     site_config.add_task_opaque(GlobRegistryTask::new(
-        path_glob,
-        path_glob,
+        path_glob.to_vec(),
+        path_glob.to_vec(),
         move |_, file: File<Vec<u8>>| {
             let hash = Hash32::hash_file(&file.path)?;
             let path = build_image(hash, &file.path)?;

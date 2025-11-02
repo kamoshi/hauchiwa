@@ -34,8 +34,8 @@ pub fn build_svelte<G: Send + Sync + 'static, P: Clone + DeserializeOwned + Seri
     glob_watch: &'static str,
 ) -> Handle<super::Registry<Svelte<P>>> {
     site_config.add_task_opaque(GlobRegistryTask::new(
-        glob_entry,
-        glob_watch,
+        vec![glob_entry],
+        vec![glob_watch],
         move |_, file| {
             let server = compile_svelte_server(&file.path)?;
             let anchor = Hash32::hash(&server);

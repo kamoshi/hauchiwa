@@ -1,4 +1,69 @@
+use camino::Utf8Component;
 use camino::{Utf8Path, Utf8PathBuf};
+
+/// index component from path
+pub fn to_slug(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
+    let path = path.as_ref().with_extension("");
+
+    // Check if the last component of the path is exactly "index.*"
+    if let Some("index") = path.file_name() {
+        // If it is, return its parent directory.
+        // - "foo/index.html" -> parent is "foo"
+        // - "/index.html"    -> parent is "/"
+        // - "index.html"     -> parent is "" (empty path)
+        if let Some(parent) = path.parent() {
+            return parent.to_path_buf();
+        }
+    }
+
+    // Otherwise, or if there's no parent (which is rare if file_name() matched),
+    // return the original path converted to a Utf8PathBuf.
+    path.to_path_buf()
+}
+
+/// Normalize a path, removing things like `.` and `..`.
+///
+/// CAUTION: This does not resolve symlinks (unlike
+/// [`std::fs::canonicalize`]). This may cause incorrect or surprising
+/// behavior at times. This should be used carefully. Unfortunately,
+/// [`std::fs::canonicalize`] can be hard to use correctly, since it can often
+/// fail, or on Windows returns annoying device paths.
+///
+/// Adapted from
+/// https://github.com/rust-lang/cargo/blob/f7acf448fc127df9a77c52cc2bba027790ac4931/crates/cargo-util/src/paths.rs#L76-L116
+pub fn normalize_path(path: &Utf8Path) -> Utf8PathBuf {
+    let mut components = path.components().peekable();
+    let mut ret = if let Some(c @ Utf8Component::Prefix(..)) = components.peek().cloned() {
+        components.next();
+        Utf8PathBuf::from(c.as_str())
+    } else {
+        Utf8PathBuf::new()
+    };
+
+    for component in components {
+        match component {
+            Utf8Component::Prefix(..) => unreachable!(),
+            Utf8Component::RootDir => {
+                ret.push(Utf8Component::RootDir);
+            }
+            Utf8Component::CurDir => {}
+            Utf8Component::ParentDir => {
+                if ret.ends_with(Utf8Component::ParentDir) {
+                    ret.push(Utf8Component::ParentDir);
+                } else {
+                    let popped = ret.pop();
+                    if !popped && !ret.has_root() {
+                        ret.push(Utf8Component::ParentDir);
+                    }
+                }
+            }
+            Utf8Component::Normal(c) => {
+                ret.push(c);
+            }
+        }
+    }
+    ret
+}
 
 pub fn normalize_prefixed(prefix: &str, path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     let path = path.as_ref().strip_prefix(prefix).unwrap_or(path.as_ref());

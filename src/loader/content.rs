@@ -22,8 +22,8 @@ where
     G: Send + Sync + 'static,
 {
     site_config.add_task_opaque(GlobRegistryTask::new(
-        path_glob,
-        path_glob,
+        vec![path_glob],
+        vec![path_glob],
         move |_, file: File<Vec<u8>>| {
             let data = std::str::from_utf8(&file.metadata)?;
             let (metadata, content) = parse_yaml::<T>(data).unwrap();

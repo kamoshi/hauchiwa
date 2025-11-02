@@ -10,8 +10,8 @@ pub fn glob_assets<G: Send + Sync + 'static, R: Clone + Send + Sync + 'static>(
     callback: impl Fn(&Globals<G>, File<Vec<u8>>) -> Result<R, anyhow::Error> + Send + Sync + 'static,
 ) -> Handle<super::Registry<R>> {
     site_config.add_task_opaque(GlobRegistryTask::new(
-        path_glob,
-        path_glob,
+        vec![path_glob],
+        vec![path_glob],
         move |ctx, file| {
             let path = file.path.clone();
             let res = callback(ctx, file).unwrap();

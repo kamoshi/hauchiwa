@@ -10,8 +10,8 @@ where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
-    glob_entry: &'static str,
-    glob_watch: Pattern,
+    glob_entry: Vec<&'static str>,
+    glob_watch: Vec<Pattern>,
     callback: Box<
         dyn Fn(&Globals<G>, crate::loader::File<Vec<u8>>) -> anyhow::Result<(Utf8PathBuf, R)>
             + Send
@@ -25,7 +25,7 @@ where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
-    pub fn new<F>(glob_entry: &'static str, glob_watch: &'static str, callback: F) -> Self
+    pub fn new<F>(glob_entry: Vec<&'static str>, glob_watch: Vec<&'static str>, callback: F) -> Self
     where
         F: Fn(&Globals<G>, crate::loader::File<Vec<u8>>) -> anyhow::Result<(Utf8PathBuf, R)>
             + Send
@@ -33,8 +33,12 @@ where
             + 'static,
     {
         Self {
-            glob_entry,
-            glob_watch: Pattern::new(glob_watch).unwrap(),
+            glob_entry: glob_entry.to_vec(),
+            glob_watch: glob_watch
+                .into_iter()
+                .map(Pattern::new)
+                .collect::<Result<_, _>>()
+                .unwrap(),
             callback: Box::new(callback),
             is_dirty: true,
         }
@@ -53,20 +57,23 @@ where
     fn execute(&self, globals: &Globals<G>, _: &[Dynamic]) -> Dynamic {
         let mut results = Vec::new();
 
-        for path in glob(self.glob_entry).expect("Failed to read glob pattern") {
-            match path {
-                Ok(path) => {
-                    let path = Utf8PathBuf::try_from(path).expect("Invalid UTF-8 path");
-                    let data = fs::read(&path).expect("Unable to read file");
-                    let file = crate::loader::File {
-                        path,
-                        metadata: data,
-                    };
+        for glob_entry in &self.glob_entry {
+            for path in glob(glob_entry).expect("Failed to read glob pattern") {
+                match path {
+                    Ok(path) => {
+                        let path = Utf8PathBuf::try_from(path).expect("Invalid UTF-8 path");
+                        let data = fs::read(&path).expect("Unable to read file");
+                        let file = crate::loader::File {
+                            path,
+                            metadata: data,
+                        };
 
-                    let result = (self.callback)(globals, file).expect("File processing failed");
-                    results.push(result);
+                        let result =
+                            (self.callback)(globals, file).expect("File processing failed");
+                        results.push(result);
+                    }
+                    Err(e) => eprintln!("Error processing path: {}", e),
                 }
-                Err(e) => eprintln!("Error processing path: {}", e),
             }
         }
 
@@ -77,11 +84,6 @@ where
     }
 
     fn on_file_change(&mut self, path: &Utf8Path) -> bool {
-        if self.glob_watch.matches_path(path.as_std_path()) {
-            self.is_dirty = true;
-            true
-        } else {
-            false
-        }
+        true
     }
 }

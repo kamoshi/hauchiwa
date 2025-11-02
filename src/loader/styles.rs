@@ -15,8 +15,8 @@ pub fn build_styles<G: Send + Sync + 'static>(
     glob_watch: &'static str,
 ) -> Handle<super::Registry<CSS>> {
     site_config.add_task_opaque(GlobRegistryTask::new(
-        glob_entry,
-        glob_watch,
+        vec![glob_entry],
+        vec![glob_watch],
         move |_, file| {
             let data = grass::from_path(&file.path, &grass::Options::default())?;
             let rt = Runtime;

@@ -4,6 +4,7 @@ pub mod gitmap;
 pub mod loader;
 pub mod page;
 pub mod task;
+mod utils;
 
 pub use camino;
 
@@ -195,6 +196,26 @@ impl<G: Send + Sync> Site<G> {
         Self {
             graph: config.graph,
         }
+    }
+
+    pub fn build(&mut self, data: G) {
+        let globals = Globals {
+            generator: "hauchiwa",
+            mode: Mode::Build,
+            port: None,
+            data,
+        };
+
+        utils::clear_dist();
+        utils::clone_static();
+
+        let (_, pages) = crate::executor::run_once_parallel(self, &globals);
+
+        crate::page::save_pages_to_dist(&pages);
+    }
+
+    pub fn watch(&self, data: G) {
+        todo!()
     }
 }
 
