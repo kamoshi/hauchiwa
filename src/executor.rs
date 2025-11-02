@@ -11,6 +11,7 @@ use notify::RecursiveMode;
 use notify_debouncer_full::new_debouncer;
 use petgraph::{algo::toposort, visit::Dfs};
 use petgraph::{graph::NodeIndex, Direction};
+use rayon::prelude::*;
 use tungstenite::WebSocket;
 
 use crate::{page::Page, task::Dynamic, Globals, Mode, Site};
@@ -20,19 +21,47 @@ pub fn run_once<G: Send + Sync>(
     globals: &Globals<G>,
 ) -> (HashMap<NodeIndex, Dynamic>, Vec<Page>) {
     let mut cache: HashMap<NodeIndex, Dynamic> = HashMap::new();
+    let mut pending_nodes: HashSet<NodeIndex> = site.graph.node_indices().collect();
 
-    let sorted_nodes = toposort(&site.graph, None).unwrap();
+    // We run toposort primarily to detect any cycles in the graph.
+    toposort(&site.graph, None).expect("Cycle detected in task graph");
 
-    for node_index in sorted_nodes {
-        let task = site.graph.node_weight(node_index).unwrap();
-        let dependencies = task.dependencies();
-        let dependency_outputs: Vec<Dynamic> = dependencies
+    while !pending_nodes.is_empty() {
+        let ready_nodes: Vec<NodeIndex> = pending_nodes
             .iter()
-            .map(|dep_index| cache.get(dep_index).unwrap().clone())
+            .filter(|&&node_index| {
+                let task = site.graph.node_weight(node_index).unwrap();
+                task.dependencies()
+                    .iter()
+                    .all(|dep| cache.contains_key(dep))
+            })
+            .cloned()
             .collect();
 
-        let output = task.execute(globals, &dependency_outputs);
-        cache.insert(node_index, output);
+        if ready_nodes.is_empty() && !pending_nodes.is_empty() {
+            // This should not happen in a valid DAG.
+            panic!("Execution deadlock: no tasks are ready to run, but tasks are still pending.");
+        }
+
+        let new_results: Vec<(NodeIndex, Dynamic)> = ready_nodes
+            .par_iter()
+            .map(|&node_index| {
+                let task = site.graph.node_weight(node_index).unwrap();
+                let dependencies = task.dependencies();
+                let dependency_outputs: Vec<Dynamic> = dependencies
+                    .iter()
+                    .map(|dep_index| cache.get(dep_index).unwrap().clone())
+                    .collect();
+
+                let output = task.execute(globals, &dependency_outputs);
+                (node_index, output)
+            })
+            .collect();
+
+        for (node_index, output) in new_results {
+            cache.insert(node_index, output);
+            pending_nodes.remove(&node_index);
+        }
     }
 
     let pages = collect_pages(&cache);
@@ -243,15 +272,15 @@ mod tests {
     fn test_collect_pages() {
         let mut cache: HashMap<NodeIndex, Dynamic> = HashMap::new();
         let page1 = Page {
-            url: "/".to_string(),
+            url: "/".into(),
             content: "Home".to_string(),
         };
         let page2 = Page {
-            url: "/about".to_string(),
+            url: "/about".into(),
             content: "About".to_string(),
         };
         let page3 = Page {
-            url: "/contact".to_string(),
+            url: "/contact".into(),
             content: "Contact".to_string(),
         };
 

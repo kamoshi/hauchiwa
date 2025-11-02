@@ -171,7 +171,7 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
         })
     }
 
-    pub(crate) fn add_task_opaque<O: 'static, T: Task<G> + 'static>(
+    pub fn add_task_opaque<O: 'static, T: Task<G> + 'static>(
         &mut self,
         task: T,
     ) -> task::Handle<O> {

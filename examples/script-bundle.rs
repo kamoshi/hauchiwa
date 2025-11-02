@@ -20,7 +20,7 @@ fn main() {
             .get("examples/script_bundle_data/main.js")
             .unwrap();
         Page {
-            url: "/".to_string(),
+            url: "/".into(),
             content: format!(
                 "<html><head><script src=\"{}\"></script></head><body><h1>Hello, world!</h1></body></html>",
                 script.path

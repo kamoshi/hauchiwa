@@ -1,16 +1,30 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use std::fs;
 
+use std::sync::{Arc, OnceLock};
+
 use crate::{
-    Hash32, SiteConfig,
-    error::BuildError,
-    loader::{File, Registry, glob::GlobRegistryTask},
+    error::{BuildError, LazyAssetError},
+    loader::{glob::GlobRegistryTask, File, Registry},
     task::Handle,
+    Hash32, SiteConfig,
 };
+
+type LazyAsset<T> = Arc<OnceLock<Result<T, LazyAssetError>>>;
 
 #[derive(Clone)]
 pub struct Image {
-    pub path: Utf8PathBuf,
+    path: Utf8PathBuf,
+    hash: Hash32,
+    asset: LazyAsset<Utf8PathBuf>,
+}
+
+impl Image {
+    pub fn path(&self) -> Result<Utf8PathBuf, LazyAssetError> {
+        self.asset
+            .get_or_init(|| build_image(self.hash, &self.path).map_err(LazyAssetError::new))
+            .clone()
+    }
 }
 
 pub fn glob_images<G: Send + Sync + 'static>(
@@ -21,9 +35,10 @@ pub fn glob_images<G: Send + Sync + 'static>(
         path_glob,
         path_glob,
         move |_, file: File<Vec<u8>>| {
-            let hash = Hash32::hash_file(&file.path)?;
-            let path = build_image(hash, &file.path)?;
-            Ok((file.path, Image { path }))
+            let hash = Hash32::hash(&file.metadata);
+            let asset = Arc::new(OnceLock::new());
+            let path = file.path;
+            Ok((path.clone(), Image { path, hash, asset }))
         },
     ))
 }

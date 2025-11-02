@@ -4,66 +4,44 @@
 use hauchiwa::{
     camino::Utf8PathBuf,
     executor,
-    loader::File,
+    loader::{self, Registry},
     page::Page,
     {Site, SiteConfig},
 };
 
 #[derive(Debug, Clone)]
-struct RawPost {
-    path: Utf8PathBuf,
-    content: String,
-}
-
-#[derive(Debug, Clone)]
 struct Post {
     title: String,
     content: String,
-    url: String,
+    url: Utf8PathBuf,
 }
 
 fn main() {
     let mut config = SiteConfig::new();
 
-    let raw_posts_handle = config.add_task_opaque(FileLoaderTask::new(
-        "examples/posts",
-        "**/*.md",
-        |_, file: File<Vec<u8>>| {
+    let posts_handle =
+        loader::glob_assets(&mut config, "examples/posts/**/*.md", |_, file| {
             let content = String::from_utf8(file.metadata)?;
-            Ok(RawPost {
-                path: file.path,
+            let title = content
+                .lines()
+                .next()
+                .unwrap_or("Untitled")
+                .trim_start_matches('#')
+                .trim()
+                .to_string();
+
+            let url = format!("/posts/{}.html", file.path.file_stem().unwrap());
+
+            Ok(Post {
+                title,
                 content,
+                url: url.into(),
             })
-        },
-    ));
+        });
 
-    let posts_handle = config.add_task((raw_posts_handle,), |_, (raw_posts,): (&Vec<RawPost>,)| {
-        raw_posts
-            .iter()
-            .map(|raw_post| {
-                let title = raw_post
-                    .content
-                    .lines()
-                    .next()
-                    .unwrap_or("Untitled")
-                    .trim_start_matches('#')
-                    .trim()
-                    .to_string();
-
-                let url = format!("/posts/{}.html", raw_post.path.file_stem().unwrap());
-
-                Post {
-                    title,
-                    content: raw_post.content.clone(),
-                    url,
-                }
-            })
-            .collect::<Vec<_>>()
-    });
-
-    config.add_task((posts_handle,), |_, (posts,): (&Vec<Post>,)| {
+    config.add_task((posts_handle,), |_, (posts,): (&Registry<Post>,)| {
         posts
-            .iter()
+            .values()
             .map(|post| Page {
                 url: post.url.clone(),
                 content: format!(
@@ -74,14 +52,19 @@ fn main() {
             .collect::<Vec<_>>()
     });
 
-    config.add_task((posts_handle,), |_, (posts,): (&Vec<Post>,)| {
+    config.add_task((posts_handle,), |_, (posts,): (&Registry<Post>,)| {
         let post_links = posts
-            .iter()
-            .map(|post| format!("<li><a href=\"{}\">{}</a></li>", post.url, post.title))
+            .values()
+            .map(|post| {
+                format!(
+                    "<li><a href=\"{}\">{}</a></li>",
+                    post.url, post.title
+                )
+            })
             .collect::<String>();
 
         Page {
-            url: "/index.html".to_string(),
+            url: "/index.html".into(),
             content: format!("<h1>Posts</h1><ul>{}</ul>", post_links),
         }
     });
