@@ -159,7 +159,7 @@ where
 
 /// A builder struct for creating a `Website` with specified settings.
 pub struct SiteConfig<G: Send + Sync = ()> {
-    graph: Graph<Box<dyn Task<G>>, ()>,
+    graph: Graph<Arc<dyn Task<G>>, ()>,
 }
 
 impl<G: Send + Sync + 'static> SiteConfig<G> {
@@ -188,7 +188,7 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
         task: T,
     ) -> task::Handle<O> {
         let dependencies = task.dependencies();
-        let index = self.graph.add_node(Box::new(task));
+        let index = self.graph.add_node(Arc::new(task));
 
         for dependency in dependencies {
             self.graph.add_edge(dependency, index, ());
@@ -199,7 +199,7 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
 }
 
 pub struct Site<G: Send + Sync = ()> {
-    pub graph: Graph<Box<dyn Task<G>>, ()>,
+    pub graph: Graph<Arc<dyn Task<G>>, ()>,
 }
 
 impl<G: Send + Sync> Site<G> {
