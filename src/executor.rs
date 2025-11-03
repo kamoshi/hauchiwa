@@ -17,6 +17,21 @@ use tungstenite::WebSocket;
 
 use crate::{Globals, Mode, Site, Task, page::Page, task::Dynamic};
 
+/// This function executes the task graph using a thread pool. It performs a
+/// parallel topological sort of the graph, where tasks are executed as soon as
+/// their dependencies are met.
+///
+/// The algorithm works as follows:
+/// 1. A pool of worker threads is spawned.
+/// 2. Two channels are created: one for sending tasks to the workers and one
+///    for receiving results back.
+/// 3. The initial set of tasks (those with no dependencies) is sent to the
+///    workers.
+/// 4. The main thread enters a loop, waiting for results from the workers.
+/// 5. When a task completes, its result is cached. The dependency counts of
+///    all tasks that depend on the completed task are decremented.
+/// 6. If a task's dependency count reaches zero, it is sent to the workers.
+/// 7. The loop continues until all tasks have been completed.
 pub fn run_once_parallel<G: Send + Sync>(
     site: &mut Site<G>,
     globals: &Globals<G>,
@@ -86,7 +101,7 @@ pub fn run_once_parallel<G: Send + Sync>(
                     // Create and configure the spinner for this specific task
                     let task_pb = mp_clone.add(ProgressBar::new_spinner());
                     task_pb.set_style(spinner_style_clone.clone());
-                    task_pb.set_message(format!("Running: {}", task.get_name()));
+                    task_pb.set_message(task.get_name());
                     task_pb.enable_steady_tick(Duration::from_millis(100));
 
                     // This is where the actual work happens
@@ -151,30 +166,6 @@ pub fn run_once_parallel<G: Send + Sync>(
     (cache, pages)
 }
 
-pub fn run_once<G: Send + Sync>(
-    site: &mut Site<G>,
-    globals: &Globals<G>,
-) -> (HashMap<NodeIndex, Dynamic>, Vec<Page>) {
-    let mut cache: HashMap<NodeIndex, Dynamic> = HashMap::new();
-
-    let sorted_nodes = toposort(&site.graph, None).unwrap();
-
-    for node_index in sorted_nodes {
-        let task = site.graph.node_weight(node_index).unwrap();
-        let dependencies = task.dependencies();
-        let dependency_outputs: Vec<Dynamic> = dependencies
-            .iter()
-            .map(|dep_index| cache.get(dep_index).unwrap().clone())
-            .collect();
-
-        let output = task.execute(globals, &dependency_outputs);
-        cache.insert(node_index, output);
-    }
-
-    let pages = collect_pages(&cache);
-    (cache, pages)
-}
-
 fn collect_pages(cache: &HashMap<NodeIndex, Dynamic>) -> Vec<Page> {
     let mut pages: Vec<Page> = Vec::new();
     for value in cache.values() {
@@ -197,7 +188,7 @@ pub fn watch<G: Send + Sync + Clone + 'static>(site: &mut Site<G>, data: G) {
     };
 
     println!("Performing initial build...");
-    let (mut cache, pages) = run_once(site, &globals);
+    let (mut cache, pages) = run_once_parallel(site, &globals);
     println!("Collected {} pages", pages.len());
     println!("Initial build complete. Watching for changes...");
     let clients = Arc::new(Mutex::new(vec![]));
