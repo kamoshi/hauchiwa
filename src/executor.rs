@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     net::{TcpListener, TcpStream},
-    sync::{Arc, Mutex, mpsc::Sender},
+    sync::{mpsc::Sender, Arc, Mutex},
     thread::JoinHandle,
     time::Duration,
 };
@@ -11,37 +11,38 @@ use crossbeam_channel::unbounded;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use notify::RecursiveMode;
 use notify_debouncer_full::new_debouncer;
-use petgraph::graph::NodeIndex;
-use petgraph::{algo::toposort, visit::Dfs};
+use petgraph::{
+    algo::toposort,
+    graph::NodeIndex,
+    visit::{Dfs, IntoNodeIdentifiers},
+};
 use tungstenite::WebSocket;
 
-use crate::{Globals, Mode, Site, Task, page::Page, task::Dynamic};
+use crate::{page::Page, task::Dynamic, Globals, Mode, Site, Task};
 
-/// This function executes the task graph using a thread pool. It performs a
-/// parallel topological sort of the graph, where tasks are executed as soon as
-/// their dependencies are met.
-///
-/// The algorithm works as follows:
-/// 1. A pool of worker threads is spawned.
-/// 2. Two channels are created: one for sending tasks to the workers and one
-///    for receiving results back.
-/// 3. The initial set of tasks (those with no dependencies) is sent to the
-///    workers.
-/// 4. The main thread enters a loop, waiting for results from the workers.
-/// 5. When a task completes, its result is cached. The dependency counts of
-///    all tasks that depend on the completed task are decremented.
-/// 6. If a task's dependency count reaches zero, it is sent to the workers.
-/// 7. The loop continues until all tasks have been completed.
 pub fn run_once_parallel<G: Send + Sync>(
     site: &mut Site<G>,
     globals: &Globals<G>,
 ) -> (HashMap<NodeIndex, Dynamic>, Vec<Page>) {
-    let mut cache: HashMap<NodeIndex, Dynamic> = HashMap::new();
-
     // We run toposort primarily to detect any cycles in the graph.
     toposort(&site.graph, None).expect("Cycle detected in task graph");
 
-    // Build a map from a dependency to the nodes that depend on it.
+    let mut cache: HashMap<NodeIndex, Dynamic> = HashMap::new();
+    let nodes_to_run: HashSet<NodeIndex> = site.graph.node_indices().collect();
+
+    run_tasks_parallel(site, globals, &mut cache, &nodes_to_run);
+
+    let pages = collect_pages(&cache);
+    (cache, pages)
+}
+
+fn run_tasks_parallel<G: Send + Sync>(
+    site: &Site<G>,
+    globals: &Globals<G>,
+    cache: &mut HashMap<NodeIndex, Dynamic>,
+    nodes_to_run: &HashSet<NodeIndex>,
+) {
+    // Build a map from a dependency to the nodes that depend on it for the entire graph.
     let mut dependents: HashMap<NodeIndex, Vec<NodeIndex>> = HashMap::new();
     for edge in site.graph.raw_edges() {
         dependents
@@ -50,22 +51,27 @@ pub fn run_once_parallel<G: Send + Sync>(
             .push(edge.target());
     }
 
-    // Count dependencies for each node
-    let mut dependency_counts: HashMap<NodeIndex, usize> = site
-        .graph
-        .node_indices()
-        .map(|i| {
+    // Count dependencies for each node that we intend to run.
+    // A dependency only counts if it's also in the set of nodes to run.
+    let mut dependency_counts: HashMap<NodeIndex, usize> = nodes_to_run
+        .iter()
+        .map(|&i| {
             (
                 i,
                 site.graph
                     .neighbors_directed(i, petgraph::Direction::Incoming)
+                    .filter(|dep| nodes_to_run.contains(dep))
                     .count(),
             )
         })
         .collect();
 
-    let total_tasks = site.graph.node_count() as u64;
+    let total_tasks = nodes_to_run.len() as u64;
     let mut completed_tasks = 0;
+
+    if total_tasks == 0 {
+        return;
+    }
 
     // Setup MultiProgress and the main overall progress bar
     let mp = MultiProgress::new();
@@ -98,30 +104,35 @@ pub fn run_once_parallel<G: Send + Sync>(
 
             s.spawn(move || {
                 while let Ok((node_index, task, inputs)) = task_receiver.recv() {
-                    // Create and configure the spinner for this specific task
                     let task_pb = mp_clone.add(ProgressBar::new_spinner());
                     task_pb.set_style(spinner_style_clone.clone());
                     task_pb.set_message(task.get_name());
                     task_pb.enable_steady_tick(Duration::from_millis(100));
 
-                    // This is where the actual work happens
                     let output = task.execute(globals, &inputs);
 
-                    // Task is finished, remove its spinner
                     task_pb.finish_and_clear();
                     result_sender.send((node_index, output)).unwrap();
                 }
             });
         }
 
-        drop(task_receiver); // Drop original receiver, workers have clones
+        drop(task_receiver);
         drop(result_sender);
 
-        // Find initial tasks (those with no dependencies) and send them to the workers
-        for (&node_index, &count) in &dependency_counts {
-            if count == 0 {
+        // Find initial tasks (those with no dependencies within the set to be run)
+        // and send them to the workers.
+        for &node_index in nodes_to_run {
+            if dependency_counts.get(&node_index).cloned().unwrap_or(0) == 0 {
+                let dependencies = site.graph[node_index]
+                    .dependencies()
+                    .iter()
+                    .map(|dep_index| cache.get(dep_index).unwrap().clone())
+                    .collect::<Vec<_>>();
                 let task = site.graph[node_index].clone();
-                task_sender.send((node_index, task, vec![])).unwrap();
+                task_sender
+                    .send((node_index, task, dependencies))
+                    .unwrap();
             }
         }
 
@@ -133,37 +144,28 @@ pub fn run_once_parallel<G: Send + Sync>(
             completed_tasks += 1;
             main_pb.inc(1);
 
-            // Check if any other tasks are now ready to run
             if let Some(dependents_of_completed) = dependents.get(&completed_index) {
                 for &dependent_index in dependents_of_completed {
-                    let count = dependency_counts.get_mut(&dependent_index).unwrap();
-                    *count -= 1;
-                    if *count == 0 {
-                        // All dependencies met, this task is ready
-                        let dependencies = site.graph[dependent_index]
-                            .dependencies()
-                            .iter()
-                            .map(|dep_index| cache.get(dep_index).unwrap().clone())
-                            .collect::<Vec<_>>();
-                        let task = site.graph[dependent_index].clone();
-                        task_sender
-                            .send((dependent_index, task, dependencies))
-                            .unwrap();
+                    if let Some(count) = dependency_counts.get_mut(&dependent_index) {
+                        *count -= 1;
+                        if *count == 0 {
+                            let dependencies = site.graph[dependent_index]
+                                .dependencies()
+                                .iter()
+                                .map(|dep_index| cache.get(dep_index).unwrap().clone())
+                                .collect::<Vec<_>>();
+                            let task = site.graph[dependent_index].clone();
+                            task_sender
+                                .send((dependent_index, task, dependencies))
+                                .unwrap();
+                        }
                     }
                 }
             }
         }
-
-        // We are done sending tasks. Drop the sender to signal to the workers
-        // that they should terminate once they finish their current work.
         drop(task_sender);
     });
-
-    // Mark the main progress bar as complete
     main_pb.finish_with_message("Build complete!");
-
-    let pages = collect_pages(&cache);
-    (cache, pages)
 }
 
 fn collect_pages(cache: &HashMap<NodeIndex, Dynamic>) -> Vec<Page> {
@@ -194,7 +196,7 @@ pub fn watch<G: Send + Sync + Clone + 'static>(site: &mut Site<G>, data: G) {
     let clients = Arc::new(Mutex::new(vec![]));
 
     let _thread_i = new_thread_ws_incoming(tcp, clients.clone());
-    let (tx_reload, thread_o) = new_thread_ws_reload(clients.clone());
+    let (tx_reload, _thread_o) = new_thread_ws_reload(clients.clone());
 
     let (tx, rx) = std::sync::mpsc::channel();
     let mut debouncer = new_debouncer(Duration::from_millis(250), None, tx).unwrap();
@@ -214,9 +216,9 @@ pub fn watch<G: Send + Sync + Clone + 'static>(site: &mut Site<G>, data: G) {
                         if let Some(path) = Utf8Path::from_path(path) {
                             for index in site.graph.node_indices() {
                                 let task = &site.graph[index];
-                                // if task.on_file_change(path) {
-                                //     dirty_nodes.insert(index);
-                                // }
+                                if task.is_dirty(path) {
+                                    dirty_nodes.insert(index);
+                                }
                             }
                         }
                     }
@@ -224,8 +226,6 @@ pub fn watch<G: Send + Sync + Clone + 'static>(site: &mut Site<G>, data: G) {
 
                 if !dirty_nodes.is_empty() {
                     println!("Change detected. Re-running tasks...");
-
-                    // Find all dependents of the dirty nodes
                     let mut to_rerun = HashSet::new();
                     for start_node in &dirty_nodes {
                         let mut dfs = Dfs::new(&site.graph, *start_node);
@@ -234,20 +234,7 @@ pub fn watch<G: Send + Sync + Clone + 'static>(site: &mut Site<G>, data: G) {
                         }
                     }
 
-                    let sorted_nodes = toposort(&site.graph, None).unwrap();
-                    for node_index in sorted_nodes {
-                        if to_rerun.contains(&node_index) {
-                            let task = site.graph.node_weight(node_index).unwrap();
-                            let dependencies = task.dependencies();
-                            let dependency_outputs: Vec<Dynamic> = dependencies
-                                .iter()
-                                .map(|dep_index| cache.get(dep_index).unwrap().clone())
-                                .collect();
-
-                            let output = task.execute(&globals, &dependency_outputs);
-                            cache.insert(node_index, output);
-                        }
-                    }
+                    run_tasks_parallel(site, &globals, &mut cache, &to_rerun);
 
                     let pages = collect_pages(&cache);
                     println!("Collected {} pages", pages.len());

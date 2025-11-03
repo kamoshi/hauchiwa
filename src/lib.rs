@@ -117,7 +117,7 @@ pub trait Task<G: Send + Sync = ()>: Send + Sync {
     fn get_name(&self) -> String;
     fn dependencies(&self) -> Vec<NodeIndex>;
     fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Dynamic;
-    fn on_file_change(&mut self, _path: &camino::Utf8Path) -> bool {
+    fn is_dirty(&self, _path: &camino::Utf8Path) -> bool {
         false
     }
 }
