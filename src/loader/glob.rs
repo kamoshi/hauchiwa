@@ -85,7 +85,7 @@ where
         Arc::new(registry)
     }
 
-    fn on_file_change(&mut self, path: &Utf8Path) -> bool {
-        true
+    fn is_dirty(&self, path: &Utf8Path) -> bool {
+        self.glob_watch.iter().any(|p| p.matches(path.as_str()))
     }
 }

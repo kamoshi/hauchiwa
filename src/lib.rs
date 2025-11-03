@@ -117,7 +117,7 @@ pub trait Task<G: Send + Sync = ()>: Send + Sync {
     fn get_name(&self) -> String;
     fn dependencies(&self) -> Vec<NodeIndex>;
     fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Dynamic;
-    fn on_file_change(&mut self, _path: &camino::Utf8Path) -> bool {
+    fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
         false
     }
 }
@@ -225,8 +225,11 @@ impl<G: Send + Sync> Site<G> {
         crate::page::save_pages_to_dist(&pages);
     }
 
-    pub fn watch(&self, data: G) {
-        todo!()
+    pub fn watch(&mut self, data: G) {
+        utils::clear_dist();
+        utils::clone_static();
+
+        crate::executor::watch(self, data);
     }
 }
 

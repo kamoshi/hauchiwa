@@ -133,30 +133,16 @@ use std::path::Path;
 pub fn save_pages_to_dist(pages: &[Page]) -> io::Result<()> {
     let output_dir = Path::new("dist");
 
-    // 1. Create the "dist/" directory if it doesn't exist.
-    //    This does nothing if it already exists.
     fs::create_dir_all(output_dir)?;
 
     for page in pages {
-        // 2. Create the full path for the file.
-        //    e.g., "dist" + "blog/my-post.html" = "dist/blog/my-post.html"
         let file_path = output_dir.join(&page.url);
 
-        // 3. IMPORTANT: Ensure the file's parent directory exists.
-        //    If file_path is "dist/blog/my-post.html", this creates "dist/blog/".
         if let Some(parent_dir) = file_path.parent() {
             fs::create_dir_all(parent_dir)?;
         }
 
-        // 4. Write (or overwrite) the file.
-        //    This handles your "overwrite existing or make new" logic.
         fs::write(&file_path, &page.content)?;
-
-        println!(
-            "Saved: {} ({} bytes)",
-            file_path.display(),
-            page.content.len()
-        );
     }
 
     Ok(())
