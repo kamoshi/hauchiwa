@@ -18,6 +18,8 @@ use camino::Utf8PathBuf;
 use petgraph::{Graph, graph::NodeIndex};
 use task::TaskDependencies;
 
+use crate::task::{Task, TypedTask};
+
 /// 32 bytes length generic hash
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 struct Hash32([u8; 32]);
@@ -113,15 +115,6 @@ pub struct FileMetadata {
     pub info: Option<gitmap::GitInfo>,
 }
 
-pub trait Task<G: Send + Sync = ()>: Send + Sync {
-    fn get_name(&self) -> String;
-    fn dependencies(&self) -> Vec<NodeIndex>;
-    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Dynamic;
-    fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
-        false
-    }
-}
-
 struct TaskNode<G, D, F, O>
 where
     G: Send + Sync,
@@ -135,13 +128,15 @@ where
     _phantom: std::marker::PhantomData<G>,
 }
 
-impl<G, D, F, O> Task<G> for TaskNode<G, D, F, O>
+impl<G, D, F, O> TypedTask<G> for TaskNode<G, D, F, O>
 where
     G: Send + Sync + 'static,
     D: TaskDependencies + Send + Sync,
     F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> O + Send + Sync + 'static,
     O: Clone + Send + Sync + 'static,
 {
+    type Output = O;
+
     fn get_name(&self) -> String {
         self.name.to_string()
     }
@@ -150,10 +145,9 @@ where
         self.dependencies.dependencies()
     }
 
-    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Dynamic {
+    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Self::Output {
         let dependencies = self.dependencies.resolve(dependencies);
-        let output = (self.callback)(globals, dependencies);
-        Arc::new(output)
+        (self.callback)(globals, dependencies)
     }
 }
 
@@ -183,10 +177,11 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
         })
     }
 
-    pub(crate) fn add_task_opaque<O: 'static, T: Task<G> + 'static>(
-        &mut self,
-        task: T,
-    ) -> task::Handle<O> {
+    pub(crate) fn add_task_opaque<O, T>(&mut self, task: T) -> task::Handle<O>
+    where
+        O: 'static,
+        T: TypedTask<G, Output = O> + 'static,
+    {
         let dependencies = task.dependencies();
         let index = self.graph.add_node(Arc::new(task));
 

@@ -1,9 +1,13 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::{Pattern, glob};
 use petgraph::graph::NodeIndex;
-use std::{collections::HashMap, fs, sync::Arc};
+use std::{collections::HashMap, fs, process::Output, sync::Arc};
 
-use crate::{Globals, Task, loader::Registry, task::Dynamic};
+use crate::{
+    Globals,
+    loader::Registry,
+    task::{Dynamic, Task, TypedTask},
+};
 
 pub struct GlobRegistryTask<G, R>
 where
@@ -43,11 +47,13 @@ where
     }
 }
 
-impl<G, R> Task<G> for GlobRegistryTask<G, R>
+impl<G, R> TypedTask<G> for GlobRegistryTask<G, R>
 where
     G: Send + Sync + 'static,
     R: Clone + Send + Sync + 'static,
 {
+    type Output = Registry<R>;
+
     fn get_name(&self) -> String {
         self.glob_entry.join(", ")
     }
@@ -56,7 +62,7 @@ where
         vec![]
     }
 
-    fn execute(&self, globals: &Globals<G>, _: &[Dynamic]) -> Dynamic {
+    fn execute(&self, globals: &Globals<G>, _: &[Dynamic]) -> Self::Output {
         let mut results = Vec::new();
 
         for glob_entry in &self.glob_entry {
@@ -82,7 +88,7 @@ where
         let registry = HashMap::from_iter(results.iter().cloned());
         let registry = Registry { map: registry };
 
-        Arc::new(registry)
+        registry
     }
 
     fn is_dirty(&self, path: &Utf8Path) -> bool {

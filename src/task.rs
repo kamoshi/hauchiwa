@@ -3,7 +3,58 @@ use petgraph::graph::NodeIndex;
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::Globals;
+
 pub type Dynamic = Arc<dyn Any + Send + Sync>;
+
+pub trait TypedTask<G: Send + Sync = ()>: Send + Sync {
+    /// The concrete output type of this task.
+    type Output: Clone + Send + Sync + 'static;
+
+    fn get_name(&self) -> String;
+    fn dependencies(&self) -> Vec<NodeIndex>;
+    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Self::Output;
+
+    #[inline]
+    fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
+        false
+    }
+}
+
+pub trait Task<G: Send + Sync = ()>: Send + Sync {
+    fn get_name(&self) -> String;
+    fn dependencies(&self) -> Vec<NodeIndex>;
+    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Dynamic;
+
+    #[inline]
+    fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
+        false
+    }
+}
+
+// A blanket implementation to automatically bridge the two. This is where the
+// type erasure actually happens.
+impl<G, T> Task<G> for T
+where
+    G: Send + Sync,
+    T: TypedTask<G> + 'static,
+{
+    fn get_name(&self) -> String {
+        T::get_name(self)
+    }
+    fn dependencies(&self) -> Vec<NodeIndex> {
+        T::dependencies(self)
+    }
+
+    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Dynamic {
+        // Call the typed method, then erase the result.
+        Arc::new(T::execute(self, globals, dependencies))
+    }
+
+    fn is_dirty(&self, path: &camino::Utf8Path) -> bool {
+        T::is_dirty(self, path)
+    }
+}
 
 /// A handle to a task in the task graph.
 #[derive(Debug, PartialEq, Eq, Hash)]
