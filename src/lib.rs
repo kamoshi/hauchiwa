@@ -1,5 +1,5 @@
-pub mod error;
-pub mod executor;
+mod error;
+mod executor;
 pub mod gitmap;
 pub mod loader;
 pub mod page;
@@ -75,25 +75,28 @@ pub enum Mode {
     Watch,
 }
 
-/// `G` represents any additional data that should be globally available during
-/// the HTML rendering process. If no such data is needed, it can be substituted
-/// with `()`.
+/// Represents globally accessible data and settings available to all tasks during the build process.
+///
+/// This struct holds information such as the project's generator name, the current build mode (build or watch),
+/// and any user-defined data `G` that needs to be shared across different tasks.
 #[derive(Debug, Clone)]
 pub struct Globals<G: Send + Sync = ()> {
-    /// Generator name and version.
+    /// The name and version of the generator.
     pub generator: &'static str,
-    /// Generator mode.
+    /// The current build mode, indicating whether the site is being built for production or watched for development.
     pub mode: Mode,
-    /// Watch port
+    /// The port for the live-reload WebSocket server, if applicable.
     pub port: Option<u16>,
-    /// Any additional data.
+    /// User-defined global data that can be accessed by tasks.
     pub data: G,
 }
 
 impl<G: Send + Sync> Globals<G> {
-    /// If live reload is enabled, returns an inline JavaScript snippet to
-    /// establish a WebSocket connection for hot page refresh during
-    /// development.
+    /// Returns an inline JavaScript snippet for live-reloading the page in watch mode.
+    ///
+    /// If the site is running in watch mode, this function provides a script
+    /// that establishes a WebSocket connection to the development server.
+    /// A `None` value indicates that live-reload is disabled.
     pub fn get_refresh_script(&self) -> Option<String> {
         self.port.map(|port| {
             format!(
@@ -151,18 +154,38 @@ where
     }
 }
 
-/// A builder struct for creating a `Website` with specified settings.
+/// Configures and builds the task graph for a site.
+///
+/// `SiteConfig` is the main entry point for defining tasks and their dependencies.
+/// After all tasks are added, it is used to create a `Site` instance.
 pub struct SiteConfig<G: Send + Sync = ()> {
     graph: Graph<Arc<dyn Task<G>>, ()>,
 }
 
 impl<G: Send + Sync + 'static> SiteConfig<G> {
+    /// Creates a new, empty `SiteConfig`.
     pub fn new() -> Self {
         Self {
             graph: Graph::new(),
         }
     }
 
+    /// Adds a new task to the build graph.
+    ///
+    /// # Type Parameters
+    ///
+    /// - `D`: A tuple of `Handle<T>`s representing the task's dependencies.
+    /// - `F`: The task's execution logic, provided as a closure.
+    /// - `R`: The return type of the task's closure.
+    ///
+    /// # Parameters
+    ///
+    /// - `dependencies`: A tuple of handles to the tasks that must be completed before this one.
+    /// - `callback`: A closure that takes `Globals` and the resolved outputs of the dependencies.
+    ///
+    /// # Returns
+    ///
+    /// A `Handle<R>` that can be used as a dependency for other tasks.
     pub fn add_task<D, F, R>(&mut self, dependencies: D, callback: F) -> task::Handle<R>
     where
         D: TaskDependencies + Send + Sync + 'static,
@@ -193,17 +216,28 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
     }
 }
 
+/// Represents the configured site and provides methods for building and serving it.
+///
+/// A `Site` is created from a `SiteConfig` and is the primary interface for
+/// executing the build process.
 pub struct Site<G: Send + Sync = ()> {
-    pub graph: Graph<Arc<dyn Task<G>>, ()>,
+    graph: Graph<Arc<dyn Task<G>>, ()>,
 }
 
 impl<G: Send + Sync> Site<G> {
+    /// Creates a new `Site` from a `SiteConfig`.
+    ///
+    /// This method consumes the configuration and prepares the site for execution.
     pub fn new(config: SiteConfig<G>) -> Self {
         Self {
             graph: config.graph,
         }
     }
 
+    /// Executes a one-time build of the site.
+    ///
+    /// This runs all defined tasks in the correct order, handling dependencies,
+    /// and outputs the resulting files to the `dist` directory.
     pub fn build(&mut self, data: G) {
         let globals = Globals {
             generator: "hauchiwa",
@@ -212,27 +246,40 @@ impl<G: Send + Sync> Site<G> {
             data,
         };
 
-        utils::clear_dist();
-        utils::clone_static();
+        utils::clear_dist().expect("Failed to clear dist directory");
+        utils::clone_static().expect("Failed to copy static files");
 
         let (_, pages) = crate::executor::run_once_parallel(self, &globals);
 
-        crate::page::save_pages_to_dist(&pages);
+        crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
     }
 
+    /// Starts a development server and watches for file changes.
+    ///
+    /// This method performs an initial build and then monitors the project directory.
+    /// When a file is modified, it intelligently re-runs only the necessary tasks.
+    /// It also includes live-reloading functionality for a smooth development experience.
     pub fn watch(&mut self, data: G) {
-        utils::clear_dist();
-        utils::clone_static();
+        utils::clear_dist().expect("Failed to clear dist directory");
+        utils::clone_static().expect("Failed to copy static files");
 
         crate::executor::watch(self, data);
     }
 }
 
-/// Usage:
-/// ```rust
-/// task!(cfg, |ctx, a, b: &T, c| { ... })
+/// A declarative macro for conveniently adding tasks to a `SiteConfig`.
+///
+/// This macro simplifies the process of defining tasks and their dependencies,
+/// reducing boilerplate code.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// use hauchiwa::task;
+/// task!(config, |ctx, dep1, dep2| {
+///     // Task logic here
+/// });
 /// ```
-/// Types (when present) are enforced via body-local assertions, not in the param tuple.
 #[macro_export]
 macro_rules! task {
     ($config:expr, |$ctx:pat_param $(, $($dep:ident $( : $ty:ty )? ),* )? | $body:block) => {

@@ -1,12 +1,12 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::{Pattern, glob};
 use petgraph::graph::NodeIndex;
-use std::{collections::HashMap, fs, process::Output, sync::Arc};
+use std::{collections::HashMap, fs};
 
 use crate::{
     Globals,
     loader::Registry,
-    task::{Dynamic, Task, TypedTask},
+    task::{Dynamic, TypedTask},
 };
 
 pub struct GlobRegistryTask<G, R>

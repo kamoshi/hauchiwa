@@ -2,12 +2,11 @@ use std::sync::Arc;
 #[cfg(feature = "reload")]
 use std::sync::mpsc::{RecvError, SendError};
 
-pub use anyhow::Error as RuntimeError;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone)]
 #[error(transparent)]
-pub struct LazyAssetError(#[from] pub(crate) Arc<anyhow::Error>);
+pub(crate) struct LazyAssetError(#[from] pub(crate) Arc<anyhow::Error>);
 
 impl LazyAssetError {
     pub(crate) fn new(err: impl Into<anyhow::Error>) -> Self {
@@ -48,10 +47,10 @@ pub enum HauchiwaError {
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct LoaderFileCallbackError(pub anyhow::Error);
+struct LoaderFileCallbackError(pub anyhow::Error);
 
 #[derive(Debug, Error)]
-pub enum LoaderError {
+pub(crate) enum LoaderError {
     #[error("Couldn't load data from file.\n{0}")]
     FileSystem(#[from] std::io::Error),
 
@@ -70,14 +69,14 @@ pub enum LoaderError {
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct StepClearError(#[from] std::io::Error);
+pub(crate) struct StepClearError(#[from] std::io::Error);
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct StepCopyStatic(#[from] std::io::Error);
+pub(crate) struct StepCopyStatic(#[from] std::io::Error);
 
 #[derive(Debug, Error)]
-pub enum BuildError {
+pub(crate) enum BuildError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -93,7 +92,7 @@ pub enum BuildError {
 
 #[cfg(feature = "reload")]
 #[derive(Debug, Error)]
-pub enum WatchError {
+pub(crate) enum WatchError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -111,13 +110,13 @@ pub enum WatchError {
 }
 
 #[derive(Debug, Error)]
-pub enum HookError {
+enum HookError {
     #[error(transparent)]
     Userland(#[from] anyhow::Error),
 }
 
 #[derive(Debug, Error)]
-pub enum ContextError {
+enum ContextError {
     #[error(transparent)]
     Pattern(#[from] glob::PatternError),
 

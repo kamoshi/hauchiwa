@@ -2,12 +2,12 @@ mod assets;
 #[cfg(feature = "asyncrt")]
 mod asyncrt;
 mod content;
-pub mod glob;
+mod glob;
 #[cfg(feature = "images")]
 mod images;
 mod script;
 #[cfg(feature = "styles")]
-pub mod styles;
+mod styles;
 mod svelte;
 
 pub use assets::glob_assets;
@@ -22,32 +22,42 @@ pub use script::{JS, build_scripts};
 pub use styles::{CSS, build_styles};
 pub use svelte::{Svelte, build_svelte};
 
-use crate::{Hash32, error::BuildError};
+use crate::{error::BuildError, Hash32};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::{collections::HashMap, fs};
 
+/// A collection of processed assets, mapping source file paths to their resulting data.
+///
+/// `Registry` is a common return type for loader tasks that process multiple files,
+/// such as `glob_content` or `glob_assets`. It provides a way to access the processed
+/// output of each file by its original path.
 #[derive(Debug, Clone)]
 pub struct Registry<T: Clone> {
     map: HashMap<camino::Utf8PathBuf, T>,
 }
 
 impl<T: Clone> Registry<T> {
+    /// Retrieves a reference to the processed data for a given source path.
     pub fn get(&self, path: impl AsRef<Utf8Path>) -> Option<&T> {
         self.map.get(path.as_ref())
     }
 
-    /// Returns an iterator over the values.
+    /// Returns an iterator over the processed data of all files in the registry.
     pub fn values(&self) -> std::collections::hash_map::Values<'_, Utf8PathBuf, T> {
         self.map.values()
     }
 }
 
-/// Build execution context, providing facilities for storing artifacts in a
-/// content-addressed cache and output directory.
+/// Represents a source file that is being processed by a loader.
+///
+/// This struct provides loaders with the file's path and its raw content or metadata,
+/// enabling tasks to perform operations like parsing, transformation, or analysis.
 ///
 /// `Runtime` abstracts filesystem interactions related to build artifact
 pub struct File<T> {
+    /// The path to the source file.
     pub path: Utf8PathBuf,
+    /// The metadata or content of the file.
     pub metadata: T,
 }
 
@@ -73,7 +83,7 @@ impl Runtime {
     /// - On success, returns the logical asset path as a `Utf8PathBuf` rooted
     ///   under `/hash/`, suitable for inclusion in HTML.
     /// - On failure, returns a `BuildError` for I/O or hashing errors.
-    pub fn store(&self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuildError> {
+    fn store(&self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuildError> {
         let hash = Hash32::hash(data);
         let hash = hash.to_hex();
 
@@ -102,7 +112,7 @@ macro_rules! matter_parser {
 			"This function can be used to extract metadata from a document with `D` as the frontmatter shape.\n",
 			"Configured to use [`", stringify!($engine), "`] as the engine of the parser."
 		)]
-		pub fn $name<D>(content: &str) -> Result<(D, String), anyhow::Error>
+		fn $name<D>(content: &str) -> Result<(D, String), anyhow::Error>
 		where
 			D: for<'de> serde::Deserialize<'de> + Send + Sync + 'static,
 		{

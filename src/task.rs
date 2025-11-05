@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use crate::Globals;
 
-pub type Dynamic = Arc<dyn Any + Send + Sync>;
+pub(crate) type Dynamic = Arc<dyn Any + Send + Sync>;
 
-pub trait TypedTask<G: Send + Sync = ()>: Send + Sync {
+pub(crate) trait TypedTask<G: Send + Sync = ()>: Send + Sync {
     /// The concrete output type of this task.
     type Output: Clone + Send + Sync + 'static;
 
@@ -21,7 +21,7 @@ pub trait TypedTask<G: Send + Sync = ()>: Send + Sync {
     }
 }
 
-pub trait Task<G: Send + Sync = ()>: Send + Sync {
+pub(crate) trait Task<G: Send + Sync = ()>: Send + Sync {
     fn get_name(&self) -> String;
     fn dependencies(&self) -> Vec<NodeIndex>;
     fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Dynamic;
@@ -56,7 +56,12 @@ where
     }
 }
 
-/// A handle to a task in the task graph.
+/// A type-safe reference to a task in the build graph.
+///
+/// A `Handle<T>` is a lightweight, copyable token that represents a future result of type `T`.
+/// It is used to define dependencies between tasks. When one task depends on another, it holds
+/// a handle to that dependency. The build system ensures that the dependency is executed
+/// before the task that depends on it.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Handle<T> {
     pub(crate) index: NodeIndex,
@@ -79,23 +84,30 @@ impl<T> Handle<T> {
         }
     }
 
+    /// Returns the underlying `NodeIndex` of the task in the graph.
     pub fn index(&self) -> NodeIndex {
         self.index
     }
 }
 
-/// A trait that represents the dependencies of a task.
+/// A trait that enables a collection of `Handle<T>`s to be used as dependencies for a task.
+///
+/// This trait is implemented for tuples of `Handle<T>`s, allowing them to be passed
+/// as the `dependencies` argument to `SiteConfig::add_task`. It provides the necessary logic
+/// for the build system to extract dependency information and resolve their outputs.
 pub trait TaskDependencies {
-    /// The type of the resolved dependencies. For a tuple of `Handle<T>`s, this will be a tuple of `T`s.
+    /// The resulting type when all dependencies are resolved.
+    /// For a tuple of `Handle<T>`s, this will be a tuple of `&'a T`s.
     type Output<'a>;
 
-    /// Returns the `NodeIndex`s of the dependencies.
+    /// Returns the `NodeIndex` for each dependency in the collection.
     fn dependencies(&self) -> Vec<NodeIndex>;
 
-    /// Resolves the dependencies' outputs from a slice of `Dynamic`s.
-    /// The order of the `Dynamic`s must match the order of the dependencies.
+    /// Takes a slice of type-erased dependency outputs and resolves them into a concrete `Output` type.
+    ///
     /// # Panics
-    /// This function may panic if the `Dynamic`s cannot be downcast to the expected types.
+    /// This method will panic if the type-erased outputs cannot be downcast to their expected concrete types,
+    /// indicating a severe logic error in the build system.
     fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> Self::Output<'a>;
 }
 

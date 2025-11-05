@@ -2,7 +2,7 @@ use camino::Utf8Component;
 use camino::{Utf8Path, Utf8PathBuf};
 
 /// index component from path
-pub fn to_slug(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
+fn to_slug(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     let path = path.as_ref().with_extension("");
 
     // Check if the last component of the path is exactly "index.*"
@@ -31,7 +31,7 @@ pub fn to_slug(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
 ///
 /// Adapted from
 /// https://github.com/rust-lang/cargo/blob/f7acf448fc127df9a77c52cc2bba027790ac4931/crates/cargo-util/src/paths.rs#L76-L116
-pub fn normalize_path(path: &Utf8Path) -> Utf8PathBuf {
+fn normalize_path(path: &Utf8Path) -> Utf8PathBuf {
     let mut components = path.components().peekable();
     let mut ret = if let Some(c @ Utf8Component::Prefix(..)) = components.peek().cloned() {
         components.next();
@@ -65,13 +65,13 @@ pub fn normalize_path(path: &Utf8Path) -> Utf8PathBuf {
     ret
 }
 
-pub fn normalize_prefixed(prefix: &str, path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
+fn normalize_prefixed(prefix: &str, path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     let path = path.as_ref().strip_prefix(prefix).unwrap_or(path.as_ref());
 
     normalize(path)
 }
 
-pub fn normalize(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
+pub(crate) fn normalize(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     let mut buffer = path.as_ref().to_path_buf();
 
     if let Some(file_name) = buffer.file_name() {
@@ -88,7 +88,7 @@ pub fn normalize(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     buffer
 }
 
-pub fn absolutize(prefix: &str, path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
+fn absolutize(prefix: &str, path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     let path = path.as_ref().strip_prefix(prefix).unwrap_or(path.as_ref());
     let path = Utf8Path::new("/").join(path);
 
@@ -103,13 +103,24 @@ pub fn absolutize(prefix: &str, path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     }
 }
 
+/// Represents a single output file to be written to the `dist` directory.
+///
+/// A `Page` is a common output type for tasks that generate HTML, CSS, or other static assets.
+/// The build system collects all `Page` instances and writes them to the filesystem.
 #[derive(Debug, Clone)]
 pub struct Page {
+    /// The destination path of the file, relative to the `dist` directory.
     pub url: Utf8PathBuf,
+    /// The content of the file to be written.
     pub content: String,
 }
 
 impl Page {
+    /// Creates a new `Page` with a normalized URL, suitable for HTML files.
+    ///
+    /// The path is automatically adjusted to create "pretty URLs". For example:
+    /// - `foo/bar.html` becomes `foo/bar/index.html`
+    /// - `foo/index.html` remains `foo/index.html`
     pub fn html(path: impl AsRef<Utf8Path>, content: impl Into<String>) -> Self {
         Self {
             url: normalize(path),
@@ -117,6 +128,10 @@ impl Page {
         }
     }
 
+    /// Creates a new `Page` with a raw, unmodified path.
+    ///
+    /// This constructor is suitable for assets like CSS, JavaScript, or images
+    /// where the output path should not be altered.
     pub fn file(path: impl Into<Utf8PathBuf>, content: impl Into<String>) -> Self {
         Self {
             url: path.into(),
@@ -130,7 +145,7 @@ use std::io;
 use std::path::Path;
 
 /// Saves all pages to the "dist" directory.
-pub fn save_pages_to_dist(pages: &[Page]) -> io::Result<()> {
+pub(crate) fn save_pages_to_dist(pages: &[Page]) -> io::Result<()> {
     let output_dir = Path::new("dist");
 
     fs::create_dir_all(output_dir)?;

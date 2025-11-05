@@ -210,7 +210,7 @@ pub fn watch<G: Send + Sync>(site: &mut Site<G>, data: G) {
     println!("Performing initial build...");
     let (mut cache, pages) = run_once_parallel(site, &globals);
     println!("Collected {} pages", pages.len());
-    crate::page::save_pages_to_dist(&pages);
+    crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
 
     println!("Initial build complete. Watching for changes...");
     let clients = Arc::new(Mutex::new(vec![]));
@@ -259,7 +259,7 @@ pub fn watch<G: Send + Sync>(site: &mut Site<G>, data: G) {
 
                     let pages = collect_pages(&cache);
                     println!("Collected {} pages", pages.len());
-                    crate::page::save_pages_to_dist(&pages);
+                    crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
                     tx_reload.send(()).unwrap();
                     println!("Rebuild complete. Watching for changes...");
                 }
