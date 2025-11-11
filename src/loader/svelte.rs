@@ -9,6 +9,7 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
     Hash32, SiteConfig,
+    error::HauchiwaError,
     loader::{JS, Runtime, glob::GlobRegistryTask},
     task::Handle,
 };
@@ -32,8 +33,8 @@ pub fn build_svelte<G: Send + Sync + 'static, P: Clone + DeserializeOwned + Seri
     site_config: &mut SiteConfig<G>,
     glob_entry: &'static str,
     glob_watch: &'static str,
-) -> Handle<super::Registry<Svelte<P>>> {
-    site_config.add_task_opaque(GlobRegistryTask::new(
+) -> Result<Handle<super::Registry<Svelte<P>>>, HauchiwaError> {
+    Ok(site_config.add_task_opaque(GlobRegistryTask::new(
         vec![glob_entry],
         vec![glob_watch],
         move |_, file| {
@@ -59,7 +60,7 @@ pub fn build_svelte<G: Send + Sync + 'static, P: Clone + DeserializeOwned + Seri
 
             Ok((file.path, Svelte::<P> { html, init }))
         },
-    ))
+    )?))
 }
 
 fn compile_svelte_server(file: &Utf8Path) -> anyhow::Result<String> {

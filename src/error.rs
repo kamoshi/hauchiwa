@@ -2,14 +2,15 @@ use std::sync::Arc;
 #[cfg(feature = "reload")]
 use std::sync::mpsc::{RecvError, SendError};
 
+pub use anyhow::Error as RuntimeError;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone)]
 #[error(transparent)]
-pub(crate) struct LazyAssetError(#[from] pub(crate) Arc<anyhow::Error>);
+pub struct LazyAssetError(#[from] pub(crate) Arc<anyhow::Error>);
 
 impl LazyAssetError {
-    pub(crate) fn new(err: impl Into<anyhow::Error>) -> Self {
+    pub fn new(err: impl Into<anyhow::Error>) -> Self {
         Self(Arc::new(err.into()))
     }
 }
@@ -24,6 +25,12 @@ impl From<anyhow::Error> for LazyAssetError {
 pub enum HauchiwaError {
     #[error(transparent)]
     AnyhowArc(#[from] Arc<anyhow::Error>),
+
+    #[error("Failed to build runtime")]
+    RuntimeBuild(#[from] tokio::io::Error),
+
+    #[error(transparent)]
+    GlobPattern(#[from] glob::PatternError),
 
     #[error("Asset '{0}': {1}")]
     Asset(Box<str>, LazyAssetError),
@@ -47,10 +54,10 @@ pub enum HauchiwaError {
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-struct LoaderFileCallbackError(pub anyhow::Error);
+pub struct LoaderFileCallbackError(pub anyhow::Error);
 
 #[derive(Debug, Error)]
-pub(crate) enum LoaderError {
+pub enum LoaderError {
     #[error("Couldn't load data from file.\n{0}")]
     FileSystem(#[from] std::io::Error),
 
@@ -69,14 +76,14 @@ pub(crate) enum LoaderError {
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub(crate) struct StepClearError(#[from] std::io::Error);
+pub struct StepClearError(#[from] std::io::Error);
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub(crate) struct StepCopyStatic(#[from] std::io::Error);
+pub struct StepCopyStatic(#[from] std::io::Error);
 
 #[derive(Debug, Error)]
-pub(crate) enum BuildError {
+pub enum BuildError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -92,7 +99,7 @@ pub(crate) enum BuildError {
 
 #[cfg(feature = "reload")]
 #[derive(Debug, Error)]
-pub(crate) enum WatchError {
+pub enum WatchError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -110,13 +117,13 @@ pub(crate) enum WatchError {
 }
 
 #[derive(Debug, Error)]
-enum HookError {
+pub enum HookError {
     #[error(transparent)]
     Userland(#[from] anyhow::Error),
 }
 
 #[derive(Debug, Error)]
-enum ContextError {
+pub enum ContextError {
     #[error(transparent)]
     Pattern(#[from] glob::PatternError),
 

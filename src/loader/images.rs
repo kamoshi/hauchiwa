@@ -3,7 +3,7 @@ use std::fs;
 
 use crate::{
     Hash32, SiteConfig,
-    error::BuildError,
+    error::{BuildError, HauchiwaError},
     loader::{File, Registry, glob::GlobRegistryTask},
     task::Handle,
 };
@@ -16,8 +16,8 @@ pub struct Image {
 pub fn glob_images<G: Send + Sync + 'static>(
     site_config: &mut SiteConfig<G>,
     path_glob: &'static [&'static str],
-) -> Handle<Registry<Image>> {
-    site_config.add_task_opaque(GlobRegistryTask::new(
+) -> Result<Handle<Registry<Image>>, HauchiwaError> {
+    Ok(site_config.add_task_opaque(GlobRegistryTask::new(
         path_glob.to_vec(),
         path_glob.to_vec(),
         move |_, file: File<Vec<u8>>| {
@@ -25,7 +25,7 @@ pub fn glob_images<G: Send + Sync + 'static>(
             let path = build_image(hash, &file.path)?;
             Ok((file.path, Image { path }))
         },
-    ))
+    )?))
 }
 
 fn process_image(buffer: &[u8]) -> image::ImageResult<Vec<u8>> {

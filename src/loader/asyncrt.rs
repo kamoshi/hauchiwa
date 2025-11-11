@@ -1,27 +1,26 @@
 use std::future::Future;
 
-use crate::{
-    loader::Runtime,
-    task::Handle,
-    SiteConfig,
-};
+use crate::error::HauchiwaError;
+use crate::{SiteConfig, loader::Runtime, task::Handle};
 
-pub fn async_asset<G, T, F, Fut>(
-    site_config: &mut SiteConfig<G>,
-    async_closure: F,
-) -> Handle<T>
+pub fn async_asset<G, R, F, Fut>(
+    config: &mut SiteConfig<G>,
+    callback: F,
+) -> Result<Handle<R>, HauchiwaError>
 where
     G: Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
+    R: Send + Sync + 'static,
     F: Fn(Runtime) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = anyhow::Result<T>> + Send + 'static,
+    Fut: Future<Output = anyhow::Result<R>> + Send + 'static,
 {
-    site_config.add_task((), move |_, _| {
-        let rt = Runtime;
-        let tokio_rt = tokio::runtime::Builder::new_current_thread()
+    let executor = Box::new(
+        tokio::runtime::Builder::new_current_thread()
             .enable_all()
-            .build()
-            .expect("Failed to build runtime");
-        tokio_rt.block_on(async_closure(rt)).unwrap()
-    })
+            .build()?,
+    );
+
+    Ok(config.add_task((), move |_, _| {
+        let rt = Runtime;
+        executor.block_on(callback(rt))
+    }))
 }

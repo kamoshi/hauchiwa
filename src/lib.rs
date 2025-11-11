@@ -1,4 +1,6 @@
-mod error;
+#![deny(unsafe_code, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+pub mod error;
 mod executor;
 pub mod gitmap;
 pub mod loader;
@@ -118,12 +120,12 @@ pub struct FileMetadata {
     pub info: Option<gitmap::GitInfo>,
 }
 
-struct TaskNode<G, D, F, O>
+struct TaskNode<G, R, D, F>
 where
     G: Send + Sync,
+    R: Send + Sync + 'static,
     D: TaskDependencies,
-    F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> O + Send + Sync,
-    O: Send + Sync + 'static,
+    F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync,
 {
     name: &'static str,
     dependencies: D,
@@ -131,14 +133,14 @@ where
     _phantom: std::marker::PhantomData<G>,
 }
 
-impl<G, D, F, O> TypedTask<G> for TaskNode<G, D, F, O>
+impl<G, R, D, F> TypedTask<G> for TaskNode<G, R, D, F>
 where
     G: Send + Sync + 'static,
+    R: Send + Sync + 'static,
     D: TaskDependencies + Send + Sync,
-    F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> O + Send + Sync + 'static,
-    O: Clone + Send + Sync + 'static,
+    F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync + 'static,
 {
-    type Output = O;
+    type Output = R;
 
     fn get_name(&self) -> String {
         self.name.to_string()
@@ -148,7 +150,11 @@ where
         self.dependencies.dependencies()
     }
 
-    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Self::Output {
+    fn execute(
+        &self,
+        globals: &Globals<G>,
+        dependencies: &[Dynamic],
+    ) -> anyhow::Result<Self::Output> {
         let dependencies = self.dependencies.resolve(dependencies);
         (self.callback)(globals, dependencies)
     }
@@ -189,8 +195,8 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
     pub fn add_task<D, F, R>(&mut self, dependencies: D, callback: F) -> task::Handle<R>
     where
         D: TaskDependencies + Send + Sync + 'static,
-        F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> R + Send + Sync + 'static,
-        R: Clone + Send + Sync + 'static,
+        F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync + 'static,
+        R: Send + Sync + 'static,
     {
         self.add_task_opaque(TaskNode {
             name: type_name::<F>(),

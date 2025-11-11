@@ -1,5 +1,6 @@
 use crate::{
     SiteConfig,
+    error::HauchiwaError,
     loader::{File, Registry, glob::GlobRegistryTask, parse_yaml},
     task::Handle,
 };
@@ -7,26 +8,26 @@ use camino::Utf8PathBuf;
 use serde::de::DeserializeOwned;
 
 #[derive(Clone)]
-pub struct Content<T: Clone> {
+pub struct Content<T> {
     pub path: Utf8PathBuf,
     pub metadata: T,
     pub content: String,
 }
 
-pub fn glob_content<G, T: Clone>(
+pub fn glob_content<G, R>(
     site_config: &mut SiteConfig<G>,
     path_glob: &'static str,
-) -> Handle<Registry<Content<T>>>
+) -> Result<Handle<Registry<Content<R>>>, HauchiwaError>
 where
-    T: DeserializeOwned + Send + Sync + 'static,
     G: Send + Sync + 'static,
+    R: DeserializeOwned + Send + Sync + 'static,
 {
-    site_config.add_task_opaque(GlobRegistryTask::new(
+    Ok(site_config.add_task_opaque(GlobRegistryTask::new(
         vec![path_glob],
         vec![path_glob],
         move |_, file: File<Vec<u8>>| {
             let data = std::str::from_utf8(&file.metadata)?;
-            let (metadata, content) = parse_yaml::<T>(data).unwrap();
+            let (metadata, content) = parse_yaml::<R>(data)?;
 
             Ok((
                 file.path.clone(),
@@ -37,5 +38,5 @@ where
                 },
             ))
         },
-    ))
+    )?))
 }

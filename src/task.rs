@@ -9,11 +9,15 @@ pub(crate) type Dynamic = Arc<dyn Any + Send + Sync>;
 
 pub(crate) trait TypedTask<G: Send + Sync = ()>: Send + Sync {
     /// The concrete output type of this task.
-    type Output: Clone + Send + Sync + 'static;
+    type Output: Send + Sync + 'static;
 
     fn get_name(&self) -> String;
     fn dependencies(&self) -> Vec<NodeIndex>;
-    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Self::Output;
+    fn execute(
+        &self,
+        globals: &Globals<G>,
+        dependencies: &[Dynamic],
+    ) -> anyhow::Result<Self::Output>;
 
     #[inline]
     fn is_dirty(&self, _: &camino::Utf8Path) -> bool {

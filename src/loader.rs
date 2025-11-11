@@ -22,7 +22,7 @@ pub use script::{JS, build_scripts};
 pub use styles::{CSS, build_styles};
 pub use svelte::{Svelte, build_svelte};
 
-use crate::{error::BuildError, Hash32};
+use crate::{Hash32, error::BuildError};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::{collections::HashMap, fs};
 
@@ -31,8 +31,8 @@ use std::{collections::HashMap, fs};
 /// `Registry` is a common return type for loader tasks that process multiple files,
 /// such as `glob_content` or `glob_assets`. It provides a way to access the processed
 /// output of each file by its original path.
-#[derive(Debug, Clone)]
-pub struct Registry<T: Clone> {
+#[derive(Debug)]
+pub struct Registry<T> {
     map: HashMap<camino::Utf8PathBuf, T>,
 }
 
@@ -83,7 +83,7 @@ impl Runtime {
     /// - On success, returns the logical asset path as a `Utf8PathBuf` rooted
     ///   under `/hash/`, suitable for inclusion in HTML.
     /// - On failure, returns a `BuildError` for I/O or hashing errors.
-    fn store(&self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuildError> {
+    pub fn store(&self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuildError> {
         let hash = Hash32::hash(data);
         let hash = hash.to_hex();
 

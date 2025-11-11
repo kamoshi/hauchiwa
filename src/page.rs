@@ -2,7 +2,7 @@ use camino::Utf8Component;
 use camino::{Utf8Path, Utf8PathBuf};
 
 /// index component from path
-fn to_slug(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
+pub fn to_slug(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     let path = path.as_ref().with_extension("");
 
     // Check if the last component of the path is exactly "index.*"
@@ -31,7 +31,7 @@ fn to_slug(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
 ///
 /// Adapted from
 /// https://github.com/rust-lang/cargo/blob/f7acf448fc127df9a77c52cc2bba027790ac4931/crates/cargo-util/src/paths.rs#L76-L116
-fn normalize_path(path: &Utf8Path) -> Utf8PathBuf {
+pub fn normalize_path(path: &Utf8Path) -> Utf8PathBuf {
     let mut components = path.components().peekable();
     let mut ret = if let Some(c @ Utf8Component::Prefix(..)) = components.peek().cloned() {
         components.next();
@@ -65,13 +65,13 @@ fn normalize_path(path: &Utf8Path) -> Utf8PathBuf {
     ret
 }
 
-fn normalize_prefixed(prefix: &str, path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
+pub fn normalize_prefixed(prefix: &str, path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     let path = path.as_ref().strip_prefix(prefix).unwrap_or(path.as_ref());
 
     normalize(path)
 }
 
-pub(crate) fn normalize(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
+pub fn normalize(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     let mut buffer = path.as_ref().to_path_buf();
 
     if let Some(file_name) = buffer.file_name() {
@@ -88,7 +88,7 @@ pub(crate) fn normalize(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     buffer
 }
 
-fn absolutize(prefix: &str, path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
+pub fn absolutize(prefix: &str, path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     let path = path.as_ref().strip_prefix(prefix).unwrap_or(path.as_ref());
     let path = Utf8Path::new("/").join(path);
 

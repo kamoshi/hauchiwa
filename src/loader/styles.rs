@@ -1,5 +1,6 @@
 use crate::{
     SiteConfig,
+    error::HauchiwaError,
     loader::{Runtime, glob::GlobRegistryTask},
     task::Handle,
 };
@@ -13,8 +14,8 @@ pub fn build_styles<G: Send + Sync + 'static>(
     site_config: &mut SiteConfig<G>,
     glob_entry: &'static str,
     glob_watch: &'static str,
-) -> Handle<super::Registry<CSS>> {
-    site_config.add_task_opaque(GlobRegistryTask::new(
+) -> Result<Handle<super::Registry<CSS>>, HauchiwaError> {
+    Ok(site_config.add_task_opaque(GlobRegistryTask::new(
         vec![glob_entry],
         vec![glob_watch],
         move |_, file| {
@@ -23,5 +24,5 @@ pub fn build_styles<G: Send + Sync + 'static>(
             let path = rt.store(data.as_bytes(), "css")?;
             Ok((file.path, CSS { path }))
         },
-    ))
+    )?))
 }
