@@ -294,6 +294,7 @@ macro_rules! task {
             |$ctx, ( $( $($dep),* )? )| {
                 // For each `ident: Ty`, emit: `let _: Ty = ident;`
                 $( $( $( let _: $ty = $dep; )? )* )?
+
                 $body
             }
         )

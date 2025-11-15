@@ -122,9 +122,7 @@ impl TaskDependencies for () {
         vec![]
     }
 
-    fn resolve<'a>(&self, _outputs: &'a [Dynamic]) -> Self::Output<'a> {
-        ()
-    }
+    fn resolve<'a>(&self, _outputs: &'a [Dynamic]) -> Self::Output<'a> {}
 }
 
 macro_rules! impl_deps {
