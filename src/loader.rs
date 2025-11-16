@@ -22,7 +22,10 @@ pub use script::{JS, build_scripts};
 pub use styles::{CSS, build_styles};
 pub use svelte::{Svelte, build_svelte};
 
-use crate::{Hash32, error::BuildError};
+use crate::{
+    Hash32,
+    error::{BuildError, HauchiwaError},
+};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::{collections::HashMap, fs};
 
@@ -38,8 +41,12 @@ pub struct Registry<T> {
 
 impl<T: Clone> Registry<T> {
     /// Retrieves a reference to the processed data for a given source path.
-    pub fn get(&self, path: impl AsRef<Utf8Path>) -> Option<&T> {
-        self.map.get(path.as_ref())
+    pub fn get(&self, path: impl AsRef<Utf8Path>) -> Result<&T, HauchiwaError> {
+        self.map
+            .get(path.as_ref())
+            .ok_or(HauchiwaError::AssetNotFound(
+                path.as_ref().to_string().into(),
+            ))
     }
 
     /// Returns an iterator over the processed data of all files in the registry.

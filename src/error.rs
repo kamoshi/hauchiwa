@@ -50,6 +50,9 @@ pub enum HauchiwaError {
     #[cfg(feature = "reload")]
     #[error("Error while watching for file changes:\n{0}")]
     Watch(#[from] WatchError),
+
+    #[error("Asset '{0}' not found")]
+    AssetNotFound(Box<str>),
 }
 
 #[derive(Debug, Error)]

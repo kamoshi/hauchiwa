@@ -18,6 +18,7 @@ use tungstenite::WebSocket;
 
 use crate::{
     Globals, Mode, Site,
+    error::HauchiwaError,
     page::Page,
     task::{Dynamic, Task},
 };
@@ -126,11 +127,13 @@ fn run_tasks_parallel<G: Send + Sync>(
                     task_pb.set_message(task.get_name());
                     task_pb.enable_steady_tick(Duration::from_millis(100));
 
-                    let output = task.execute(globals, &inputs);
+                    let output = task.execute(globals, &inputs)?;
 
                     task_pb.finish_and_clear();
                     result_sender.send((node_index, output)).unwrap();
                 }
+
+                Ok::<(), anyhow::Error>(())
             });
         }
 

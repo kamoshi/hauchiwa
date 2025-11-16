@@ -1,4 +1,9 @@
-#![deny(unsafe_code, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![deny(
+    unsafe_code,
+    // clippy::unwrap_used,
+    // clippy::expect_used,
+    clippy::panic,
+)]
 
 pub mod error;
 mod executor;

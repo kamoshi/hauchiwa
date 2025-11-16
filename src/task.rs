@@ -28,7 +28,7 @@ pub(crate) trait TypedTask<G: Send + Sync = ()>: Send + Sync {
 pub(crate) trait Task<G: Send + Sync = ()>: Send + Sync {
     fn get_name(&self) -> String;
     fn dependencies(&self) -> Vec<NodeIndex>;
-    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Dynamic;
+    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> anyhow::Result<Dynamic>;
 
     #[inline]
     fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
@@ -50,9 +50,9 @@ where
         T::dependencies(self)
     }
 
-    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> Dynamic {
+    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> anyhow::Result<Dynamic> {
         // Call the typed method, then erase the result.
-        Arc::new(T::execute(self, globals, dependencies))
+        Ok(Arc::new(T::execute(self, globals, dependencies)?))
     }
 
     fn is_dirty(&self, path: &camino::Utf8Path) -> bool {
