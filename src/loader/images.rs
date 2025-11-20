@@ -1,76 +1,31 @@
+use camino::{Utf8Path, Utf8PathBuf};
 use std::fs;
 
-use camino::{Utf8Path, Utf8PathBuf};
-
 use crate::{
-    BuildError, Hash32,
-    loader::{Loader, generic::LoaderGeneric},
+    Hash32, SiteConfig,
+    error::{BuildError, HauchiwaError},
+    loader::{File, Registry, glob::GlobRegistryTask},
+    task::Handle,
 };
 
-/// Represents a hashed, losslessly compressed WebP image ready for use in templates.
-///
-/// The `path` points to the output location under the `/hash/img/` virtual namespace,
-/// suitable for use in `src` attributes or manifest generation. Images are
-/// content-addressed, allowing caching, deduplication, and incremental builds.
-///
-/// Created by `glob_images` from any raster input (e.g., PNG, JPEG, etc.).
+#[derive(Clone)]
 pub struct Image {
-    /// Relative path to the optimized WebP image, rooted at `/hash/img/`.
     pub path: Utf8PathBuf,
 }
 
-/// Constructs a loader that ingests raster images and emits lossless WebP variants.
-///
-/// Matches files using a glob pattern relative to `path_base`, reads each file,
-/// and re-encodes it as WebP using the [`image`] crate's lossless encoder. The
-/// resulting output is hashed and cached, then emitted into `dist`. The final
-/// [`Image`] contains a path pointing to the output asset.
-///
-/// ### Parameters
-/// - `path_base`: Base directory for relative glob resolution.
-/// - `path_glob`: Glob pattern matching source image files (e.g. `"**/*.png"`).
-///
-/// ### Returns
-/// A [`Loader`] that emits [`Image`] objects keyed by file content.
-///
-/// ### Example
-/// ```rust
-/// use hauchiwa::{Context, TaskResult, Page, loader::{Image, glob_images}};
-///
-/// // loader
-/// let loader = glob_images("assets/images", "**/*.png");
-///
-/// // task
-/// fn task(ctx: Context) -> TaskResult<Vec<Page>> {
-///     let Image { path } = ctx.get::<Image>("image.png")?;
-///
-///     Ok(vec![
-///         Page::text("index.html".into(), format!("<img src='{path}'>"))
-///     ])
-/// }
-/// ```
-///
-/// ### Notes
-/// - Only lossless WebP encoding is currently supported.
-/// - All outputs are content-addressed: the same input will always yield
-///   the same output path.
-/// - Image decoding/encoding is synchronous; performance may vary with size and volume.
-pub fn glob_images(path_base: &'static str, path_glob: &'static str) -> Loader {
-    Loader::with(move |_| {
-        LoaderGeneric::new(
-            path_base,
-            path_glob,
-            |path| {
-                let hash = Hash32::hash_file(path)?;
-
-                Ok((hash, (hash, path.to_owned())))
-            },
-            |_, (hash, path)| {
-                let path = build_image(hash, &path)?;
-                Ok(Image { path })
-            },
-        )
-    })
+pub fn glob_images<G: Send + Sync + 'static>(
+    site_config: &mut SiteConfig<G>,
+    path_glob: &'static [&'static str],
+) -> Result<Handle<Registry<Image>>, HauchiwaError> {
+    Ok(site_config.add_task_opaque(GlobRegistryTask::new(
+        path_glob.to_vec(),
+        path_glob.to_vec(),
+        move |_, file: File<Vec<u8>>| {
+            let hash = Hash32::hash_file(&file.path)?;
+            let path = build_image(hash, &file.path)?;
+            Ok((file.path, Image { path }))
+        },
+    )?))
 }
 
 fn process_image(buffer: &[u8]) -> image::ImageResult<Vec<u8>> {

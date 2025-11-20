@@ -2,7 +2,7 @@ mod assets;
 #[cfg(feature = "asyncrt")]
 mod asyncrt;
 mod content;
-mod generic;
+mod glob;
 #[cfg(feature = "images")]
 mod images;
 mod script;
@@ -10,90 +10,79 @@ mod script;
 mod styles;
 mod svelte;
 
-use std::{borrow::Cow, collections::HashSet, fs, sync::Arc};
-
-use camino::{Utf8Path, Utf8PathBuf};
-
-use crate::{BuildError, GitRepo, Hash32, Item, error::LoaderError};
-
 pub use assets::glob_assets;
 #[cfg(feature = "asyncrt")]
 pub use asyncrt::async_asset;
-pub use content::{Content, glob_content, json, yaml};
+pub use content::{Content, glob_content};
+use gray_matter::engine::{JSON, YAML};
 #[cfg(feature = "images")]
 pub use images::{Image, glob_images};
-pub use script::{Script, glob_scripts};
+pub use script::{JS, build_scripts};
 #[cfg(feature = "styles")]
-pub use styles::{Style, glob_styles};
-pub use svelte::{Svelte, glob_svelte};
+pub use styles::{CSS, build_styles};
+pub use svelte::{Svelte, build_svelte};
 
-pub(crate) trait Loadable: 'static + Send {
-    fn name(&self) -> Cow<'static, str>;
-    fn load(&mut self) -> Result<(), LoaderError>;
-    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError>;
-    fn items(&self) -> Vec<&Item>;
-    fn path_base(&self) -> &'static str;
-    fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool;
+use crate::{
+    Hash32,
+    error::{BuildError, HauchiwaError},
+};
+use ::glob::Pattern;
+use camino::{Utf8Path, Utf8PathBuf};
+use std::{collections::HashMap, fs};
+
+/// A collection of processed assets, mapping source file paths to their resulting data.
+///
+/// `Registry` is a common return type for loader tasks that process multiple files,
+/// such as `glob_content` or `glob_assets`. It provides a way to access the processed
+/// output of each file by its original path.
+#[derive(Debug)]
+pub struct Registry<T> {
+    map: HashMap<camino::Utf8PathBuf, T>,
 }
 
-impl Loadable for Box<dyn Loadable> {
-    #[inline]
-    fn name(&self) -> Cow<'static, str> {
-        (**self).name()
+impl<T: Clone> Registry<T> {
+    /// Retrieves a reference to the processed data for a given source path.
+    pub fn get(&self, path: impl AsRef<Utf8Path>) -> Result<&T, HauchiwaError> {
+        self.map
+            .get(path.as_ref())
+            .ok_or(HauchiwaError::AssetNotFound(
+                path.as_ref().to_string().into(),
+            ))
     }
 
-    #[inline]
-    fn load(&mut self) -> Result<(), LoaderError> {
-        (**self).load()
+    /// Returns an iterator over the processed data of all files in the registry.
+    pub fn values(&self) -> std::collections::hash_map::Values<'_, Utf8PathBuf, T> {
+        self.map.values()
     }
 
-    #[inline]
-    fn reload(&mut self, set: &HashSet<Utf8PathBuf>) -> Result<bool, LoaderError> {
-        (**self).reload(set)
-    }
+    /// Finds all assets whose paths match the given glob pattern.
+    /// Returns a vector of (Path, Value) tuples.
+    pub fn glob(&self, pattern: &str) -> Result<Vec<(&Utf8PathBuf, &T)>, HauchiwaError> {
+        let matcher = Pattern::new(pattern)?;
 
-    #[inline]
-    fn items(&self) -> Vec<&Item> {
-        (**self).items()
-    }
+        let matches: Vec<_> = self
+            .map
+            .iter()
+            .filter(|(path, _)| matcher.matches(path.as_str()))
+            .collect();
 
-    #[inline]
-    fn path_base(&self) -> &'static str {
-        (**self).path_base()
-    }
-
-    #[inline]
-    fn remove(&mut self, obsolete: &HashSet<Utf8PathBuf>) -> bool {
-        (**self).remove(obsolete)
-    }
-}
-
-pub struct Loader(Box<dyn FnOnce(LoaderOpts) -> Box<dyn Loadable>>);
-
-pub struct LoaderOpts {
-    pub repo: Option<Arc<GitRepo>>,
-}
-
-impl Loader {
-    #[inline]
-    pub(crate) fn with<F, R>(f: F) -> Self
-    where
-        F: FnOnce(LoaderOpts) -> R + 'static,
-        R: Loadable,
-    {
-        Self(Box::new(move |init| Box::new(f(init))))
-    }
-
-    #[inline]
-    pub(crate) fn init(self, opts: LoaderOpts) -> Box<dyn Loadable> {
-        (self.0)(opts)
+        Ok(matches)
     }
 }
 
-/// Build execution context, providing facilities for storing artifacts in a
-/// content-addressed cache and output directory.
+/// Represents a source file that is being processed by a loader.
+///
+/// This struct provides loaders with the file's path and its raw content or metadata,
+/// enabling tasks to perform operations like parsing, transformation, or analysis.
 ///
 /// `Runtime` abstracts filesystem interactions related to build artifact
+pub struct File<T> {
+    /// The path to the source file.
+    pub path: Utf8PathBuf,
+    /// The metadata or content of the file.
+    pub metadata: T,
+}
+
 /// storage, enabling immutability and reproducibility guarantees through
 /// content hashing.
 #[derive(Clone)]
@@ -136,3 +125,40 @@ impl Runtime {
         Ok(path_root)
     }
 }
+
+/// Generate the functions used to initialize content files. These functions can
+/// be used to parse the front matter using engines from crate `gray_matter`.
+macro_rules! matter_parser {
+	($name:ident, $engine:path) => {
+		#[doc = concat!(
+			"This function can be used to extract metadata from a document with `D` as the frontmatter shape.\n",
+			"Configured to use [`", stringify!($engine), "`] as the engine of the parser."
+		)]
+		fn $name<D>(content: &str) -> Result<(D, String), anyhow::Error>
+		where
+			D: for<'de> serde::Deserialize<'de> + Send + Sync + 'static,
+		{
+		    use gray_matter::{Matter, Pod};
+
+			// We can cache the creation of the parser
+			static PARSER: std::sync::LazyLock<Matter<$engine>> = std::sync::LazyLock::new(Matter::<$engine>::new);
+
+			let entity = PARSER.parse(content)?;
+            let object = entity
+                .data
+                .unwrap_or_else(Pod::new_hash)
+                .deserialize::<D>()
+                .map_err(|e| anyhow::anyhow!("Malformed frontmatter:\n{e}"))?;
+
+			Ok((
+				// Just the front matter
+				object,
+				// The rest of the content
+				entity.content,
+			))
+		}
+	};
+}
+
+matter_parser!(parse_yaml, YAML);
+matter_parser!(parse_json, JSON);

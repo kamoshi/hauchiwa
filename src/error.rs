@@ -2,6 +2,7 @@ use std::sync::Arc;
 #[cfg(feature = "reload")]
 use std::sync::mpsc::{RecvError, SendError};
 
+pub use anyhow::Error as RuntimeError;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone)]
@@ -9,7 +10,7 @@ use thiserror::Error;
 pub struct LazyAssetError(#[from] pub(crate) Arc<anyhow::Error>);
 
 impl LazyAssetError {
-    pub(crate) fn new(err: impl Into<anyhow::Error>) -> Self {
+    pub fn new(err: impl Into<anyhow::Error>) -> Self {
         Self(Arc::new(err.into()))
     }
 }
@@ -24,6 +25,12 @@ impl From<anyhow::Error> for LazyAssetError {
 pub enum HauchiwaError {
     #[error(transparent)]
     AnyhowArc(#[from] Arc<anyhow::Error>),
+
+    #[error("Failed to build runtime")]
+    RuntimeBuild(#[from] tokio::io::Error),
+
+    #[error(transparent)]
+    GlobPattern(#[from] glob::PatternError),
 
     #[error("Asset '{0}': {1}")]
     Asset(Box<str>, LazyAssetError),
@@ -43,6 +50,9 @@ pub enum HauchiwaError {
     #[cfg(feature = "reload")]
     #[error("Error while watching for file changes:\n{0}")]
     Watch(#[from] WatchError),
+
+    #[error("Asset '{0}' not found")]
+    AssetNotFound(Box<str>),
 }
 
 #[derive(Debug, Error)]

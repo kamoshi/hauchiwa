@@ -8,35 +8,46 @@ use std::str;
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, FixedOffset};
 
-pub const GIT_EXEC: &str = "git";
+const GIT_EXEC: &str = "git";
 
+/// Contains the Git commit information for all files in a repository.
 #[derive(Debug, Clone)]
 pub struct GitRepo {
-    /// Absolute path of the top-level repository directory.
+    /// The absolute path to the root of the Git repository.
     pub top_level_abs_path: String,
-    /// Maps filenames to their Git commit information.
+    /// A map where keys are file paths (relative to the repository root)
+    /// and values are the corresponding `GitInfo`.
     pub files: GitMap,
 }
 
-pub type GitMap = HashMap<String, GitInfo>;
+pub(crate) type GitMap = HashMap<String, GitInfo>;
 
+/// Holds detailed information about a single Git commit.
 #[derive(Debug, Clone)]
 pub struct GitInfo {
+    /// The full commit hash.
     pub hash: String,
+    /// The abbreviated commit hash.
     pub abbreviated_hash: String,
+    /// The commit subject line.
     pub subject: String,
+    /// The name of the commit author.
     pub author_name: String,
+    /// The email address of the commit author.
     pub author_email: String,
+    /// The date the commit was authored.
     pub author_date: DateTime<FixedOffset>,
+    /// The date the commit was committed.
     pub commit_date: DateTime<FixedOffset>,
+    /// The body of the commit message.
     pub body: String,
 }
 
-/// Options to configure the mapping.
+/// Provides options for configuring the Git repository analysis.
 pub struct Options {
-    /// Path to the repository.
+    /// The path to the Git repository on the local filesystem.
     pub repository: String,
-    /// Revision to use (e.g. HEAD, branch name, etc.)
+    /// The Git revision (e.g., a branch name, tag, or commit hash) to analyze.
     pub revision: String,
 }
 
@@ -88,7 +99,10 @@ fn to_git_info(entry: &str) -> Result<GitInfo> {
     })
 }
 
-/// Maps the given Git repository into a GitRepo structure.
+/// Analyzes a Git repository and returns a map of all files to their last commit information.
+///
+/// This function executes Git commands to inspect the repository at a given revision,
+/// collecting details about the most recent commit that modified each file.
 pub fn map(opts: Options) -> Result<GitRepo> {
     let mut files: GitMap = HashMap::new();
 

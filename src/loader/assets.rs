@@ -1,58 +1,64 @@
-use std::fs;
-
 use crate::{
-    Hash32, Loader,
-    loader::{Runtime, generic::LoaderGeneric},
+    Globals, SiteConfig,
+    error::HauchiwaError,
+    loader::{File, glob::GlobRegistryTask},
+    task::Handle,
 };
 
-/// A generic loader for binary assets with custom deserialization or transformation.
+/// Adds a task to the site configuration that finds files matching a glob
+/// pattern, processes each file using a provided callback, and collects the
+/// results into a `Registry`.
 ///
-/// Scans for files matching the glob under the given base path, computes a content
-/// hash, and invokes a user-supplied function to produce a typed `T` from the raw bytes.
+/// This function creates and registers a `GlobRegistryTask`. When the build
+/// graph is executed, this task will:
+/// 1.  Find all files on the filesystem that match the `path_glob`.
+/// 2.  For each file found, it reads its content as raw bytes (`Vec<u8>`).
+/// 3.  It then invokes the provided `callback` for each file, passing in the
+///     global context (`&Globals<G>`) and a `File<Vec<u8>>` struct.
+/// 4.  The `callback` processes the file and returns a value `R`.
+/// 5.  The task collects all results and returns a `Registry<R>`, which is a
+///     map from the original file path (`Utf8PathBuf`) to the corresponding `R` value.
 ///
-/// ### Parameters
-/// - `path_base`: The base directory for resolving the glob.
-/// - `path_glob`: Glob pattern (relative to `path_base`) identifying the assets.
-/// - `func`: A function that receives the build `Runtime` and the raw file contents,
-///   returning a `Result<T>` that will be cached and stored.
+/// This task will also be marked as dirty (triggering a rebuild) if any file
+/// matching the `path_glob` is modified.
 ///
-/// ### Example
-/// ```rust
-/// use hauchiwa::loader::{Runtime, glob_assets};
+/// # Parameters
 ///
-/// fn count_bytes(_: Runtime, bytes: Vec<u8>) -> anyhow::Result<usize> {
-///     Ok(bytes.len())
-/// }
+/// * `site_config`: The mutable `SiteConfig` to which the new task will be added.
+/// * `path_glob`: A glob pattern (e.g., `"static/**/*"`) used to find files. This
+///   pattern is used for both the initial file discovery and for watching for changes.
+/// * `callback`: A closure that defines the processing for each file. It receives
+///   the `&Globals<G>` and a `File<Vec<u8>>` (containing the file's path and
+///   raw byte content) and must return an `anyhow::Result<R>`.
 ///
-/// let loader = glob_assets("src/data", "**/*.bin", count_bytes);
-/// ```
+/// # Generics
 ///
-/// ### Output
-/// Produces a [`Loader`] that stores a content-hashed instance of `T` per asset.
+/// * `G`: The type of the global data.
+/// * `R`: The return type of the `callback` for a single file. This is the
+///   value that will be stored in the `Registry`.
 ///
-/// ### Notes
-/// - Files are hashed and compared by content, not path.
-/// - `func` is executed lazily per file during load.
-/// - `func` must be deterministic and free of side effects for reproducibility
-pub fn glob_assets<T>(
-    path_base: &'static str,
+/// # Returns
+///
+/// Returns a `Handle<super::Registry<R>>`, which is a typed reference to the
+/// task's output in the build graph. The output will be the `Registry`
+/// containing all processed file results.
+pub fn glob_assets<G, R>(
+    config: &mut SiteConfig<G>,
     path_glob: &'static str,
-    func: fn(Runtime, Vec<u8>) -> anyhow::Result<T>,
-) -> Loader
+    callback: impl Fn(&Globals<G>, File<Vec<u8>>) -> anyhow::Result<R> + Send + Sync + 'static,
+) -> Result<Handle<super::Registry<R>>, HauchiwaError>
 where
-    T: Send + Sync + 'static,
+    G: Send + Sync + 'static,
+    R: Send + Sync + 'static,
 {
-    Loader::with(move |_| {
-        LoaderGeneric::new(
-            path_base,
-            path_glob,
-            |path| {
-                let data = fs::read(path)?;
-                let hash = Hash32::hash(&data);
+    Ok(config.add_task_opaque(GlobRegistryTask::new(
+        vec![path_glob],
+        vec![path_glob],
+        move |ctx, file| {
+            let path = file.path.clone();
+            let res = callback(ctx, file)?;
 
-                Ok((hash, data))
-            },
-            func,
-        )
-    })
+            Ok((path, res))
+        },
+    )?))
 }

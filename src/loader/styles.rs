@@ -1,63 +1,28 @@
-use camino::Utf8PathBuf;
-use grass::{Options, OutputStyle, from_path};
+use crate::{
+    SiteConfig,
+    error::HauchiwaError,
+    loader::{Runtime, glob::GlobRegistryTask},
+    task::Handle,
+};
 
-use crate::{Hash32, Loader, loader::generic::LoaderGenericMultifile};
-
-/// Represents a compiled CSS asset emitted by the build pipeline.
-///
-/// This struct contains only the path to the minified stylesheet,
-/// which can be included in HTML templates or referenced from other assets.
-pub struct Style {
-    /// Path to the generated CSS file.
-    pub path: Utf8PathBuf,
+#[derive(Debug, Clone)]
+pub struct CSS {
+    pub path: camino::Utf8PathBuf,
 }
 
-/// Constructs a loader that compiles all `.scss` files matching the given glob pattern.
-///
-/// Uses [`grass`] (a Sass compiler in Rust) to compile matched files with compressed
-/// output style. Each compiled result is hashed for content-based caching and stored
-/// as a `.css` file. The resulting [`Style`] contains a path to the compiled stylesheet.
-///
-/// ### Parameters
-/// - `path_base`: Base directory used for resolving relative paths.
-/// - `path_glob`: Glob pattern to select `.scss` files within `path_base`.
-///
-/// ### Returns
-/// A [`Loader`] that emits [`Style`] objects keyed by file path and content hash.
-///
-/// ### Example
-/// ```rust
-/// use hauchiwa::{Context, TaskResult, Page, loader::{Style, glob_styles}};
-///
-/// // loader
-/// let loader = glob_styles("src/styles", "**/*.scss");
-///
-/// // task
-/// fn task(ctx: Context) -> TaskResult<Vec<Page>> {
-///     let Style { path } = ctx.get::<Style>("styles.scss")?;
-///
-///     Ok(vec![
-///         Page::text("index.html".into(), format!("<link rel='stylesheet' href='{path}'>"))
-///     ])
-/// }
-/// ```
-pub fn glob_styles(path_base: &'static str, path_glob: &'static str) -> Loader {
-    Loader::with(move |_| {
-        LoaderGenericMultifile::new(
-            path_base,
-            path_glob,
-            |path| {
-                let opts = Options::default().style(OutputStyle::Compressed);
-                let data = from_path(path, &opts)?;
-                let hash = Hash32::hash(&data);
-
-                Ok((hash, data))
-            },
-            |rt, data| {
-                let path = rt.store(data.as_bytes(), "css")?;
-
-                Ok(Style { path })
-            },
-        )
-    })
+pub fn build_styles<G: Send + Sync + 'static>(
+    site_config: &mut SiteConfig<G>,
+    glob_entry: &'static str,
+    glob_watch: &'static str,
+) -> Result<Handle<super::Registry<CSS>>, HauchiwaError> {
+    Ok(site_config.add_task_opaque(GlobRegistryTask::new(
+        vec![glob_entry],
+        vec![glob_watch],
+        move |_, file| {
+            let data = grass::from_path(&file.path, &grass::Options::default())?;
+            let rt = Runtime;
+            let path = rt.store(data.as_bytes(), "css")?;
+            Ok((file.path, CSS { path }))
+        },
+    )?))
 }
