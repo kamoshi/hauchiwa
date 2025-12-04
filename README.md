@@ -51,7 +51,7 @@ To begin using Hauchiwa, add the following snippet to your Cargo.toml file.
 Remember to replace "*" with the latest version available on Crates.io.
 
 ```toml
-hauchiwa = "*" # change this version to the latest
+hauchiwa = "0.8.0" # change this version to the latest
 ```
 
 ## Declarative configuration
@@ -74,115 +74,87 @@ pub struct Post {
 }
 ```
 
-The `main.rs` of your application can use `clap` to accept any additional CLI
-arguments, such as mode.
-
-```rust ignore
-use clap::{Parser, ValueEnum};
-
-#[derive(Parser, Debug, Clone)]
-struct Args {
-    #[clap(value_enum, index = 1, default_value = "build")]
-    mode: Mode,
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy)]
-enum Mode {
-    Build,
-    Watch,
-}
-```
-
 Within your application's main function, you can configure precisely how the
 website should be generated, defining content loaders, tasks, and hooks.
 
 ```rust
-use serde::{self, Deserialize};
-use hauchiwa::{Website, Page, Hook};
-use hauchiwa::loader::{
-    self, glob_content, glob_images, glob_assets, glob_scripts, glob_styles, glob_svelte,
-    yaml, Content
-};
-
-const BASE: &str = "content";
-
-type Props = ();
-type Post = ();
+use serde::Deserialize;
+use hauchiwa::{SiteConfig, Site, Globals};
+use hauchiwa::page::Page;
+use hauchiwa::loader::{self, Runtime};
 
 struct Bibtex {
     path: camino::Utf8PathBuf,
     data: String,
-};
+}
 
 #[derive(Default)]
 struct MyData {};
 
-// Here we start by calling the `setup` function.
-let mut website = Website::config()
-    .add_loaders([
-        // We can configure the collections of files used to build the pages.
-        loader::glob_content(BASE, "posts/**/*.md", yaml::<Post>),
-        // We can configure the generator to process additional files like images or custom assets.
-        loader::glob_images(BASE, "**/*.jpg"),
-        loader::glob_images(BASE, "**/*.png"),
-        loader::glob_images(BASE, "**/*.gif"),
-        loader::glob_assets(BASE, "**/*.bib", |rt, data| {
-            // save the raw data in cache and return path
-            let path = rt.store(&data, "bib").unwrap();
-            let text = String::from_utf8_lossy(&data);
-            let data = todo!(); // TODO: load bibtex via `hayagriva`
+fn main() -> anyhow::Result<()> {
+    // Here we start by creating a new configuration.
+    let mut config = SiteConfig::new();
 
-            // return data (path to file + parsed bibtex)
-            Ok(Bibtex { path, data })
-        }),
-        // We can add directories containing global stylesheets, either CSS or SCSS.
-        loader::glob_styles("styles", "**/[!_]*.scss"),
-        // We can add JavaScript scripts compiled via ESBuild
-        loader::glob_scripts("scripts", "src/*/main.ts"),
-        // We can add Svelte component compiled via ESbuild. We can use type
-        // parameter to specify the shape of props passed to the component,
-        // or we can use `()` if we don't need anything.
-        loader::glob_svelte::<Props>("scripts", "src/*/App.svelte"),
-    ])
-    // We can add a simple task to generate the `index.html` page with arbitrary
-    // content, here it's `<h1>hello world!</h1>`.
-    .add_task("index page", |_| {
-        let pages = vec![Page::text("index.html".into(), String::from("<h1>hello world!</h1>"))];
+    const BASE: &str = "content";
 
-        Ok(pages)
-    })
-    // We can retrieve any loaded content from the `ctx` provided to the task.
-    // Note that you have to bring your own markdown parser and HTML templating
-    // engine here.
-    .add_task("posts", |ctx| {
+    // We can configure the collections of files used to build the pages.
+    // glob_content expects YAML frontmatter matching the Post struct.
+    let posts = loader::glob_content::<MyData, Post>(&mut config, "content/posts/**/*.md")?;
+
+    // We can configure the generator to process additional files like images or custom assets.
+    let images = loader::glob_images(&mut config, &["content/**/*.jpg", "content/**/*.png"])?;
+
+    // We can add directories containing global stylesheets, either CSS or SCSS.
+    let styles = loader::build_styles(&mut config, "styles/main.scss", "styles/**/*.scss")?;
+
+    // We can add JavaScript scripts compiled via ESBuild
+    let scripts = loader::build_scripts(&mut config, "scripts/main.ts", "scripts/**/*.ts")?;
+
+    // We can add custom assets processing using glob_assets
+    let bibtex = loader::glob_assets(&mut config, "content/**/*.bib", |globals, file| {
+         let rt = Runtime;
+         // save the raw data in cache and return path
+         let path = rt.store(&file.metadata, "bib")?;
+         let text = String::from_utf8_lossy(&file.metadata);
+         let data = todo!(); // TODO: load bibtex via `hayagriva`
+
+         // return data (path to file + parsed bibtex)
+         Ok(Bibtex { path, data: data })
+    })?;
+
+    // We can add a simple task to generate the `index.html` page.
+    // The task! macro makes it easy to declare dependencies.
+    hauchiwa::task!(config, |ctx, posts, images, styles, scripts| {
         let mut pages = vec![];
 
-        for item in ctx.glob_with_file::<Content<Post>>("posts/**/*")? {
+        // posts is Registry<Content<Post>>
+        for post in posts.values() {
             // Retrieve any assets required to build the page.
-            let pattern = format!("{}/*", item.file.area);
-            let library = ctx.get::<Bibtex>(&pattern)?;
+            // ...
+
             // Parse the content of a Markdown file, bring your own library.
             let (parsed, outline, bibliography): (String, (), ()) =
                 todo!("whatever you want to use, e.g pulldown_cmark");
+
             // Generate the HTML page, bring your own library.
             let rendered = todo!("whatever you want to use, e.g maud");
-            // Return the path and content as a tuple.
-            pages.push(Page::text(item.file.area.join("index.html"), rendered))
+
+            // Add the page to the list
+            pages.push(Page::text(post.path.with_extension("html"), rendered));
         }
 
         Ok(pages)
-    })
-    // Do something after build
-    .add_hook(Hook::post_build(|pages| {
-        Ok(())
-    }))
-    // Complete the configuration process.
-    .finish();
+    });
 
+    // Create the site from the configuration
+    let mut site = Site::new(config);
 
-// Start the library in either the *build* or the *watch* mode.
-website.build(MyData::default());
-// website.watch(MyData::default());
+    // Start the library in either the *build* or the *watch* mode.
+    site.build(MyData::default())?;
+    // site.watch(MyData::default())?;
+
+    Ok(())
+}
 ```
 
 The full documentation for this library is always available on
