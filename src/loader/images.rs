@@ -13,19 +13,24 @@ pub struct Image {
     pub path: Utf8PathBuf,
 }
 
-pub fn glob_images<G: Send + Sync + 'static>(
-    site_config: &mut SiteConfig<G>,
-    path_glob: &'static [&'static str],
-) -> Result<Handle<Registry<Image>>, HauchiwaError> {
-    Ok(site_config.add_task_opaque(GlobRegistryTask::new(
-        path_glob.to_vec(),
-        path_glob.to_vec(),
-        move |_, file: File<Vec<u8>>| {
-            let hash = Hash32::hash_file(&file.path)?;
-            let path = build_image(hash, &file.path)?;
-            Ok((file.path, Image { path }))
-        },
-    )?))
+impl<G> SiteConfig<G>
+where
+    G: Send + Sync + 'static,
+{
+    pub fn glob_images(
+        &mut self,
+        path_glob: &'static [&'static str],
+    ) -> Result<Handle<Registry<Image>>, HauchiwaError> {
+        Ok(self.add_task_opaque(GlobRegistryTask::new(
+            path_glob.to_vec(),
+            path_glob.to_vec(),
+            move |_, file: File<Vec<u8>>| {
+                let hash = Hash32::hash_file(&file.path)?;
+                let path = build_image(hash, &file.path)?;
+                Ok((file.path, Image { path }))
+            },
+        )?))
+    }
 }
 
 fn process_image(buffer: &[u8]) -> image::ImageResult<Vec<u8>> {

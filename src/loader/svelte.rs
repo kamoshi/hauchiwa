@@ -29,38 +29,47 @@ where
     pub init: JS,
 }
 
-pub fn build_svelte<G: Send + Sync + 'static, P: Clone + DeserializeOwned + Serialize + 'static>(
-    site_config: &mut SiteConfig<G>,
-    glob_entry: &'static str,
-    glob_watch: &'static str,
-) -> Result<Handle<super::Registry<Svelte<P>>>, HauchiwaError> {
-    Ok(site_config.add_task_opaque(GlobRegistryTask::new(
-        vec![glob_entry],
-        vec![glob_watch],
-        move |_, file| {
-            let server = compile_svelte_server(&file.path)?;
-            let anchor = Hash32::hash(&server);
-            let client = compile_svelte_init(&file.path, anchor)?;
-            // let hash = Hash32::hash(&client);
+impl<G> SiteConfig<G>
+where
+    G: Send + Sync + 'static,
+{
+    pub fn build_svelte<P>(
+        &mut self,
+        glob_entry: &'static str,
+        glob_watch: &'static str,
+    ) -> Result<Handle<super::Registry<Svelte<P>>>, HauchiwaError>
+    where
+        P: Clone + DeserializeOwned + Serialize + 'static,
+    {
+        Ok(self.add_task_opaque(GlobRegistryTask::new(
+            vec![glob_entry],
+            vec![glob_watch],
+            move |_, file| {
+                let server = compile_svelte_server(&file.path)?;
+                let anchor = Hash32::hash(&server);
+                let client = compile_svelte_init(&file.path, anchor)?;
+                // let hash = Hash32::hash(&client);
 
-            let html = Arc::new({
-                let anchor = anchor.to_hex();
+                let html = Arc::new({
+                    let anchor = anchor.to_hex();
 
-                move |props: &P| {
-                    let json = serde_json::to_string(props)?;
-                    let html = run_ssr(&server, &json)?;
-                    let html = format!("<div class='_{anchor}' data-props='{json}'>{html}</div>");
-                    Ok(html)
-                }
-            });
+                    move |props: &P| {
+                        let json = serde_json::to_string(props)?;
+                        let html = run_ssr(&server, &json)?;
+                        let html =
+                            format!("<div class='_{anchor}' data-props='{json}'>{html}</div>");
+                        Ok(html)
+                    }
+                });
 
-            let rt = Runtime;
-            let init = rt.store(client.as_bytes(), "js")?;
-            let init = JS { path: init };
+                let rt = Runtime;
+                let init = rt.store(client.as_bytes(), "js")?;
+                let init = JS { path: init };
 
-            Ok((file.path, Svelte::<P> { html, init }))
-        },
-    )?))
+                Ok((file.path, Svelte::<P> { html, init }))
+            },
+        )?))
+    }
 }
 
 fn compile_svelte_server(file: &Utf8Path) -> anyhow::Result<String> {

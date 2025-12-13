@@ -16,11 +16,11 @@ pub use asyncrt::async_asset;
 pub use content::{Content, glob_content};
 use gray_matter::engine::{JSON, YAML};
 #[cfg(feature = "images")]
-pub use images::{Image, glob_images};
-pub use script::{JS, build_scripts};
+pub use images::Image;
+pub use script::JS;
 #[cfg(feature = "styles")]
-pub use styles::{CSS, build_styles};
-pub use svelte::{Svelte, build_svelte};
+pub use styles::CSS;
+pub use svelte::Svelte;
 
 use crate::{
     Hash32,

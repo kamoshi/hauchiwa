@@ -13,21 +13,26 @@ pub struct JS {
     pub path: Utf8PathBuf,
 }
 
-pub fn build_scripts<G: Send + Sync + 'static>(
-    site_config: &mut SiteConfig<G>,
-    glob_entry: &'static str,
-    glob_watch: &'static str,
-) -> Result<Handle<super::Registry<JS>>, HauchiwaError> {
-    Ok(site_config.add_task_opaque(GlobRegistryTask::new(
-        vec![glob_entry],
-        vec![glob_watch],
-        move |_, file| {
-            let data = compile_esbuild(&file.path)?;
-            let rt = Runtime;
-            let path = rt.store(&data, "js")?;
-            Ok((file.path, JS { path }))
-        },
-    )?))
+impl<G> SiteConfig<G>
+where
+    G: Send + Sync + 'static,
+{
+    pub fn build_scripts(
+        &mut self,
+        glob_entry: &'static str,
+        glob_watch: &'static str,
+    ) -> Result<Handle<super::Registry<JS>>, HauchiwaError> {
+        Ok(self.add_task_opaque(GlobRegistryTask::new(
+            vec![glob_entry],
+            vec![glob_watch],
+            move |_, file| {
+                let data = compile_esbuild(&file.path)?;
+                let rt = Runtime;
+                let path = rt.store(&data, "js")?;
+                Ok((file.path, JS { path }))
+            },
+        )?))
+    }
 }
 
 fn compile_esbuild(file: &Utf8Path) -> anyhow::Result<Vec<u8>> {
