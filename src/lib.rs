@@ -25,10 +25,7 @@ use camino::Utf8PathBuf;
 use petgraph::{Graph, graph::NodeIndex};
 use task::TaskDependencies;
 
-use crate::{
-    error::HauchiwaError,
-    task::{Task, TypedTask},
-};
+use crate::task::{Task, TypedTask};
 
 /// 32 bytes length generic hash
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]

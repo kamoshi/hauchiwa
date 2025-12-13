@@ -14,7 +14,7 @@ pub use assets::glob_assets;
 #[cfg(feature = "asyncrt")]
 pub use asyncrt::async_asset;
 pub use content::{Content, glob_content};
-use gray_matter::engine::{JSON, YAML};
+use gray_matter::engine::YAML;
 #[cfg(feature = "images")]
 pub use images::Image;
 pub use script::JS;
@@ -161,4 +161,4 @@ macro_rules! matter_parser {
 }
 
 matter_parser!(parse_yaml, YAML);
-matter_parser!(parse_json, JSON);
+// matter_parser!(parse_json, JSON);
