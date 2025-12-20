@@ -1,26 +1,77 @@
-//! Adapted from <https://github.com/bep/gitmap/blob/master/gitmap.go>
+//! High-performance, streaming Git commit history parser for Rust.
+//!
+//! Adapted from the Go implementation <https://github.com/bep/gitmap> and refactored for Rust.
 //! Copyright 2024 Bjørn Erik Pedersen <bjorn.erik.pedersen@gmail.com>.
-use std::collections::HashMap;
-use std::path::Path;
+//!
+//! ## Example
+//!
+//! ```rust
+//! use hauchiwa::gitmap::{Options, map};
+//!
+//! let opts = Options::new("main");
+//! match map(opts) {
+//!     Ok(repo) => {
+//!         println!("Repository root: {:?}", repo.top_level_path);
+//!         for (path, history) in repo.files {
+//!             println!("File: {:?}, Last modified by: {}", path, history[0].author_name);
+//!         }
+//!     }
+//!     Err(e) => eprintln!("Error: {}", e),
+//! }
+//! ```
+
+use std::io::BufRead;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
+use std::{collections::HashMap, sync::Arc};
 
-use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, FixedOffset};
+use thiserror::Error;
 
 const GIT_EXEC: &str = "git";
 
-/// Contains the Git commit information for all files in a repository.
-#[derive(Debug, Clone)]
-pub struct GitRepo {
-    /// The absolute path to the root of the Git repository.
-    pub top_level_abs_path: String,
-    /// A map where keys are file paths (relative to the repository root)
-    /// and values are the corresponding `GitInfo`.
-    pub files: GitMap,
+// --- Errors ---
+
+#[derive(Error, Debug)]
+pub enum GitMapError {
+    #[error("IO operation failed: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Git executable not found: {0}")]
+    GitNotFound(String),
+
+    #[error("Git command failed with status {status}: {stderr}")]
+    GitCommandFailed {
+        status: std::process::ExitStatus,
+        stderr: String,
+    },
+
+    #[error("Failed to parse date '{input}': {source}")]
+    DateParse {
+        input: String,
+        #[source]
+        source: chrono::ParseError,
+    },
+
+    #[error("Invalid UTF-8 in git output: {0}")]
+    Utf8(#[from] std::string::FromUtf8Error),
+
+    #[error("Git log entry malformed: expected {expected} fields, found {found}")]
+    MalformedLogEntry { expected: usize, found: usize },
+
+    #[error("Canonicalization of path '{path}' failed: {source}")]
+    PathResolution {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
-pub(crate) type GitMap = HashMap<String, GitInfo>;
+// Convenience alias for return types
+pub type Result<T> = std::result::Result<T, GitMapError>;
+
+// --- Domain ---
 
 /// Holds detailed information about a single Git commit.
 #[derive(Debug, Clone)]
@@ -43,49 +94,197 @@ pub struct GitInfo {
     pub body: String,
 }
 
-/// Provides options for configuring the Git repository analysis.
-pub struct Options {
-    /// The path to the Git repository on the local filesystem.
-    pub repository: String,
-    /// The Git revision (e.g., a branch name, tag, or commit hash) to analyze.
-    pub revision: String,
+/// A history of commits for a specific file, ordered from the most recent to
+/// the oldest.
+pub type GitHistory = Vec<Arc<GitInfo>>;
+
+/// A map where keys are file paths (relative to repo root) and values are
+/// commit histories.
+pub type GitMap = HashMap<String, GitHistory>;
+
+/// Contains the Git commit information for all files in a repository.
+#[derive(Debug, Clone)]
+pub struct GitRepo {
+    /// The absolute path to the root of the Git repository.
+    pub top_level_path: PathBuf,
+    /// The map of files to their history.
+    pub files: GitMap,
 }
 
-/// Runs a git command with the given arguments and returns the trimmed output.
-fn git(args: &[&str]) -> Result<String> {
-    let output = Command::new(GIT_EXEC)
-        .args(args)
+/// Configuration options for the Git log parser.
+pub struct Options {
+    /// The path to the Git repository. Defaults to current directory.
+    pub repository: PathBuf,
+    /// The Git revision to analyze (e.g., "HEAD", "main", "v1.0").
+    pub revision: String,
+    /// The name or path of the git executable. Defaults to "git".
+    pub git_binary: String,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            repository: PathBuf::from("."),
+            revision: "HEAD".to_string(),
+            git_binary: GIT_EXEC.to_string(),
+        }
+    }
+}
+
+impl Options {
+    pub fn new(revision: impl AsRef<str>) -> Self {
+        Self {
+            revision: revision.as_ref().to_string(),
+            ..Default::default()
+        }
+    }
+}
+
+// --- Implementation ---
+
+/// Analyzes a Git repository and returns a map of all files to their last
+/// commit information. This function executes Git commands to inspect the
+/// repository at a given revision, collecting details about commits that
+/// modified each file.
+pub fn map(opts: Options) -> Result<GitRepo> {
+    // get the absolute path to the repository
+    let repo_path = opts
+        .repository
+        .canonicalize()
+        .map_err(|e| GitMapError::PathResolution {
+            path: opts.repository.clone(),
+            source: e,
+        })?;
+
+    let top_level_path = find_top_level(&opts.git_binary, &repo_path)?;
+
+    let mut child = Command::new(&opts.git_binary)
+        .args([
+            "-c",
+            "diff.renames=0",
+            "-c",
+            "log.showSignature=0",
+            "-C",
+            repo_path.to_str().unwrap_or("."),
+            "log",
+            "--name-only",
+            "--no-merges",
+            "--format=format:%x1e%H%x1f%h%x1f%s%x1f%aN%x1f%aE%x1f%ai%x1f%ci%x1f%b%x1d",
+            &opts.revision,
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|_| GitMapError::GitNotFound(opts.git_binary.clone()))?;
+
+    let stdout = child.stdout.take().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Could not capture stdout")
+    })?;
+
+    let mut reader = std::io::BufReader::new(stdout);
+    let mut buffer = Vec::new();
+    let mut map: GitMap = HashMap::new();
+
+    // skip the initial bytes until the first record separator (0x1e)
+    reader.read_until(b'\x1e', &mut buffer)?;
+    buffer.clear();
+
+    // stream and parse each entry
+    loop {
+        let bytes_read = reader.read_until(b'\x1e', &mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+
+        // the buffer now contains the record ending with 0x1e, we trim the
+        // delimiter before parsing.
+        let slice = if buffer.ends_with(&[0x1e]) {
+            &buffer[..buffer.len() - 1]
+        } else {
+            &buffer[..]
+        };
+
+        if let Err(e) = parse_entry(slice, &mut map) {
+            // log parsing errors but do not crash the entire process
+            eprintln!("Skipping malformed entry: {}", e);
+        }
+
+        buffer.clear();
+    }
+
+    // ensure the process finished successfully
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(GitMapError::GitCommandFailed {
+            status: output.status,
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        });
+    }
+
+    Ok(GitRepo {
+        top_level_path: PathBuf::from(top_level_path),
+        files: map,
+    })
+}
+
+/// Helper to run `git rev-parse --show-toplevel`
+fn find_top_level(binary: &str, path: &Path) -> Result<String> {
+    let output = Command::new(binary)
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--show-toplevel"])
         .output()
-        .with_context(|| format!("failed to run git with args {args:?}"))?;
+        .map_err(|_| GitMapError::GitNotFound(binary.to_string()))?;
 
     if !output.status.success() {
-        // If git executable not found, we can check error kind.
-        return Err(anyhow!(
-            "{}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        return Err(GitMapError::GitCommandFailed {
+            status: output.status,
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        });
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(String::from_utf8(output.stdout)?.trim().to_string())
 }
 
-/// Parses a Git log entry (separated by control characters) into a GitInfo.
-fn to_git_info(entry: &str) -> Result<GitInfo> {
-    let mut items: Vec<&str> = entry.split('\x1f').collect();
+/// Parses a raw byte slice into a GitInfo struct and updates the map.
+fn parse_entry(raw: &[u8], map: &mut GitMap) -> Result<()> {
+    // We strictly handle UTF-8 errors here, though lossy might be safer for
+    // file paths. Switching to lossy for the whole block to prevent crashing on
+    // weird author names.
+    let s = String::from_utf8_lossy(raw);
 
-    // If we have 7 items, append an empty string for the body.
-    if items.len() == 7 {
-        items.push("");
-    }
-    if items.len() != 8 {
-        return Err(anyhow!("unexpected number of fields in entry: {:?}", items));
+    let parts: Vec<&str> = s.split('\x1d').collect();
+    if parts.len() < 2 {
+        return Ok(());
     }
 
-    // Parse the dates. The Go format "2006-01-02 15:04:05 -0700" corresponds to "%Y-%m-%d %H:%M:%S %z" in chrono.
-    let author_date = DateTime::parse_from_str(items[5], "%Y-%m-%d %H:%M:%S %z")
-        .with_context(|| format!("parsing author date: {}", items[5]))?;
-    let commit_date = DateTime::parse_from_str(items[6], "%Y-%m-%d %H:%M:%S %z")
-        .with_context(|| format!("parsing commit date: {}", items[6]))?;
+    let meta_str = parts[0];
+    let files_str = parts[1];
+
+    let info = Arc::new(parse_git_info(meta_str)?);
+
+    for line in files_str.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        map.entry(String::from(trimmed))
+            .or_default()
+            .push(Arc::clone(&info));
+    }
+    Ok(())
+}
+
+fn parse_git_info(entry: &str) -> Result<GitInfo> {
+    let items: Vec<&str> = entry.split('\x1f').collect();
+
+    if items.len() < 8 {
+        return Err(GitMapError::MalformedLogEntry {
+            expected: 8,
+            found: items.len(),
+        });
+    }
 
     Ok(GitInfo {
         hash: items[0].to_string(),
@@ -93,96 +292,15 @@ fn to_git_info(entry: &str) -> Result<GitInfo> {
         subject: items[2].to_string(),
         author_name: items[3].to_string(),
         author_email: items[4].to_string(),
-        author_date,
-        commit_date,
+        author_date: parse_date(items[5])?,
+        commit_date: parse_date(items[6])?,
         body: items[7].trim().to_string(),
     })
 }
 
-/// Analyzes a Git repository and returns a map of all files to their last commit information.
-///
-/// This function executes Git commands to inspect the repository at a given revision,
-/// collecting details about the most recent commit that modified each file.
-pub fn map(opts: Options) -> Result<GitRepo> {
-    let mut files: GitMap = HashMap::new();
-
-    // Get the absolute path to the repository.
-    let repo_path = Path::new(&opts.repository)
-        .canonicalize()
-        .with_context(|| format!("resolving repository path: {}", opts.repository))?;
-
-    // Run "git rev-parse --show-cdup" to find how many directories to go up.
-    let rev_parse_args = ["-C", &opts.repository, "rev-parse", "--show-cdup"];
-    let cd_up = git(&rev_parse_args)?.trim().to_string();
-
-    // Build the top-level path.
-    let top_level_path = {
-        let joined = repo_path.join(cd_up);
-        // Git always returns forward slashes.
-        joined
-            .to_string_lossy()
-            .replace(std::path::MAIN_SEPARATOR, "/")
-    };
-
-    // Build the git log command.
-    // Format string is similar to:
-    //   --name-only --no-merges --format=format:\x1e%H\x1f%h\x1f%s\x1f%aN\x1f%aE\x1f%ai\x1f%ci\x1f%b\x1d <revision>
-    let git_log_format = format!(
-        "--name-only --no-merges --format=format:\x1e%H\x1f%h\x1f%s\x1f%aN\x1f%aE\x1f%ai\x1f%ci\x1f%b\x1d {}",
-        opts.revision
-    );
-    // Split by whitespace (similar to Go's strings.Fields).
-    let log_fields: Vec<&str> = git_log_format.split_whitespace().collect();
-
-    // Prepend the additional git options.
-    let mut args = vec![
-        "-c",
-        "diff.renames=0",
-        "-c",
-        "log.showSignature=0",
-        "-C",
-        &opts.repository,
-        "log",
-    ];
-    args.extend(log_fields);
-
-    let log_output = git(&args)?;
-
-    // The output entries are separated by the record separator \x1e.
-    // Remove extra newlines and trim the leading/trailing control characters.
-    let entries_str = log_output.trim_matches(|c| c == '\n' || c == '\x1e' || c == '\'');
-    if entries_str.is_empty() {
-        // No entries found; return an empty GitRepo.
-        return Ok(GitRepo {
-            top_level_abs_path: top_level_path,
-            files,
-        });
-    }
-    // Each entry is separated by \x1e.
-    for entry in entries_str.split('\x1e') {
-        // Each entry consists of two parts separated by \x1d:
-        // the git info and the list of filenames.
-        let parts: Vec<&str> = entry.split('\x1d').collect();
-        if parts.len() < 2 {
-            continue;
-        }
-        let git_info = to_git_info(parts[0])
-            .with_context(|| format!("parsing git info from entry: {:?}", parts[0]))?;
-        // The second part is a newline-separated list of filenames.
-        for filename in parts[1].split('\n') {
-            let filename = filename.trim();
-            if filename.is_empty() {
-                continue;
-            }
-            // Only record the first commit info for the file.
-            files
-                .entry(filename.to_string())
-                .or_insert_with(|| git_info.clone());
-        }
-    }
-
-    Ok(GitRepo {
-        top_level_abs_path: top_level_path,
-        files,
+fn parse_date(date_str: &str) -> Result<DateTime<FixedOffset>> {
+    DateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S %z").map_err(|e| GitMapError::DateParse {
+        input: date_str.to_string(),
+        source: e,
     })
 }
