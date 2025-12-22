@@ -304,3 +304,71 @@ fn parse_date(date_str: &str) -> Result<DateTime<FixedOffset>> {
         source: e,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_basic() {
+        let opts = Options::default();
+        let repo = map(opts);
+        assert!(repo.is_ok(), "map() should return Ok");
+        let repo = repo.unwrap();
+        assert!(!repo.files.is_empty(), "Repo should have files");
+    }
+
+    #[test]
+    fn test_readme_history() {
+        let opts = Options::default();
+        let repo = map(opts).expect("map() failed");
+
+        // README.md is a standard file that should exist
+        let history = repo
+            .files
+            .get("README.md")
+            .expect("README.md not found in git map");
+
+        assert!(!history.is_empty(), "README.md should have history");
+
+        let oldest = &history[history.len() - 1];
+        assert_eq!(&oldest.hash, "0a5388ad9a6f4bb821106e6ca0758af186d545ac");
+        assert_eq!(&oldest.author_name, "Maciej Jur");
+        assert_eq!(&oldest.subject, "git init");
+
+        let second = &history[history.len() - 2];
+        assert_eq!(&second.hash, "a0f6d4173e9e4fdceb0e95555dd55fd9a32d1b10");
+        assert_eq!(&second.author_name, "Maciej Jur");
+        assert_eq!(&second.subject, "docs: readme");
+    }
+
+    #[test]
+    fn test_nested_history() {
+        let opts = Options::default();
+        let repo = map(opts).expect("map() failed");
+
+        let history = repo
+            .files
+            .get("src/lib.rs")
+            .expect("File at src/lib.rs not found");
+
+        assert!(!history.is_empty(), "src/lib.rs should have history");
+
+        let oldest = &history[history.len() - 1];
+        assert_eq!(&oldest.hash, "0a5388ad9a6f4bb821106e6ca0758af186d545ac");
+        assert_eq!(&oldest.author_name, "Maciej Jur");
+        assert_eq!(&oldest.subject, "git init");
+
+        let second = &history[history.len() - 2];
+        assert_eq!(&second.hash, "c4ff0037357e3157aef262c45e7bc90b4c88fb85");
+        assert_eq!(&second.author_name, "Maciej Jur");
+        assert_eq!(&second.subject, "handle arbitrary scss and js");
+    }
+
+    #[test]
+    fn test_revision() {
+        let opts = Options::new("HEAD");
+        let repo = map(opts);
+        assert!(repo.is_ok());
+    }
+}
