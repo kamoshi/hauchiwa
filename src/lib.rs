@@ -7,7 +7,6 @@
 
 pub mod error;
 mod executor;
-pub mod gitmap;
 pub mod loader;
 pub mod page;
 pub mod task;
@@ -24,6 +23,10 @@ use std::{
 use camino::Utf8PathBuf;
 use petgraph::{Graph, graph::NodeIndex};
 use task::TaskDependencies;
+
+#[deprecated = "Use hauchiwa::gitscan instead"]
+pub use gitscan as gitmap;
+pub use gitscan;
 
 use crate::task::{Task, TypedTask};
 

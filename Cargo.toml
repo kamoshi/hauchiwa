@@ -1,6 +1,6 @@
 [package]
 name        = "hauchiwa"
-version     = "0.8.1"
+version     = "0.8.2"
 edition     = "2024"
 authors     = ["Maciej Jur <maciej@kamoshi.org>"]
 keywords    = ["ssg"]
@@ -28,6 +28,7 @@ serde_yaml              = "0.9"
 blake3                  = { version = "1.8", features = ["rayon", "mmap"] }
 petgraph                = "0.8.3"
 crossbeam-channel       = "0.5.15"
+gitscan                 = "0.1.0"
 
 # CLI
 console                 = { version = "0.16", default-features = false, optional = true }
