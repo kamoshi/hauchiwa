@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     net::{TcpListener, TcpStream},
-    sync::{Arc, Mutex, mpsc::Sender},
+    sync::{Arc, Mutex, RwLock, mpsc::Sender},
     thread::JoinHandle,
     time::Duration,
 };
@@ -16,7 +16,7 @@ use petgraph::graph::NodeIndex;
 use petgraph::{algo::toposort, visit::Dfs};
 use tungstenite::WebSocket;
 
-use crate::{Globals, Mode, Site, page::Page, task::Dynamic};
+use crate::{Globals, Mode, Site, importmap::ImportMap, page::Page, task::Dynamic};
 
 pub fn run_once_parallel<G: Send + Sync>(
     site: &mut Site<G>,
@@ -199,6 +199,7 @@ pub fn watch<G: Send + Sync>(site: &mut Site<G>, data: G) -> anyhow::Result<()> 
         mode: Mode::Watch,
         port: Some(port),
         data,
+        importmap: Arc::new(RwLock::new(ImportMap::default())),
     };
 
     println!("Performing initial build...");

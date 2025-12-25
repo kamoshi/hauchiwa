@@ -1,7 +1,7 @@
 use std::{
     io::Write,
     process::{Command, Stdio},
-    sync::Arc,
+    sync::{Arc, LazyLock},
 };
 
 use camino::Utf8Path;
@@ -16,6 +16,8 @@ use crate::{
 
 type Prerender<P> = Arc<dyn Fn(&P) -> anyhow::Result<String> + Send + Sync>;
 
+static RUNTIME: LazyLock<anyhow::Result<String>> = LazyLock::new(compile_svelte_runtime);
+
 #[derive(Clone)]
 pub struct Svelte<P = ()>
 where
@@ -27,6 +29,9 @@ where
     /// Path to a JavaScript file that bootstraps client-side hydration. Written
     /// to disk during the build and referenced in the rendered output.
     pub init: JS,
+
+    /// Path to the runtime file that provides the necessary functions for the component.
+    pub rt: JS,
 }
 
 impl<G> SiteConfig<G>
@@ -45,6 +50,11 @@ where
             vec![glob_entry],
             vec![glob_watch],
             move |_, file| {
+                let rt = Runtime;
+
+                let svelte = RUNTIME.as_deref().unwrap();
+                let svelte = rt.store(svelte.as_bytes(), "js")?;
+
                 let server = compile_svelte_server(&file.path)?;
                 let anchor = Hash32::hash(&server);
                 let client = compile_svelte_init(&file.path, anchor)?;
@@ -62,11 +72,17 @@ where
                     }
                 });
 
-                let rt = Runtime;
                 let init = rt.store(client.as_bytes(), "js")?;
                 let init = JS { path: init };
 
-                Ok((file.path, Svelte::<P> { html, init }))
+                Ok((
+                    file.path,
+                    Svelte::<P> {
+                        html,
+                        init,
+                        rt: JS { path: svelte },
+                    },
+                ))
             },
         )?))
     }
@@ -236,6 +252,7 @@ fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> anyhow::Result<St
             write: false,
             mainFields: ["svelte", "browser", "module", "main"],
             conditions: ["svelte", "browser"],
+            external: ["svelte"],
             plugins: [
                 svelte({
                     compilerOptions: {
@@ -278,6 +295,82 @@ fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> anyhow::Result<St
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         Err(anyhow::anyhow!("Deno bundler failed:\n{stderr}"))?
+    }
+
+    Ok(String::from_utf8(output.stdout)?)
+}
+
+pub fn compile_svelte_runtime() -> anyhow::Result<String> {
+    const JS: &str = r#"
+        import { build } from "npm:esbuild@0.25.11";
+        // Ensure this matches the version used in other functions or relies on the same resolution
+
+        // Create a virtual entry point that re-exports Svelte features
+        // 'hydrate' is the critical one used in compile_svelte_init
+        const stub = `
+            // 1. The Public API (mount, flushSync, etc.)
+            export * from "svelte";
+
+            // 2. The Svelte 5 Engine (CRITICAL for your error)
+            // The compiled code imports 'template_effect', 'append', etc. from here.
+            export * from "svelte/internal/client";
+
+            // 3. Side-effects (Version disclosure)
+            // This file just sets window.__svelte.v = '5.x'.
+            // We import it for side-effects so it gets bundled.
+            import "svelte/internal/disclose-version";
+        `;
+
+        const bundle = await build({
+            stdin: {
+                contents: stub,
+                resolveDir: Deno.cwd(), // Resolve from current working directory
+                loader: "ts",
+            },
+            platform: "browser",
+            format: "esm",
+            bundle: true,      // Bundle Svelte into this file
+            minify: true,
+            write: false,
+            // Ensure we use the exact same conditions as the component loader
+            mainFields: ["svelte", "browser", "module", "main"],
+            conditions: ["svelte", "browser"],
+        });
+
+        const js = new TextEncoder().encode(bundle.outputFiles[0].text);
+        await Deno.stdout.write(js);
+        await Deno.stdout.close();
+    "#;
+
+    // Run Deno to generate the code
+    let mut child = Command::new("deno")
+        .arg("run")
+        .arg("--quiet")
+        .arg("--allow-env")
+        .arg("--allow-read")
+        .arg("--allow-run")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or(anyhow::anyhow!("stdin not piped"))?;
+        stdin.write_all(JS.as_bytes())?;
+        stdin.flush()?;
+    }
+
+    let output = child.wait_with_output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(anyhow::anyhow!(
+            "Failed to bundle Svelte runtime:\n{stderr}"
+        ))?
     }
 
     Ok(String::from_utf8(output.stdout)?)

@@ -7,6 +7,7 @@
 
 pub mod error;
 mod executor;
+pub mod importmap;
 pub mod loader;
 pub mod page;
 pub mod task;
@@ -16,8 +17,9 @@ pub use camino;
 
 use std::{
     any::{Any, type_name},
+    cell::Cell,
     fmt::Debug,
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
 use camino::Utf8PathBuf;
@@ -28,7 +30,10 @@ use task::TaskDependencies;
 pub use gitscan as gitmap;
 pub use gitscan;
 
-use crate::task::{Task, TypedTask};
+use crate::{
+    importmap::ImportMap,
+    task::{Task, TypedTask},
+};
 
 /// 32 bytes length generic hash
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -89,7 +94,7 @@ pub enum Mode {
 ///
 /// This struct holds information such as the project's generator name, the current build mode (build or watch),
 /// and any user-defined data `G` that needs to be shared across different tasks.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Globals<G: Send + Sync = ()> {
     /// The name and version of the generator.
     pub generator: &'static str,
@@ -99,6 +104,8 @@ pub struct Globals<G: Send + Sync = ()> {
     pub port: Option<u16>,
     /// User-defined global data that can be accessed by tasks.
     pub data: G,
+    /// Import map for managing module imports.
+    pub importmap: Arc<RwLock<ImportMap>>,
 }
 
 impl<G: Send + Sync> Globals<G> {
@@ -258,6 +265,7 @@ impl<G: Send + Sync> Site<G> {
             mode: Mode::Build,
             port: None,
             data,
+            importmap: Arc::new(RwLock::new(ImportMap::default())),
         };
 
         utils::clear_dist().expect("Failed to clear dist directory");
