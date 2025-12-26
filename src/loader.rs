@@ -76,17 +76,12 @@ impl<T: Clone> Registry<T> {
     }
 }
 
-/// Represents a source file that is being processed by a loader.
-///
-/// This struct provides loaders with the file's path and its raw content or metadata,
-/// enabling tasks to perform operations like parsing, transformation, or analysis.
-///
-/// `Runtime` abstracts filesystem interactions related to build artifact
-pub struct File<T> {
+/// A loaded source file containing its path and raw byte content.
+pub struct File {
     /// The path to the source file.
     pub path: Utf8PathBuf,
-    /// The metadata or content of the file.
-    pub metadata: T,
+    /// The content of the file.
+    pub data: Box<[u8]>,
 }
 
 /// storage, enabling immutability and reproducibility guarantees through
@@ -155,11 +150,8 @@ impl Default for Runtime {
     }
 }
 
-type GlobCallback<G, R> = Box<
-    dyn Fn(&Context<G>, &mut Runtime, File<Vec<u8>>) -> anyhow::Result<(Utf8PathBuf, R)>
-        + Send
-        + Sync,
->;
+type GlobCallback<G, R> =
+    Box<dyn Fn(&Context<G>, &mut Runtime, File) -> anyhow::Result<(Utf8PathBuf, R)> + Send + Sync>;
 
 pub struct GlobRegistryTask<G, R>
 where
@@ -182,7 +174,7 @@ where
         callback: F,
     ) -> Result<Self, HauchiwaError>
     where
-        F: Fn(&Context<G>, &mut Runtime, File<Vec<u8>>) -> anyhow::Result<(Utf8PathBuf, R)>
+        F: Fn(&Context<G>, &mut Runtime, File) -> anyhow::Result<(Utf8PathBuf, R)>
             + Send
             + Sync
             + 'static,
@@ -230,12 +222,8 @@ where
         let results: anyhow::Result<Vec<_>> = paths
             .into_par_iter()
             .map(|path| {
-                let data = fs::read(&path)?;
-
-                let file = File {
-                    path,
-                    metadata: data,
-                };
+                let data = fs::read(&path)?.into();
+                let file = File { path, data };
 
                 let mut rt = Runtime::new();
 

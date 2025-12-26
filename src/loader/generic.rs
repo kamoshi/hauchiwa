@@ -76,10 +76,7 @@ where
     pub fn load<R>(
         &mut self,
         path_glob: &'static str,
-        callback: impl Fn(&Globals<G>, &mut Runtime, File<Vec<u8>>) -> anyhow::Result<R>
-        + Send
-        + Sync
-        + 'static,
+        callback: impl Fn(&Globals<G>, &mut Runtime, File) -> anyhow::Result<R> + Send + Sync + 'static,
     ) -> Result<Handle<super::Registry<R>>, HauchiwaError>
     where
         G: Send + Sync + 'static,
@@ -140,8 +137,8 @@ where
         Ok(self.add_task_opaque(GlobRegistryTask::new(
             vec![path_glob],
             vec![path_glob],
-            move |_, _, file: File<Vec<u8>>| {
-                let data = std::str::from_utf8(&file.metadata).map_err(FrontmatterError::Utf8)?;
+            move |_, _, file: File| {
+                let data = std::str::from_utf8(&file.data).map_err(FrontmatterError::Utf8)?;
                 let (metadata, content) =
                     super::parse_yaml::<R>(data).map_err(FrontmatterError::Parse)?;
 
