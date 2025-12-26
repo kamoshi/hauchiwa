@@ -11,7 +11,7 @@ use thiserror::Error;
 use crate::{
     Hash32, SiteConfig,
     error::HauchiwaError,
-    loader::{JS, glob::GlobRegistryTask},
+    loader::{Script, glob::GlobRegistryTask},
     task::Handle,
 };
 
@@ -48,14 +48,51 @@ where
     P: serde::Serialize,
 {
     pub html: Prerender<P>,
-    pub init: JS,
-    pub rt: JS,
+    pub init: Script,
+    pub rt: Script,
 }
 
 impl<G> SiteConfig<G>
 where
     G: Send + Sync + 'static,
 {
+    /// Compiles Svelte components for Server-Side Rendering (SSR) and client-side hydration.
+    ///
+    /// This loader uses Deno to compile Svelte components found by the entry glob.
+    /// It produces an SSR-capable script and a client-side hydration script.
+    ///
+    /// The `Svelte` object returned in the registry provides an `html` function (for SSR)
+    /// and handles to the client-side JavaScript assets.
+    ///
+    /// **Note:** This loader requires the `deno` binary to be available in the system PATH.
+    ///
+    /// # Generics
+    ///
+    /// * `P`: The type of the properties (props) that the Svelte component accepts.
+    ///   This type must be serializable and deserializable.
+    ///
+    /// # Arguments
+    ///
+    /// * `glob_entry`: Glob pattern for the entry components (e.g., "components/Button.svelte").
+    /// * `glob_watch`: Glob pattern for files to watch (e.g., "components/**/*.svelte").
+    ///
+    /// # Returns
+    ///
+    /// A handle to a registry mapping original file paths to `Svelte<P>` objects.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// #[derive(serde::Serialize, serde::Deserialize, Clone)]
+    /// struct ButtonProps {
+    ///     label: String,
+    /// }
+    ///
+    /// let buttons = config.load_svelte::<ButtonProps>(
+    ///     "components/Button.svelte",
+    ///     "components/**/*.svelte"
+    /// )?;
+    /// ```
     pub fn load_svelte<P>(
         &mut self,
         glob_entry: &'static str,
@@ -106,8 +143,8 @@ where
                     file.path,
                     Svelte::<P> {
                         html,
-                        init: JS { path: client },
-                        rt: JS { path: svelte },
+                        init: Script { path: client },
+                        rt: Script { path: svelte },
                     },
                 ))
             },

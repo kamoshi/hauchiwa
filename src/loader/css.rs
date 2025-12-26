@@ -20,7 +20,7 @@ pub enum StyleError {
 
 /// Represents a compiled CSS file.
 #[derive(Debug, Clone)]
-pub struct CSS {
+pub struct Stylesheet {
     /// The path to the compiled CSS file.
     pub path: camino::Utf8PathBuf,
 }
@@ -46,13 +46,14 @@ where
     /// # Example
     ///
     /// ```rust,ignore
+    /// // Compile main.scss, watching all scss files in the styles directory for changes.
     /// let styles = config.load_css("styles/main.scss", "styles/**/*.scss")?;
     /// ```
     pub fn load_css(
         &mut self,
         glob_entry: &'static str,
         glob_watch: &'static str,
-    ) -> Result<Handle<super::Registry<CSS>>, HauchiwaError> {
+    ) -> Result<Handle<super::Registry<Stylesheet>>, HauchiwaError> {
         Ok(self.add_task_opaque(GlobRegistryTask::new(
             vec![glob_entry],
             vec![glob_watch],
@@ -64,7 +65,7 @@ where
                     .store(data.as_bytes(), "css")
                     .map_err(StyleError::Build)?;
 
-                Ok((file.path, CSS { path }))
+                Ok((file.path, Stylesheet { path }))
             },
         )?))
     }

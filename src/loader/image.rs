@@ -54,6 +54,7 @@ where
     /// # Example
     ///
     /// ```rust,ignore
+    /// // Load all PNG and JPG images in the assets directory.
     /// let images = config.load_images(&["assets/**/*.png", "assets/**/*.jpg"])?;
     /// ```
     pub fn load_images(

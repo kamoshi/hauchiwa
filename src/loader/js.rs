@@ -27,7 +27,7 @@ pub enum ScriptError {
 
 /// Represents a compiled JavaScript module.
 #[derive(Clone)]
-pub struct JS {
+pub struct Script {
     /// The path to the compiled JavaScript file (e.g., hashed path).
     pub path: Utf8PathBuf,
 }
@@ -41,6 +41,8 @@ where
     /// This loader finds files matching `glob_entry`, bundles and minifies them
     /// using the `esbuild` command-line tool, and stores the resulting artifacts.
     ///
+    /// **Note:** This loader requires the `esbuild` binary to be available in the system PATH.
+    ///
     /// # Arguments
     ///
     /// * `glob_entry`: Glob pattern for the entry points (e.g., "src/main.ts").
@@ -53,13 +55,14 @@ where
     /// # Example
     ///
     /// ```rust,ignore
+    /// // Compile main.ts using esbuild, watching all ts files in the scripts directory.
     /// let scripts = config.load_js("scripts/main.ts", "scripts/**/*.ts")?;
     /// ```
     pub fn load_js(
         &mut self,
         glob_entry: &'static str,
         glob_watch: &'static str,
-    ) -> Result<Handle<super::Registry<JS>>, HauchiwaError> {
+    ) -> Result<Handle<super::Registry<Script>>, HauchiwaError> {
         Ok(self.add_task_opaque(GlobRegistryTask::new(
             vec![glob_entry],
             vec![glob_watch],
@@ -67,7 +70,7 @@ where
                 let data = compile_esbuild(&file.path)?;
                 let path = rt.store(&data, "js").map_err(ScriptError::Build)?;
 
-                Ok((file.path, JS { path }))
+                Ok((file.path, Script { path }))
             },
         )?))
     }

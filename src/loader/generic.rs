@@ -63,6 +63,16 @@ where
     /// Returns a `Handle<super::Registry<R>>`, which is a typed reference to the
     /// task's output in the build graph. The output will be the `Registry`
     /// containing all processed file results.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // A simple loader that reads files as UTF-8 strings.
+    /// let text_files = config.load("content/**/*.txt", |_, _, file| {
+    ///     let content = String::from_utf8(file.metadata)?;
+    ///     Ok(content)
+    /// })?;
+    /// ```
     pub fn load<R>(
         &mut self,
         path_glob: &'static str,
@@ -115,6 +125,8 @@ where
     ///     date: String,
     /// }
     ///
+    /// // Load all markdown files in the posts directory, parsing their
+    /// // frontmatter into PostMeta structs.
     /// let posts = config.load_frontmatter::<PostMeta>("content/posts/*.md")?;
     /// ```
     pub fn load_frontmatter<R>(

@@ -4,19 +4,19 @@ pub mod generic;
 pub use generic::Content;
 
 #[cfg(feature = "images")]
-pub mod image;
+mod image;
 #[cfg(feature = "images")]
 pub use image::Image;
 
 #[cfg(feature = "styles")]
-pub mod css;
+mod css;
 #[cfg(feature = "styles")]
-pub use css::CSS;
+pub use css::Stylesheet;
 
-pub mod js;
-pub use js::JS;
+mod js;
+pub use js::Script;
 
-pub mod svelte;
+mod svelte;
 pub use svelte::Svelte;
 
 #[cfg(feature = "asyncrt")]
@@ -33,11 +33,12 @@ use ::glob::Pattern;
 use camino::{Utf8Path, Utf8PathBuf};
 use std::{collections::HashMap, fs};
 
-/// A collection of processed assets, mapping source file paths to their resulting data.
+/// A collection of processed assets, mapping source file paths to their
+/// resulting data.
 ///
-/// `Registry` is a common return type for loader tasks that process multiple files,
-/// such as `glob_content` or `glob_assets`. It provides a way to access the processed
-/// output of each file by its original path.
+/// `Registry` is a common return type for loader tasks that process multiple
+/// files, such as `load` or `load_frontmatter`. It provides a way to access the
+/// processed output of each file by its original path.
 #[derive(Debug)]
 pub struct Registry<T> {
     map: HashMap<camino::Utf8PathBuf, T>,
