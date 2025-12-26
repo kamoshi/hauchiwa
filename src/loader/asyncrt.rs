@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use crate::error::HauchiwaError;
-use crate::{SiteConfig, loader::Runtime, task::Handle};
+use crate::{SiteConfig, task::Handle};
 
 pub fn async_asset<G, R, F, Fut>(
     config: &mut SiteConfig<G>,

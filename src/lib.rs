@@ -183,6 +183,12 @@ pub struct SiteConfig<G: Send + Sync = ()> {
     graph: Graph<Arc<dyn Task<G>>, ()>,
 }
 
+impl<G: Send + Sync + 'static> Default for SiteConfig<G> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<G: Send + Sync + 'static> SiteConfig<G> {
     /// Creates a new, empty `SiteConfig`.
     pub fn new() -> Self {
