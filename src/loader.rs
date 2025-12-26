@@ -4,23 +4,23 @@ pub mod generic;
 pub use generic::Content;
 
 #[cfg(feature = "images")]
-mod image;
+pub mod image;
 #[cfg(feature = "images")]
 pub use image::Image;
 
 #[cfg(feature = "styles")]
-mod css;
+pub mod css;
 #[cfg(feature = "styles")]
 pub use css::Stylesheet;
 
-mod js;
+pub mod js;
 pub use js::Script;
 
-mod svelte;
+pub mod svelte;
 pub use svelte::Svelte;
 
 #[cfg(feature = "asyncrt")]
-mod tokio;
+pub mod tokio;
 
 use gray_matter::engine::YAML;
 
