@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 use camino::{Utf8Path, Utf8PathBuf};
 use thiserror::Error;
 
-use crate::{SiteConfig, error::HauchiwaError, loader::glob::GlobRegistryTask, task::Handle};
+use crate::{SiteConfig, error::HauchiwaError, loader::GlobRegistryTask, task::Handle};
 
 /// Errors that can occur when compiling JavaScript files.
 #[derive(Debug, Error)]

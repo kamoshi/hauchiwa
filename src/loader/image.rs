@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::{
     Hash32, SiteConfig,
     error::{BuildError, HauchiwaError},
-    loader::{File, Registry, glob::GlobRegistryTask},
+    loader::{File, GlobRegistryTask, Registry},
     task::Handle,
 };
 

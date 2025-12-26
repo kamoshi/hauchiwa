@@ -11,7 +11,7 @@ use thiserror::Error;
 use crate::{
     Hash32, SiteConfig,
     error::HauchiwaError,
-    loader::{Script, glob::GlobRegistryTask},
+    loader::{GlobRegistryTask, Script},
     task::Handle,
 };
 

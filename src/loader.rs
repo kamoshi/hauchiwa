@@ -1,5 +1,3 @@
-mod glob;
-
 pub mod generic;
 pub use generic::Content;
 
@@ -22,16 +20,20 @@ pub use svelte::Svelte;
 #[cfg(feature = "asyncrt")]
 pub mod tokio;
 
+use std::{collections::HashMap, fs};
+
+use camino::{Utf8Path, Utf8PathBuf};
+use glob::{Pattern, glob};
 use gray_matter::engine::YAML;
+use petgraph::graph::NodeIndex;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
-    Hash32,
+    Context, Hash32,
     error::{BuildError, HauchiwaError},
     importmap::ImportMap,
+    task::{Dynamic, TypedTask},
 };
-use ::glob::Pattern;
-use camino::{Utf8Path, Utf8PathBuf};
-use std::{collections::HashMap, fs};
 
 /// A collection of processed assets, mapping source file paths to their
 /// resulting data.
@@ -150,6 +152,113 @@ impl Runtime {
 impl Default for Runtime {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+type GlobCallback<G, R> = Box<
+    dyn Fn(&Context<G>, &mut Runtime, File<Vec<u8>>) -> anyhow::Result<(Utf8PathBuf, R)>
+        + Send
+        + Sync,
+>;
+
+pub struct GlobRegistryTask<G, R>
+where
+    G: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+{
+    glob_entry: Vec<&'static str>,
+    glob_watch: Vec<Pattern>,
+    callback: GlobCallback<G, R>,
+}
+
+impl<G, R> GlobRegistryTask<G, R>
+where
+    G: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+{
+    pub fn new<F>(
+        glob_entry: Vec<&'static str>,
+        glob_watch: Vec<&'static str>,
+        callback: F,
+    ) -> Result<Self, HauchiwaError>
+    where
+        F: Fn(&Context<G>, &mut Runtime, File<Vec<u8>>) -> anyhow::Result<(Utf8PathBuf, R)>
+            + Send
+            + Sync
+            + 'static,
+    {
+        Ok(Self {
+            glob_entry: glob_entry.to_vec(),
+            glob_watch: glob_watch
+                .into_iter()
+                .map(Pattern::new)
+                .collect::<Result<_, _>>()?,
+            callback: Box::new(callback),
+        })
+    }
+}
+
+impl<G, R> TypedTask<G> for GlobRegistryTask<G, R>
+where
+    G: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+{
+    type Output = Registry<R>;
+
+    fn get_name(&self) -> String {
+        self.glob_entry.join(", ")
+    }
+
+    fn dependencies(&self) -> Vec<NodeIndex> {
+        vec![]
+    }
+
+    fn execute(
+        &self,
+        context: &Context<G>,
+        runtime: &mut Runtime,
+        _: &[Dynamic],
+    ) -> anyhow::Result<Self::Output> {
+        let mut paths = Vec::new();
+        for glob_entry in &self.glob_entry {
+            for path in glob(glob_entry)? {
+                // Handle glob errors immediately here
+                paths.push(Utf8PathBuf::try_from(path?)?);
+            }
+        }
+
+        let results: anyhow::Result<Vec<_>> = paths
+            .into_par_iter()
+            .map(|path| {
+                let data = fs::read(&path)?;
+
+                let file = File {
+                    path,
+                    metadata: data,
+                };
+
+                let mut rt = Runtime::new();
+
+                // Call the user callback
+                let (out_path, res) = (self.callback)(context, &mut rt, file)?;
+
+                Ok((out_path, res, rt.new_imports))
+            })
+            .collect();
+
+        let mut registry = HashMap::new();
+        for (path, res, imports) in results? {
+            registry.insert(path, res);
+            runtime.new_imports.merge(imports);
+        }
+
+        let registry = Registry { map: registry };
+
+        Ok(registry)
+    }
+
+    fn is_dirty(&self, path: &Utf8Path) -> bool {
+        self.glob_watch.iter().any(|p| p.matches(path.as_str()))
     }
 }
 

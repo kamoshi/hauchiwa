@@ -5,7 +5,7 @@ use thiserror::Error;
 use crate::{
     Globals, SiteConfig,
     error::HauchiwaError,
-    loader::{File, Runtime, glob::GlobRegistryTask},
+    loader::{File, GlobRegistryTask, Runtime},
     task::Handle,
 };
 

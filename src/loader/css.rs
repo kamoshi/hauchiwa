@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{SiteConfig, error::HauchiwaError, loader::glob::GlobRegistryTask, task::Handle};
+use crate::{SiteConfig, error::HauchiwaError, loader::GlobRegistryTask, task::Handle};
 
 /// Errors that can occur when compiling Stylesheets.
 #[derive(Debug, Error)]
