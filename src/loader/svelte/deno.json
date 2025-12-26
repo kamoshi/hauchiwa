@@ -5,7 +5,7 @@
     }
   },
   "compilerOptions": {
-    "lib": ["deno.window", "dom"],
+    "lib": ["deno.window"],
     "strict": true
   }
 }

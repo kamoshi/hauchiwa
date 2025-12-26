@@ -50,40 +50,44 @@ where
             vec![glob_entry],
             vec![glob_watch],
             move |_, rt, file| {
+                // Compile Svelte runtime file.
                 let svelte = RUNTIME.as_deref().unwrap();
                 let svelte = rt.store(svelte.as_bytes(), "js")?;
 
-                // If we use import maps, "svelte" in the browser needs to point
-                // to our runtime file.
+                // In the import map "svelte" should be registered, so that it
+                // points to the runtime file.
                 rt.register("svelte", svelte.as_str());
                 rt.register("svelte/internal/client", svelte.as_str());
                 rt.register("svelte/internal/disclose-version", svelte.as_str());
 
+                // Compile the SSR script
                 let server = compile_svelte_server(&file.path)?;
                 let anchor = Hash32::hash(&server);
-                let client = compile_svelte_init(&file.path, anchor)?;
-                // let hash = Hash32::hash(&client);
 
+                // Compile lean browser glue
+                let client = compile_svelte_init(&file.path, anchor)?;
+                let client = rt.store(client.as_bytes(), "js")?;
+
+                // With the compiled SSR script we can now pre-render the
+                // component on demand.
                 let html = Arc::new({
                     let anchor = anchor.to_hex();
 
                     move |props: &P| {
                         let json = serde_json::to_string(props)?;
                         let html = run_ssr(&server, &json)?;
-                        let html =
-                            format!("<div class='_{anchor}' data-props='{json}'>{html}</div>");
-                        Ok(html)
+
+                        Ok(format!(
+                            "<div class='_{anchor}' data-props='{json}'>{html}</div>"
+                        ))
                     }
                 });
-
-                let init = rt.store(client.as_bytes(), "js")?;
-                let init = JS { path: init };
 
                 Ok((
                     file.path,
                     Svelte::<P> {
                         html,
-                        init,
+                        init: JS { path: client },
                         rt: JS { path: svelte },
                     },
                 ))
@@ -196,7 +200,7 @@ fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> anyhow::Result<St
     Ok(String::from_utf8(output.stdout)?)
 }
 
-pub fn compile_svelte_runtime() -> anyhow::Result<String> {
+fn compile_svelte_runtime() -> anyhow::Result<String> {
     const RT: &[u8] = include_bytes!("./rt.ts");
 
     // Run Deno to generate the code

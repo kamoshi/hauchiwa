@@ -1,31 +1,17 @@
+import type { Component } from "npm:svelte@5.46.1";
+import { render } from "npm:svelte@5.46.1/server";
+
 const json = Deno.args[0];
 const props = JSON.parse(json);
 
-// Dynamic import from the data URI
-const { default: SSR } = await import("data:text/javascript,__PLACEHOLDER__");
+const module = await import("data:text/javascript,__PLACEHOLDER__");
+const Comp = module.default as Component;
 
-let output = null;
+const rendered = render(Comp, { props });
 
-if (!output) {
-  try {
-    const data = { out: [] };
-    SSR(data, props);
-    output = data.out.join("");
-  } catch {}
-}
-
-if (!output) {
-  try {
-    const data = { out: "" };
-    SSR(data, props);
-    output = data.out;
-  } catch {}
-}
-
-if (!output) {
+if (!rendered.body) {
   throw "Failed to produce prerendered component, are you using svelte 5?";
 }
 
-const html = new TextEncoder().encode(output);
-await Deno.stdout.write(html);
-Deno.stdout.close();
+const out = new TextEncoder().encode(rendered.body);
+await Deno.stdout.write(out);

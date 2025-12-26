@@ -1,11 +1,15 @@
-import * as path from "node:path";
+import { dirname, resolve } from "node:path";
 import { build } from "npm:esbuild@0.27.2";
 import svelte from "npm:esbuild-svelte@0.9.4";
 
 const file = Deno.args[0];
 const hash = Deno.args[1];
 
-const stub = `
+if (!file || !hash) {
+  throw new Error("init.ts requires args <file> <hash>");
+}
+
+const contents = `
   import { hydrate } from "svelte";
   import App from ${JSON.stringify(file)};
 
@@ -19,8 +23,8 @@ const stub = `
 
 const ssr = await build({
   stdin: {
-    contents: stub,
-    resolveDir: path.dirname(path.resolve(file)),
+    contents,
+    resolveDir: dirname(resolve(file)),
     sourcefile: "__virtual.ts",
     loader: "ts",
   },
@@ -41,6 +45,5 @@ const ssr = await build({
   ],
 });
 
-const js = new TextEncoder().encode(ssr.outputFiles[0].text);
-await Deno.stdout.write(js);
-Deno.stdout.close();
+const out = new TextEncoder().encode(ssr.outputFiles[0].text);
+await Deno.stdout.write(out);
