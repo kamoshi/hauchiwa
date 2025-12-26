@@ -6,6 +6,7 @@ use std::{
 
 use camino::Utf8Path;
 use serde::{Serialize, de::DeserializeOwned};
+use thiserror::Error;
 
 use crate::{
     Hash32, SiteConfig,
@@ -14,23 +15,40 @@ use crate::{
     task::Handle,
 };
 
-type Prerender<P> = Arc<dyn Fn(&P) -> anyhow::Result<String> + Send + Sync>;
+#[derive(Debug, Error)]
+pub enum SvelteError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 
-static RUNTIME: LazyLock<anyhow::Result<String>> = LazyLock::new(compile_svelte_runtime);
+    #[error("UTF-8 conversion error: {0}")]
+    Utf8(#[from] std::string::FromUtf8Error),
+
+    #[error("Serialization error: {0}")]
+    Json(#[from] serde_json::Error),
+
+    #[error("Deno execution failed: {0}")]
+    Deno(String),
+
+    #[error("Failed to capture child process stdin")]
+    StdinCapture,
+
+    #[error("Svelte runtime compilation failed: {0}")]
+    Runtime(String),
+}
+
+// Update the Prerender type alias to use the specific error
+type Prerender<P> = Arc<dyn Fn(&P) -> Result<String, SvelteError> + Send + Sync>;
+
+// The LazyLock now holds a specific Result type.
+static RUNTIME: LazyLock<Result<String, SvelteError>> = LazyLock::new(compile_svelte_runtime);
 
 #[derive(Clone)]
 pub struct Svelte<P = ()>
 where
     P: serde::Serialize,
 {
-    /// Function that renders the component to an HTML string given props.
     pub html: Prerender<P>,
-
-    /// Path to a JavaScript file that bootstraps client-side hydration. Written
-    /// to disk during the build and referenced in the rendered output.
     pub init: JS,
-
-    /// Path to the runtime file that provides the necessary functions for the component.
     pub rt: JS,
 }
 
@@ -50,9 +68,10 @@ where
             vec![glob_entry],
             vec![glob_watch],
             move |_, rt, file| {
-                // Compile Svelte runtime file.
-                let svelte = RUNTIME.as_deref().unwrap();
-                let svelte = rt.store(svelte.as_bytes(), "js")?;
+                let svelte = match RUNTIME.as_ref() {
+                    Ok(svelte) => rt.store(svelte.as_bytes(), "js")?,
+                    Err(err) => return Err(SvelteError::Runtime(err.to_string()).into()),
+                };
 
                 // In the import map "svelte" should be registered, so that it
                 // points to the runtime file.
@@ -96,7 +115,7 @@ where
     }
 }
 
-fn compile_svelte_server(file: &Utf8Path) -> anyhow::Result<String> {
+fn compile_svelte_server(file: &Utf8Path) -> Result<String, SvelteError> {
     const SERVER: &[u8] = include_bytes!("./server.ts");
 
     let mut child = Command::new("deno")
@@ -113,10 +132,7 @@ fn compile_svelte_server(file: &Utf8Path) -> anyhow::Result<String> {
         .spawn()?;
 
     {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or(anyhow::anyhow!("stdin not piped"))?;
+        let stdin = child.stdin.as_mut().ok_or(SvelteError::StdinCapture)?;
         stdin.write_all(SERVER)?;
         stdin.flush()?;
     }
@@ -125,13 +141,13 @@ fn compile_svelte_server(file: &Utf8Path) -> anyhow::Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(anyhow::anyhow!("Deno bundler failed:\n{stderr}"))?
+        return Err(SvelteError::Deno(format!("Deno bundler failed:\n{stderr}")));
     }
 
     Ok(String::from_utf8(output.stdout)?)
 }
 
-fn run_ssr(server: &str, props: &str) -> anyhow::Result<String> {
+fn run_ssr(server: &str, props: &str) -> Result<String, SvelteError> {
     const SSR: &str = include_str!("./ssr.ts");
 
     let mut child = Command::new("deno")
@@ -146,10 +162,7 @@ fn run_ssr(server: &str, props: &str) -> anyhow::Result<String> {
         .spawn()?;
 
     {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or(anyhow::anyhow!("stdin not piped"))?;
+        let stdin = child.stdin.as_mut().ok_or(SvelteError::StdinCapture)?;
         stdin.write_all(SSR.replace("__PLACEHOLDER__", server).as_bytes())?;
         stdin.flush()?;
     }
@@ -158,13 +171,13 @@ fn run_ssr(server: &str, props: &str) -> anyhow::Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(anyhow::anyhow!("Deno SSR failed:\n{stderr}"))?
+        return Err(SvelteError::Deno(format!("Deno SSR failed:\n{stderr}")));
     }
 
     Ok(String::from_utf8(output.stdout)?)
 }
 
-fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> anyhow::Result<String> {
+fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> Result<String, SvelteError> {
     const INIT: &[u8] = include_bytes!("./init.ts");
 
     let mut child = Command::new("deno")
@@ -182,10 +195,7 @@ fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> anyhow::Result<St
         .spawn()?;
 
     {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or(anyhow::anyhow!("stdin not piped"))?;
+        let stdin = child.stdin.as_mut().ok_or(SvelteError::StdinCapture)?;
         stdin.write_all(INIT)?;
         stdin.flush()?;
     }
@@ -194,16 +204,15 @@ fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> anyhow::Result<St
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(anyhow::anyhow!("Deno bundler failed:\n{stderr}"))?
+        return Err(SvelteError::Deno(format!("Deno bundler failed:\n{stderr}")));
     }
 
     Ok(String::from_utf8(output.stdout)?)
 }
 
-fn compile_svelte_runtime() -> anyhow::Result<String> {
+fn compile_svelte_runtime() -> Result<String, SvelteError> {
     const RT: &[u8] = include_bytes!("./rt.ts");
 
-    // Run Deno to generate the code
     let mut child = Command::new("deno")
         .arg("run")
         .arg("--quiet")
@@ -217,10 +226,7 @@ fn compile_svelte_runtime() -> anyhow::Result<String> {
         .spawn()?;
 
     {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or(anyhow::anyhow!("stdin not piped"))?;
+        let stdin = child.stdin.as_mut().ok_or(SvelteError::StdinCapture)?;
         stdin.write_all(RT)?;
         stdin.flush()?;
     }
@@ -229,9 +235,9 @@ fn compile_svelte_runtime() -> anyhow::Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(anyhow::anyhow!(
+        return Err(SvelteError::Deno(format!(
             "Failed to bundle Svelte runtime:\n{stderr}"
-        ))?
+        )));
     }
 
     Ok(String::from_utf8(output.stdout)?)
