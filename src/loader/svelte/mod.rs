@@ -93,35 +93,7 @@ where
 }
 
 fn compile_svelte_server(file: &Utf8Path) -> anyhow::Result<String> {
-    const JS: &str = r#"
-        import { build } from "npm:esbuild@0.25.11";
-        import svelte from "npm:esbuild-svelte@0.9.3";
-
-        const file = Deno.args[0];
-
-        const ssr = await build({
-            entryPoints: [file],
-            format: "esm",
-            platform: "node",
-            minify: true,
-            bundle: true,
-            write: false,
-            mainFields: ["svelte", "module", "main"],
-            conditions: ["svelte"],
-            plugins: [
-                svelte({
-                    compilerOptions: { generate: "server" },
-                    css: false,
-                    emitCss: false,
-                }),
-            ],
-        });
-
-        const text = encodeURIComponent(ssr.outputFiles[0].text);
-        const js = new TextEncoder().encode(text);
-        await Deno.stdout.write(js);
-        await Deno.stdout.close();
-    "#;
+    const SERVER: &[u8] = include_bytes!("./server.ts");
 
     let mut child = Command::new("deno")
         .arg("run")
@@ -141,7 +113,7 @@ fn compile_svelte_server(file: &Utf8Path) -> anyhow::Result<String> {
             .stdin
             .as_mut()
             .ok_or(anyhow::anyhow!("stdin not piped"))?;
-        stdin.write_all(JS.as_bytes())?;
+        stdin.write_all(SERVER)?;
         stdin.flush()?;
     }
 
@@ -156,40 +128,7 @@ fn compile_svelte_server(file: &Utf8Path) -> anyhow::Result<String> {
 }
 
 fn run_ssr(server: &str, props: &str) -> anyhow::Result<String> {
-    let js = format!(
-        r#"
-        const json = Deno.args[0];
-        const props = JSON.parse(json);
-
-        const {{ default: SSR }} = await import("data:text/javascript,{server}");
-
-        let output = null;
-
-        if (!output) {{
-            try {{
-                const data = {{ out: [] }};
-                SSR(data, props);
-                output = data.out.join();
-            }} catch {{ }}
-        }}
-
-        if (!output) {{
-            try {{
-                const data = {{ out: "" }};
-                SSR(data, props);
-                output = data.out;
-            }} catch {{ }}
-        }}
-
-        if (!output) {{
-            throw "Failed to produce prerendered component, are you using svelte 5?";
-        }}
-
-        const html = new TextEncoder().encode(output);
-        await Deno.stdout.write(html);
-        await Deno.stdout.close();
-    "#
-    );
+    const SSR: &str = include_str!("./ssr.ts");
 
     let mut child = Command::new("deno")
         .arg("run")
@@ -207,7 +146,7 @@ fn run_ssr(server: &str, props: &str) -> anyhow::Result<String> {
             .stdin
             .as_mut()
             .ok_or(anyhow::anyhow!("stdin not piped"))?;
-        stdin.write_all(js.as_bytes())?;
+        stdin.write_all(SSR.replace("__PLACEHOLDER__", server).as_bytes())?;
         stdin.flush()?;
     }
 
@@ -222,54 +161,7 @@ fn run_ssr(server: &str, props: &str) -> anyhow::Result<String> {
 }
 
 fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> anyhow::Result<String> {
-    const JS: &str = r#"
-        import * as path from "node:path";
-        import { build } from "npm:esbuild@0.25.11";
-        import svelte from "npm:esbuild-svelte@0.9.3";
-
-        const file = Deno.args[0];
-        const hash = Deno.args[1];
-
-        const stub = `
-            import { hydrate } from "svelte";
-            import App from ${JSON.stringify(file)};
-
-            const query = document.querySelectorAll('._${hash}');
-            for (const target of query) {
-                const attrs = target.getAttribute('data-props');
-                const props = JSON.parse(attrs) ?? {};
-                hydrate(App, { target, props });
-            }
-        `;
-
-        const ssr = await build({
-            stdin: {
-                contents: stub,
-                resolveDir: path.dirname(path.resolve(file)),
-                sourcefile: "__virtual.ts",
-                loader: "ts",
-            },
-            platform: "browser",
-            format: "esm",
-            bundle: true,
-            minify: true,
-            write: false,
-            mainFields: ["svelte", "browser", "module", "main"],
-            conditions: ["svelte", "browser"],
-            external: ["svelte"],
-            plugins: [
-                svelte({
-                    compilerOptions: {
-                        css: "external",
-                    },
-                }),
-            ],
-        });
-
-        const js = new TextEncoder().encode(ssr.outputFiles[0].text);
-        await Deno.stdout.write(js);
-        await Deno.stdout.close();
-    "#;
+    const INIT: &[u8] = include_bytes!("./init.ts");
 
     let mut child = Command::new("deno")
         .arg("run")
@@ -290,7 +182,7 @@ fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> anyhow::Result<St
             .stdin
             .as_mut()
             .ok_or(anyhow::anyhow!("stdin not piped"))?;
-        stdin.write_all(JS.as_bytes())?;
+        stdin.write_all(INIT)?;
         stdin.flush()?;
     }
 
@@ -305,46 +197,7 @@ fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> anyhow::Result<St
 }
 
 pub fn compile_svelte_runtime() -> anyhow::Result<String> {
-    const JS: &str = r#"
-        import { build } from "npm:esbuild@0.25.11";
-        // Ensure this matches the version used in other functions or relies on the same resolution
-
-        // Create a virtual entry point that re-exports Svelte features
-        // 'hydrate' is the critical one used in compile_svelte_init
-        const stub = `
-            // 1. The Public API (mount, flushSync, etc.)
-            export * from "svelte";
-
-            // 2. The Svelte 5 Engine (CRITICAL for your error)
-            // The compiled code imports 'template_effect', 'append', etc. from here.
-            export * from "svelte/internal/client";
-
-            // 3. Side-effects (Version disclosure)
-            // This file just sets window.__svelte.v = '5.x'.
-            // We import it for side-effects so it gets bundled.
-            import "svelte/internal/disclose-version";
-        `;
-
-        const bundle = await build({
-            stdin: {
-                contents: stub,
-                resolveDir: Deno.cwd(), // Resolve from current working directory
-                loader: "ts",
-            },
-            platform: "browser",
-            format: "esm",
-            bundle: true,      // Bundle Svelte into this file
-            minify: true,
-            write: false,
-            // Ensure we use the exact same conditions as the component loader
-            mainFields: ["svelte", "browser", "module", "main"],
-            conditions: ["svelte", "browser"],
-        });
-
-        const js = new TextEncoder().encode(bundle.outputFiles[0].text);
-        await Deno.stdout.write(js);
-        await Deno.stdout.close();
-    "#;
+    const RT: &[u8] = include_bytes!("./rt.ts");
 
     // Run Deno to generate the code
     let mut child = Command::new("deno")
@@ -364,7 +217,7 @@ pub fn compile_svelte_runtime() -> anyhow::Result<String> {
             .stdin
             .as_mut()
             .ok_or(anyhow::anyhow!("stdin not piped"))?;
-        stdin.write_all(JS.as_bytes())?;
+        stdin.write_all(RT)?;
         stdin.flush()?;
     }
 

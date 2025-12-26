@@ -1,0 +1,11 @@
+{
+  "lint": {
+    "rules": {
+      "exclude": ["no-external-import", "no-import-prefix"]
+    }
+  },
+  "compilerOptions": {
+    "lib": ["deno.window", "dom"],
+    "strict": true
+  }
+}
