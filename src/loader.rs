@@ -24,6 +24,7 @@ pub use svelte::Svelte;
 
 use crate::{
     Hash32,
+    importmap::ImportMap,
     error::{BuildError, HauchiwaError},
 };
 use ::glob::Pattern;
@@ -84,11 +85,19 @@ pub struct File<T> {
 }
 
 /// storage, enabling immutability and reproducibility guarantees through
-/// content hashing.
+/// content hashing. Also handles import map registration.
 #[derive(Clone)]
-pub struct Runtime;
+pub struct Runtime {
+    pub(crate) new_imports: ImportMap,
+}
 
 impl Runtime {
+    pub fn new() -> Self {
+        Self {
+            new_imports: ImportMap::new(),
+        }
+    }
+
     /// Persist the given binary `data` under a hash-based path with the
     /// specified file extension `ext`.
     ///
@@ -123,6 +132,21 @@ impl Runtime {
         fs::copy(&path_temp, &path_dist)?;
 
         Ok(path_root)
+    }
+
+    /// Register a new module key and its path into the import map for this task.
+    ///
+    /// # Arguments
+    /// * `key` - The module specifier (e.g., "svelte")
+    /// * `value` - The URL or path (e.g., "/_app/svelte.js")
+    pub fn register(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.new_imports.register(key, value);
+    }
+}
+
+impl Default for Runtime {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

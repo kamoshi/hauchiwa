@@ -26,6 +26,14 @@ impl ImportMap {
         self
     }
 
+    /// Merges another import map into this one.
+    /// Entries from `other` will overwrite entries in `self` if keys conflict.
+    pub fn merge(&mut self, other: ImportMap) {
+        for (key, value) in other.imports {
+            self.imports.insert(key, value);
+        }
+    }
+
     /// Serialize the map to a JSON string.
     pub fn to_json(&self) -> serde_json::Result<String> {
         // "pretty" is optional; strictly minified is fine too.
@@ -63,5 +71,24 @@ mod test {
     fn test_default_importmap() {
         let map = ImportMap::default();
         assert!(map.imports.is_empty());
+    }
+
+    #[test]
+    fn test_merge() {
+        let mut map1 = ImportMap::new();
+        map1.register("a", "path/a");
+        map1.register("b", "path/b");
+
+        let mut map2 = ImportMap::new();
+        map2.register("b", "path/b2");
+        map2.register("c", "path/c");
+
+        map1.merge(map2);
+
+        // Access inner imports is not possible directly as it's private, but we can check json output
+        let json = map1.to_json().unwrap();
+        assert!(json.contains(r#""a":"path/a""#));
+        assert!(json.contains(r#""b":"path/b2""#));
+        assert!(json.contains(r#""c":"path/c""#));
     }
 }

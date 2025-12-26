@@ -1,9 +1,4 @@
-use crate::{
-    SiteConfig,
-    error::HauchiwaError,
-    loader::{Runtime, glob::GlobRegistryTask},
-    task::Handle,
-};
+use crate::{SiteConfig, error::HauchiwaError, loader::glob::GlobRegistryTask, task::Handle};
 
 #[derive(Debug, Clone)]
 pub struct CSS {
@@ -22,10 +17,10 @@ where
         Ok(self.add_task_opaque(GlobRegistryTask::new(
             vec![glob_entry],
             vec![glob_watch],
-            move |_, file| {
+            move |_, rt, file| {
                 let data = grass::from_path(&file.path, &grass::Options::default())?;
-                let rt = Runtime;
                 let path = rt.store(data.as_bytes(), "css")?;
+
                 Ok((file.path, CSS { path }))
             },
         )?))

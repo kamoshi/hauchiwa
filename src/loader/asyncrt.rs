@@ -10,7 +10,7 @@ pub fn async_asset<G, R, F, Fut>(
 where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
-    F: Fn(Runtime) -> Fut + Send + Sync + 'static,
+    F: Fn() -> Fut + Send + Sync + 'static,
     Fut: Future<Output = anyhow::Result<R>> + Send + 'static,
 {
     let executor = Box::new(
@@ -19,8 +19,5 @@ where
             .build()?,
     );
 
-    Ok(config.add_task((), move |_, _| {
-        let rt = Runtime;
-        executor.block_on(callback(rt))
-    }))
+    Ok(config.add_task((), move |_, _| executor.block_on(callback())))
 }

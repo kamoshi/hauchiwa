@@ -3,9 +3,17 @@ use petgraph::graph::NodeIndex;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::Globals;
+use crate::{Context, importmap::ImportMap, loader::Runtime};
 
 pub(crate) type Dynamic = Arc<dyn Any + Send + Sync>;
+
+/// Represents the data stored in the graph for each node.
+/// Includes the user's output and the concatenated import map.
+#[derive(Clone, Debug)]
+pub struct NodeData {
+    pub output: Dynamic,
+    pub importmap: ImportMap,
+}
 
 pub(crate) trait TypedTask<G: Send + Sync = ()>: Send + Sync {
     /// The concrete output type of this task.
@@ -15,7 +23,8 @@ pub(crate) trait TypedTask<G: Send + Sync = ()>: Send + Sync {
     fn dependencies(&self) -> Vec<NodeIndex>;
     fn execute(
         &self,
-        globals: &Globals<G>,
+        context: &Context<G>,
+        runtime: &mut Runtime,
         dependencies: &[Dynamic],
     ) -> anyhow::Result<Self::Output>;
 
@@ -28,7 +37,12 @@ pub(crate) trait TypedTask<G: Send + Sync = ()>: Send + Sync {
 pub(crate) trait Task<G: Send + Sync = ()>: Send + Sync {
     fn get_name(&self) -> String;
     fn dependencies(&self) -> Vec<NodeIndex>;
-    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> anyhow::Result<Dynamic>;
+    fn execute(
+        &self,
+        context: &Context<G>,
+        runtime: &mut Runtime,
+        dependencies: &[Dynamic],
+    ) -> anyhow::Result<Dynamic>;
 
     #[inline]
     fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
@@ -50,9 +64,14 @@ where
         T::dependencies(self)
     }
 
-    fn execute(&self, globals: &Globals<G>, dependencies: &[Dynamic]) -> anyhow::Result<Dynamic> {
+    fn execute(
+        &self,
+        context: &Context<G>,
+        runtime: &mut Runtime,
+        dependencies: &[Dynamic],
+    ) -> anyhow::Result<Dynamic> {
         // Call the typed method, then erase the result.
-        Ok(Arc::new(T::execute(self, globals, dependencies)?))
+        Ok(Arc::new(T::execute(self, context, runtime, dependencies)?))
     }
 
     fn is_dirty(&self, path: &camino::Utf8Path) -> bool {

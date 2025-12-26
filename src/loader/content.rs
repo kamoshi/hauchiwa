@@ -25,7 +25,7 @@ where
     Ok(site_config.add_task_opaque(GlobRegistryTask::new(
         vec![path_glob],
         vec![path_glob],
-        move |_, file: File<Vec<u8>>| {
+        move |_, _, file: File<Vec<u8>>| {
             let data = std::str::from_utf8(&file.metadata)?;
             let (metadata, content) = parse_yaml::<R>(data)?;
 

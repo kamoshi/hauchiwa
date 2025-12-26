@@ -10,7 +10,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use crate::{
     Hash32, SiteConfig,
     error::HauchiwaError,
-    loader::{JS, Runtime, glob::GlobRegistryTask},
+    loader::{JS, glob::GlobRegistryTask},
     task::Handle,
 };
 
@@ -49,11 +49,15 @@ where
         Ok(self.add_task_opaque(GlobRegistryTask::new(
             vec![glob_entry],
             vec![glob_watch],
-            move |_, file| {
-                let rt = Runtime;
-
+            move |_, rt, file| {
                 let svelte = RUNTIME.as_deref().unwrap();
                 let svelte = rt.store(svelte.as_bytes(), "js")?;
+
+                // If we use import maps, "svelte" in the browser needs to point
+                // to our runtime file.
+                rt.register("svelte", svelte.as_str());
+                rt.register("svelte/internal/client", svelte.as_str());
+                rt.register("svelte/internal/disclose-version", svelte.as_str());
 
                 let server = compile_svelte_server(&file.path)?;
                 let anchor = Hash32::hash(&server);

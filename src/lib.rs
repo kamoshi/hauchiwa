@@ -15,12 +15,7 @@ mod utils;
 
 pub use camino;
 
-use std::{
-    any::{Any, type_name},
-    cell::Cell,
-    fmt::Debug,
-    sync::{Arc, RwLock},
-};
+use std::{any::type_name, fmt::Debug, sync::Arc};
 
 use camino::Utf8PathBuf;
 use petgraph::{Graph, graph::NodeIndex};
@@ -32,7 +27,8 @@ pub use gitscan;
 
 use crate::{
     importmap::ImportMap,
-    task::{Task, TypedTask},
+    loader::Runtime,
+    task::{Dynamic, Task, TypedTask},
 };
 
 /// 32 bytes length generic hash
@@ -82,8 +78,6 @@ impl Debug for Hash32 {
     }
 }
 
-type Dynamic = Arc<dyn Any + Send + Sync>;
-
 #[derive(Debug, Clone, Copy)]
 pub enum Mode {
     Build,
@@ -104,8 +98,13 @@ pub struct Globals<G: Send + Sync = ()> {
     pub port: Option<u16>,
     /// User-defined global data that can be accessed by tasks.
     pub data: G,
-    /// Import map for managing module imports.
-    pub importmap: Arc<RwLock<ImportMap>>,
+}
+
+/// The context passed to every task.
+/// It contains immutable data: globals and the import map constructed from dependencies.
+pub struct Context<'a, G: Send + Sync = ()> {
+    pub globals: &'a Globals<G>,
+    pub importmap: &'a ImportMap,
 }
 
 impl<G: Send + Sync> Globals<G> {
@@ -140,7 +139,7 @@ where
     G: Send + Sync,
     R: Send + Sync + 'static,
     D: TaskDependencies,
-    F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync,
+    F: for<'a> Fn(&Context<'a, G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync,
 {
     name: &'static str,
     dependencies: D,
@@ -153,7 +152,7 @@ where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
     D: TaskDependencies + Send + Sync,
-    F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync + 'static,
+    F: for<'a> Fn(&Context<'a, G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync + 'static,
 {
     type Output = R;
 
@@ -167,11 +166,12 @@ where
 
     fn execute(
         &self,
-        globals: &Globals<G>,
+        context: &Context<G>,
+        _: &mut Runtime,
         dependencies: &[Dynamic],
     ) -> anyhow::Result<Self::Output> {
         let dependencies = self.dependencies.resolve(dependencies);
-        (self.callback)(globals, dependencies)
+        (self.callback)(context, dependencies)
     }
 }
 
@@ -202,7 +202,7 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
     /// # Parameters
     ///
     /// - `dependencies`: A tuple of handles to the tasks that must be completed before this one.
-    /// - `callback`: A closure that takes `Globals` and the resolved outputs of the dependencies.
+    /// - `callback`: A closure that takes `Context`, `Runtime` and the resolved outputs of the dependencies.
     ///
     /// # Returns
     ///
@@ -210,7 +210,7 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
     pub fn add_task<D, F, R>(&mut self, dependencies: D, callback: F) -> task::Handle<R>
     where
         D: TaskDependencies + Send + Sync + 'static,
-        F: for<'a> Fn(&Globals<G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync + 'static,
+        F: for<'a> Fn(&Context<'a, G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync + 'static,
         R: Send + Sync + 'static,
     {
         self.add_task_opaque(TaskNode {
@@ -265,7 +265,6 @@ impl<G: Send + Sync> Site<G> {
             mode: Mode::Build,
             port: None,
             data,
-            importmap: Arc::new(RwLock::new(ImportMap::default())),
         };
 
         utils::clear_dist().expect("Failed to clear dist directory");
@@ -302,7 +301,7 @@ impl<G: Send + Sync> Site<G> {
 ///
 /// ```rust,ignore
 /// use hauchiwa::task;
-/// task!(config, |ctx, dep1, dep2| {
+/// task!(config, |ctx, rt, dep1, dep2| {
 ///     // Task logic here
 /// });
 /// ```

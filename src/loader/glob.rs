@@ -5,9 +5,9 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::{collections::HashMap, fs};
 
 use crate::{
-    Globals,
+    Context,
     error::HauchiwaError,
-    loader::Registry,
+    loader::{Registry, Runtime},
     task::{Dynamic, TypedTask},
 };
 
@@ -19,7 +19,11 @@ where
     glob_entry: Vec<&'static str>,
     glob_watch: Vec<Pattern>,
     callback: Box<
-        dyn Fn(&Globals<G>, crate::loader::File<Vec<u8>>) -> anyhow::Result<(Utf8PathBuf, R)>
+        dyn Fn(
+                &Context<G>,
+                &mut Runtime,
+                crate::loader::File<Vec<u8>>,
+            ) -> anyhow::Result<(Utf8PathBuf, R)>
             + Send
             + Sync,
     >,
@@ -36,7 +40,11 @@ where
         callback: F,
     ) -> Result<Self, HauchiwaError>
     where
-        F: Fn(&Globals<G>, crate::loader::File<Vec<u8>>) -> anyhow::Result<(Utf8PathBuf, R)>
+        F: Fn(
+                &Context<G>,
+                &mut Runtime,
+                crate::loader::File<Vec<u8>>,
+            ) -> anyhow::Result<(Utf8PathBuf, R)>
             + Send
             + Sync
             + 'static,
@@ -67,7 +75,12 @@ where
         vec![]
     }
 
-    fn execute(&self, globals: &Globals<G>, _: &[Dynamic]) -> anyhow::Result<Self::Output> {
+    fn execute(
+        &self,
+        context: &Context<G>,
+        runtime: &mut Runtime,
+        _: &[Dynamic],
+    ) -> anyhow::Result<Self::Output> {
         let mut paths = Vec::new();
         for glob_entry in &self.glob_entry {
             for path in glob(glob_entry)? {
@@ -86,11 +99,21 @@ where
                     metadata: data,
                 };
 
-                (self.callback)(globals, file)
+                let mut rt = Runtime::new();
+
+                // Call the user callback
+                let (out_path, res) = (self.callback)(context, &mut rt, file)?;
+
+                Ok((out_path, res, rt.new_imports))
             })
             .collect();
 
-        let registry = HashMap::from_iter(results?);
+        let mut registry = HashMap::new();
+        for (path, res, imports) in results? {
+            registry.insert(path, res);
+            runtime.new_imports.merge(imports);
+        }
+
         let registry = Registry { map: registry };
 
         Ok(registry)

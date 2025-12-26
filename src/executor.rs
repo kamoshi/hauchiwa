@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     net::{TcpListener, TcpStream},
-    sync::{Arc, Mutex, RwLock, mpsc::Sender},
+    sync::{Arc, Mutex, mpsc::Sender},
     thread::JoinHandle,
     time::Duration,
 };
@@ -16,16 +16,18 @@ use petgraph::graph::NodeIndex;
 use petgraph::{algo::toposort, visit::Dfs};
 use tungstenite::WebSocket;
 
-use crate::{Globals, Mode, Site, importmap::ImportMap, page::Page, task::Dynamic};
+use crate::{
+    Context, Globals, Mode, Site, importmap::ImportMap, loader::Runtime, page::Page, task::NodeData,
+};
 
 pub fn run_once_parallel<G: Send + Sync>(
     site: &mut Site<G>,
     globals: &Globals<G>,
-) -> anyhow::Result<(HashMap<NodeIndex, Dynamic>, Vec<Page>)> {
+) -> anyhow::Result<(HashMap<NodeIndex, NodeData>, Vec<Page>)> {
     // We run toposort primarily to detect any cycles in the graph.
     toposort(&site.graph, None).expect("Cycle detected in task graph");
 
-    let mut cache: HashMap<NodeIndex, Dynamic> = HashMap::new();
+    let mut cache: HashMap<NodeIndex, NodeData> = HashMap::new();
     let nodes_to_run: HashSet<NodeIndex> = site.graph.node_indices().collect();
 
     run_tasks_parallel(site, globals, &mut cache, &nodes_to_run)?;
@@ -52,7 +54,7 @@ pub fn run_once_parallel<G: Send + Sync>(
 fn run_tasks_parallel<G: Send + Sync>(
     site: &Site<G>,
     globals: &Globals<G>,
-    cache: &mut HashMap<NodeIndex, Dynamic>,
+    cache: &mut HashMap<NodeIndex, NodeData>,
     nodes_to_run: &HashSet<NodeIndex>,
 ) -> anyhow::Result<()> {
     // Build a map from a dependency to the nodes that depend on it for the entire graph.
@@ -103,17 +105,20 @@ fn run_tasks_parallel<G: Send + Sync>(
         .unwrap();
 
     // We only need a channel for results and tasks are distributed by Rayon.
-    let (result_sender, result_receiver) = unbounded::<(NodeIndex, anyhow::Result<Dynamic>)>();
+    let (result_sender, result_receiver) = unbounded::<(NodeIndex, anyhow::Result<NodeData>)>();
 
     rayon::scope(|s| -> anyhow::Result<()> {
         // A helper closure to spawn a task
-        let spawn_task = |cache: &HashMap<NodeIndex, Dynamic>, index: NodeIndex| {
+        let spawn_task = |cache: &HashMap<NodeIndex, NodeData>, index: NodeIndex| {
             // Prepare dependencies
-            let dependencies = site.graph[index]
-                .dependencies()
-                .iter()
-                .map(|dep_index| cache.get(dep_index).unwrap().clone())
-                .collect::<Vec<_>>();
+            let mut dependencies = Vec::new();
+            let mut importmap = ImportMap::new();
+
+            for dep_index in site.graph[index].dependencies() {
+                let node_data = cache.get(&dep_index).unwrap();
+                dependencies.push(node_data.output.clone());
+                importmap.merge(node_data.importmap.clone());
+            }
 
             let task = site.graph[index].clone();
 
@@ -129,8 +134,20 @@ fn run_tasks_parallel<G: Send + Sync>(
                 task_pb.set_message(task.get_name());
                 task_pb.enable_steady_tick(Duration::from_millis(100));
 
-                // Execute the task
-                let output = task.execute(globals, &dependencies);
+                let context = Context {
+                    globals,
+                    importmap: &importmap,
+                };
+
+                let output = {
+                    let mut rt = Runtime::new();
+
+                    task.execute(&context, &mut rt, &dependencies)
+                        .map(|output| NodeData {
+                            output,
+                            importmap: rt.new_imports,
+                        })
+                };
 
                 task_pb.finish_and_clear();
 
@@ -178,9 +195,10 @@ fn run_tasks_parallel<G: Send + Sync>(
     Ok(())
 }
 
-fn collect_pages(cache: &HashMap<NodeIndex, Dynamic>) -> Vec<Page> {
+fn collect_pages(cache: &HashMap<NodeIndex, NodeData>) -> Vec<Page> {
     let mut pages: Vec<Page> = Vec::new();
-    for value in cache.values() {
+    for node_data in cache.values() {
+        let value = &node_data.output;
         if let Some(page) = value.downcast_ref::<Page>() {
             pages.push(page.clone());
         } else if let Some(page_vec) = value.downcast_ref::<Vec<Page>>() {
@@ -199,7 +217,6 @@ pub fn watch<G: Send + Sync>(site: &mut Site<G>, data: G) -> anyhow::Result<()> 
         mode: Mode::Watch,
         port: Some(port),
         data,
-        importmap: Arc::new(RwLock::new(ImportMap::default())),
     };
 
     println!("Performing initial build...");
@@ -367,12 +384,13 @@ mod server {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::task::Dynamic;
     use petgraph::graph::NodeIndex;
     use std::sync::Arc;
 
     #[test]
     fn test_collect_pages() {
-        let mut cache: HashMap<NodeIndex, Dynamic> = HashMap::new();
+        let mut cache: HashMap<NodeIndex, NodeData> = HashMap::new();
         let page1 = Page {
             url: "/".into(),
             content: "Home".to_string(),
@@ -386,14 +404,26 @@ mod tests {
             content: "Contact".to_string(),
         };
 
-        cache.insert(NodeIndex::new(0), Arc::new(page1.clone()) as Dynamic);
+        cache.insert(
+            NodeIndex::new(0),
+            NodeData {
+                output: Arc::new(page1.clone()) as Dynamic,
+                importmap: ImportMap::default(),
+            },
+        );
         cache.insert(
             NodeIndex::new(1),
-            Arc::new(vec![page2.clone(), page3.clone()]) as Dynamic,
+            NodeData {
+                output: Arc::new(vec![page2.clone(), page3.clone()]) as Dynamic,
+                importmap: ImportMap::default(),
+            },
         );
         cache.insert(
             NodeIndex::new(2),
-            Arc::new("not a page".to_string()) as Dynamic,
+            NodeData {
+                output: Arc::new("not a page".to_string()) as Dynamic,
+                importmap: ImportMap::default(),
+            },
         );
 
         let pages = collect_pages(&cache);

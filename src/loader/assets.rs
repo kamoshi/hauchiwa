@@ -1,7 +1,7 @@
 use crate::{
     Globals, SiteConfig,
     error::HauchiwaError,
-    loader::{File, glob::GlobRegistryTask},
+    loader::{File, Runtime, glob::GlobRegistryTask},
     task::Handle,
 };
 
@@ -45,7 +45,10 @@ use crate::{
 pub fn glob_assets<G, R>(
     config: &mut SiteConfig<G>,
     path_glob: &'static str,
-    callback: impl Fn(&Globals<G>, File<Vec<u8>>) -> anyhow::Result<R> + Send + Sync + 'static,
+    callback: impl Fn(&Globals<G>, &mut Runtime, File<Vec<u8>>) -> anyhow::Result<R>
+    + Send
+    + Sync
+    + 'static,
 ) -> Result<Handle<super::Registry<R>>, HauchiwaError>
 where
     G: Send + Sync + 'static,
@@ -54,9 +57,9 @@ where
     Ok(config.add_task_opaque(GlobRegistryTask::new(
         vec![path_glob],
         vec![path_glob],
-        move |ctx, file| {
+        move |ctx, rt, file| {
             let path = file.path.clone();
-            let res = callback(ctx, file)?;
+            let res = callback(ctx.globals, rt, file)?;
 
             Ok((path, res))
         },

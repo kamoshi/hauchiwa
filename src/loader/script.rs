@@ -1,12 +1,7 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::{
-    SiteConfig,
-    error::HauchiwaError,
-    loader::{Runtime, glob::GlobRegistryTask},
-    task::Handle,
-};
+use crate::{SiteConfig, error::HauchiwaError, loader::glob::GlobRegistryTask, task::Handle};
 
 #[derive(Clone)]
 pub struct JS {
@@ -25,10 +20,10 @@ where
         Ok(self.add_task_opaque(GlobRegistryTask::new(
             vec![glob_entry],
             vec![glob_watch],
-            move |_, file| {
+            move |_, rt, file| {
                 let data = compile_esbuild(&file.path)?;
-                let rt = Runtime;
                 let path = rt.store(&data, "js")?;
+
                 Ok((file.path, JS { path }))
             },
         )?))

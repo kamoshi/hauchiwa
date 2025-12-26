@@ -24,9 +24,10 @@ where
         Ok(self.add_task_opaque(GlobRegistryTask::new(
             path_glob.to_vec(),
             path_glob.to_vec(),
-            move |_, file: File<Vec<u8>>| {
+            move |_, _, file: File<Vec<u8>>| {
                 let hash = Hash32::hash_file(&file.path)?;
                 let path = build_image(hash, &file.path)?;
+
                 Ok((file.path, Image { path }))
             },
         )?))
