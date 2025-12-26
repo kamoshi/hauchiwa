@@ -1,31 +1,33 @@
-mod assets;
-#[cfg(feature = "asyncrt")]
-mod asyncrt;
-mod content;
 mod glob;
-#[cfg(feature = "images")]
-mod images;
-mod script;
-#[cfg(feature = "styles")]
-mod styles;
-mod svelte;
 
-pub use assets::glob_assets;
-#[cfg(feature = "asyncrt")]
-pub use asyncrt::async_asset;
-pub use content::{Content, glob_content};
-use gray_matter::engine::YAML;
+pub mod generic;
+pub use generic::Content;
+
 #[cfg(feature = "images")]
-pub use images::Image;
-pub use script::JS;
+pub mod image;
+#[cfg(feature = "images")]
+pub use image::Image;
+
 #[cfg(feature = "styles")]
-pub use styles::CSS;
+pub mod css;
+#[cfg(feature = "styles")]
+pub use css::CSS;
+
+pub mod js;
+pub use js::JS;
+
+pub mod svelte;
 pub use svelte::Svelte;
+
+#[cfg(feature = "asyncrt")]
+mod tokio;
+
+use gray_matter::engine::YAML;
 
 use crate::{
     Hash32,
-    importmap::ImportMap,
     error::{BuildError, HauchiwaError},
+    importmap::ImportMap,
 };
 use ::glob::Pattern;
 use camino::{Utf8Path, Utf8PathBuf};

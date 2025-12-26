@@ -56,7 +56,7 @@ impl<G> SiteConfig<G>
 where
     G: Send + Sync + 'static,
 {
-    pub fn build_svelte<P>(
+    pub fn load_svelte<P>(
         &mut self,
         glob_entry: &'static str,
         glob_watch: &'static str,
