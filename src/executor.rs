@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    env,
     net::{TcpListener, TcpStream},
     sync::{Arc, Mutex, mpsc::Sender},
     thread::JoinHandle,
@@ -10,16 +9,16 @@ use std::{
 use camino::Utf8Path;
 use crossbeam_channel::unbounded;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use notify::RecursiveMode;
-use notify_debouncer_full::new_debouncer;
 use petgraph::graph::NodeIndex;
 use petgraph::{algo::toposort, visit::Dfs};
-use tungstenite::WebSocket;
 
 use crate::{
     Environment, Mode, TaskContext, Website, graph::NodeData, importmap::ImportMap, loader::Store,
     page::Output,
 };
+
+#[cfg(feature = "live")]
+pub use live::watch;
 
 pub fn run_once_parallel<G: Send + Sync>(
     site: &mut Website<G>,
@@ -145,10 +144,13 @@ fn run_tasks_parallel<G: Send + Sync>(
 
                     task.execute(&context, &mut rt, &dependencies)
                         .map(|output| {
-                            let mut importmap = importmap.clone();
-                            importmap.merge(rt.imports);
+                            let mut imports = importmap.clone();
+                            imports.merge(rt.imports);
 
-                            NodeData { output, importmap }
+                            NodeData {
+                                output,
+                                importmap: imports,
+                            }
                         })
                 };
 
@@ -211,142 +213,153 @@ fn collect_pages(cache: &HashMap<NodeIndex, NodeData>) -> Vec<Output> {
     pages
 }
 
-pub fn watch<G: Send + Sync>(site: &mut Website<G>, data: G) -> anyhow::Result<()> {
-    let (tcp, port) = reserve_port().unwrap();
-    let pwd = env::current_dir().unwrap();
+#[cfg(feature = "live")]
+mod live {
+    use super::*;
 
-    let globals = Environment {
-        generator: "hauchiwa",
-        mode: Mode::Watch,
-        port: Some(port),
-        data,
-    };
+    use std::env;
 
-    println!("Performing initial build...");
-    let (mut cache, pages) = run_once_parallel(site, &globals)?;
-    println!("Collected {} pages", pages.len());
-    crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
+    use notify::RecursiveMode;
+    use notify_debouncer_full::new_debouncer;
+    use tungstenite::WebSocket;
 
-    println!("Initial build complete. Watching for changes...");
-    let clients = Arc::new(Mutex::new(vec![]));
+    pub fn watch<G: Send + Sync>(site: &mut Website<G>, data: G) -> anyhow::Result<()> {
+        let (tcp, port) = reserve_port().unwrap();
+        let pwd = env::current_dir().unwrap();
 
-    let _thread_i = new_thread_ws_incoming(tcp, clients.clone());
-    let (tx_reload, _thread_o) = new_thread_ws_reload(clients.clone());
+        let globals = Environment {
+            generator: "hauchiwa",
+            mode: Mode::Watch,
+            port: Some(port),
+            data,
+        };
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut debouncer = new_debouncer(Duration::from_millis(250), None, tx).unwrap();
-    debouncer
-        .watch(Utf8Path::new(".").as_std_path(), RecursiveMode::Recursive)
-        .unwrap();
+        println!("Performing initial build...");
+        let (mut cache, pages) = run_once_parallel(site, &globals)?;
+        println!("Collected {} pages", pages.len());
+        crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
 
-    #[cfg(feature = "server")]
-    let _thread_http = server::start();
+        println!("Initial build complete. Watching for changes...");
+        let clients = Arc::new(Mutex::new(vec![]));
 
-    loop {
-        match rx.recv() {
-            Ok(Ok(events)) => {
-                let mut dirty_nodes = HashSet::new();
-                for de in events {
-                    for path in &de.event.paths {
-                        if let Some(path) = Utf8Path::from_path(path) {
-                            let path = path.strip_prefix(&pwd).unwrap();
-                            for index in site.graph.node_indices() {
-                                let task = &site.graph[index];
-                                if task.is_dirty(path) {
-                                    dirty_nodes.insert(index);
+        let _thread_i = new_thread_ws_incoming(tcp, clients.clone());
+        let (tx_reload, _thread_o) = new_thread_ws_reload(clients.clone());
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut debouncer = new_debouncer(Duration::from_millis(250), None, tx).unwrap();
+        debouncer
+            .watch(Utf8Path::new(".").as_std_path(), RecursiveMode::Recursive)
+            .unwrap();
+
+        #[cfg(feature = "server")]
+        let _thread_http = server::start();
+
+        loop {
+            match rx.recv() {
+                Ok(Ok(events)) => {
+                    let mut dirty_nodes = HashSet::new();
+                    for de in events {
+                        for path in &de.event.paths {
+                            if let Some(path) = Utf8Path::from_path(path) {
+                                let path = path.strip_prefix(&pwd).unwrap();
+                                for index in site.graph.node_indices() {
+                                    let task = &site.graph[index];
+                                    if task.is_dirty(path) {
+                                        dirty_nodes.insert(index);
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                if !dirty_nodes.is_empty() {
-                    println!("Change detected. Re-running tasks...");
-                    let mut to_rerun = HashSet::new();
-                    for start_node in &dirty_nodes {
-                        let mut dfs = Dfs::new(&site.graph, *start_node);
-                        while let Some(nx) = dfs.next(&site.graph) {
-                            to_rerun.insert(nx);
+                    if !dirty_nodes.is_empty() {
+                        println!("Change detected. Re-running tasks...");
+                        let mut to_rerun = HashSet::new();
+                        for start_node in &dirty_nodes {
+                            let mut dfs = Dfs::new(&site.graph, *start_node);
+                            while let Some(nx) = dfs.next(&site.graph) {
+                                to_rerun.insert(nx);
+                            }
                         }
+
+                        run_tasks_parallel(site, &globals, &mut cache, &to_rerun)?;
+
+                        let pages = collect_pages(&cache);
+                        println!("Collected {} pages", pages.len());
+                        crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
+                        tx_reload.send(()).unwrap();
+                        println!("Rebuild complete. Watching for changes...");
                     }
-
-                    run_tasks_parallel(site, &globals, &mut cache, &to_rerun)?;
-
-                    let pages = collect_pages(&cache);
-                    println!("Collected {} pages", pages.len());
-                    crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
-                    tx_reload.send(()).unwrap();
-                    println!("Rebuild complete. Watching for changes...");
                 }
+                Ok(Err(e)) => println!("watch error: {:?}", e),
+                Err(e) => println!("watch error: {:?}", e),
             }
-            Ok(Err(e)) => println!("watch error: {:?}", e),
-            Err(e) => println!("watch error: {:?}", e),
         }
     }
-}
 
-fn reserve_port() -> std::io::Result<(TcpListener, u16)> {
-    let listener = match TcpListener::bind("127.0.0.1:1337") {
-        Ok(sock) => sock,
-        Err(_) => TcpListener::bind("127.0.0.1:0")?,
-    };
+    fn reserve_port() -> std::io::Result<(TcpListener, u16)> {
+        let listener = match TcpListener::bind("127.0.0.1:1337") {
+            Ok(sock) => sock,
+            Err(_) => TcpListener::bind("127.0.0.1:0")?,
+        };
 
-    let addr = listener.local_addr()?;
-    let port = addr.port();
-    Ok((listener, port))
-}
+        let addr = listener.local_addr()?;
+        let port = addr.port();
+        Ok((listener, port))
+    }
 
-fn new_thread_ws_incoming(
-    server: TcpListener,
-    client: Arc<Mutex<Vec<WebSocket<TcpStream>>>>,
-) -> JoinHandle<()> {
-    std::thread::spawn(move || {
-        for stream in server.incoming() {
-            let socket = tungstenite::accept(stream.unwrap()).unwrap();
-            client.lock().unwrap().push(socket);
-        }
-    })
-}
+    fn new_thread_ws_incoming(
+        server: TcpListener,
+        client: Arc<Mutex<Vec<WebSocket<TcpStream>>>>,
+    ) -> JoinHandle<()> {
+        std::thread::spawn(move || {
+            for stream in server.incoming() {
+                let socket = tungstenite::accept(stream.unwrap()).unwrap();
+                client.lock().unwrap().push(socket);
+            }
+        })
+    }
 
-fn new_thread_ws_reload(
-    client: Arc<Mutex<Vec<WebSocket<TcpStream>>>>,
-) -> (Sender<()>, JoinHandle<()>) {
-    let (tx, rx) = std::sync::mpsc::channel();
+    fn new_thread_ws_reload(
+        client: Arc<Mutex<Vec<WebSocket<TcpStream>>>>,
+    ) -> (Sender<()>, JoinHandle<()>) {
+        let (tx, rx) = std::sync::mpsc::channel();
 
-    let thread = std::thread::spawn(move || {
-        while rx.recv().is_ok() {
-            let mut clients = client.lock().unwrap();
-            let mut broken = vec![];
+        let thread = std::thread::spawn(move || {
+            while rx.recv().is_ok() {
+                let mut clients = client.lock().unwrap();
+                let mut broken = vec![];
 
-            for (i, socket) in clients.iter_mut().enumerate() {
-                match socket.send("reload".into()) {
-                    Ok(_) => {}
-                    Err(tungstenite::error::Error::Io(e)) => {
-                        if e.kind() == std::io::ErrorKind::BrokenPipe {
-                            broken.push(i);
+                for (i, socket) in clients.iter_mut().enumerate() {
+                    match socket.send("reload".into()) {
+                        Ok(_) => {}
+                        Err(tungstenite::error::Error::Io(e)) => {
+                            if e.kind() == std::io::ErrorKind::BrokenPipe {
+                                broken.push(i);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Error: {e:?}");
                         }
                     }
-                    Err(e) => {
-                        eprintln!("Error: {e:?}");
+                }
+
+                for i in broken.into_iter().rev() {
+                    clients.remove(i);
+                }
+
+                // Close all but the last 10 connections
+                let len = clients.len();
+                if len > 10 {
+                    for mut socket in clients.drain(0..len - 10) {
+                        socket.close(None).ok();
                     }
                 }
             }
+        });
 
-            for i in broken.into_iter().rev() {
-                clients.remove(i);
-            }
-
-            // Close all but the last 10 connections
-            let len = clients.len();
-            if len > 10 {
-                for mut socket in clients.drain(0..len - 10) {
-                    socket.close(None).ok();
-                }
-            }
-        }
-    });
-
-    (tx, thread)
+        (tx, thread)
+    }
 }
 
 #[cfg(feature = "server")]

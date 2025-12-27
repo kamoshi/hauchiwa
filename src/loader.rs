@@ -15,14 +15,14 @@
 pub mod generic;
 pub use generic::Document;
 
-#[cfg(feature = "images")]
+#[cfg(feature = "image")]
 pub mod image;
-#[cfg(feature = "images")]
+#[cfg(feature = "image")]
 pub use image::Image;
 
-#[cfg(feature = "styles")]
+#[cfg(feature = "grass")]
 pub mod css;
-#[cfg(feature = "styles")]
+#[cfg(feature = "grass")]
 pub use css::Stylesheet;
 
 pub mod js;
@@ -31,7 +31,7 @@ pub use js::Script;
 pub mod svelte;
 pub use svelte::Svelte;
 
-#[cfg(feature = "asyncrt")]
+#[cfg(feature = "tokio")]
 pub mod tokio;
 
 use std::{collections::HashMap, fs};

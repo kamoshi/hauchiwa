@@ -338,6 +338,7 @@ where
     /// # Arguments
     ///
     /// * `data` - The global user data to pass to all tasks.
+    #[cfg(feature = "live")]
     pub fn watch(&mut self, data: G) -> anyhow::Result<()> {
         utils::clear_dist().expect("Failed to clear dist directory");
         utils::clone_static().expect("Failed to copy static files");

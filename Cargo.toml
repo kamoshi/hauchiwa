@@ -9,12 +9,12 @@ description = "Flexible static website generator library with incremental rebuil
 repository  = "https://github.com/kamoshi/hauchiwa"
 
 [features]
-default = ["asyncrt", "styles", "images", "reload", "server"]
-asyncrt = ["tokio"]
-styles = ["grass"]
-images = ["image", "webp"]
-reload = ["notify", "notify-debouncer-full", "tungstenite"]
-server = ["asyncrt", "axum", "tower-http", "console"]
+default     = ["grass", "image", "tokio", "live", "server"]
+grass       = ["dep:grass"]
+image       = ["dep:image", "dep:webp"]
+tokio       = ["dep:tokio"]
+live        = ["dep:notify", "dep:notify-debouncer-full", "dep:tungstenite"]
+server      = ["tokio", "dep:axum", "dep:tower-http"]
 
 [dependencies]
 camino                  = "1.2"
@@ -31,7 +31,7 @@ crossbeam-channel       = "0.5.15"
 gitscan                 = "0.1.0"
 
 # CLI
-console                 = { version = "0.16", default-features = false, optional = true }
+console                 = { version = "0.16", default-features = false }
 indicatif               = { version = "0.18", features = ["rayon"] }
 
 # Error handling

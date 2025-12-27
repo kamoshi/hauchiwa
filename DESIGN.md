@@ -76,6 +76,69 @@ graph LR
     L3 --> T2[Generate Styles]
 ```
 
+## `ImportMap` propagation
+
+In modern web development, particularly when using ES modules in the browser,
+managing import paths (e.g., `import { X } from "..."`) is critical. `hauchiwa`
+automates this via importmap propagation.
+
+While a `Handle<T>` ensures the type-safe flow of outputs (the Rust structs),
+tasks can also produce a side-channel of information: the `ImportMap`.
+
+1. When a Loader (like `load_svelte`) processes a file, it registers the
+   resulting artifact in its internal Store. Example: Register
+   `"components/Button.svelte"` -> `"/hash/d41d8cd9.js"`
+
+2. When Task B depends on Task A, the execution engine automatically merges Task
+   A's import map into Task B's context.
+
+3. Task B (e.g., a page renderer) receives a TaskContext containing the
+   pre-merged ImportMap. It can then serialize this map into the `<head>` of the
+   generated HTML.
+
+This means you do not need to manually pass ambient runtime asset paths through
+your task functions. Simply declaring a dependency on a Svelte task and
+including the `importmap` is enough to make the required `"svelte"` modules
+available in the browser.
+
+```mermaid
+graph TD
+    %% Define Styles
+    classDef loader fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,rx:10,ry:10,color:#0d47a1
+    classDef task fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,rx:10,ry:10,color:#4a148c
+    classDef note fill:#fffde7,stroke:#fbc02d,stroke-width:2px,stroke-dasharray: 5 5,color:#333
+    classDef warning fill:#ffccbc,stroke:#bf360c,stroke-width:2px,rx:5,ry:5,color:#bf360c
+    
+    %% Nodes
+    SvelteA[Svelte loader]:::loader
+    MergedB[Some other task]:::loader
+    Page[Task: Render HTML]:::task
+    
+    %% Context Node
+    ContextNode["TaskContext inside 'Render HTML' sees:<br/>{'svelte': 'b.js', 'utils': 'u.js'}"]:::note
+
+    %% The "Floating" Warning Note
+    Warn["⚠️ 'svelte' was overwritten!"]:::warning
+
+    %% Connections
+    SvelteA -- "Output: Svelte&lt;P&gt;<br/>+ ImportMap:<br>{'svelte': 'a.js'}" --> Page
+    MergedB -- "Output: SomeData<br/>+ ImportMap:<br> {'svelte': 'b.js', 'utils': 'u.js'}" --> Page
+    
+    Page -.-> ContextNode
+    
+    %% Connect the warning to the context node to make it appear "floating" next to it
+    ContextNode -.- Warn
+    
+    %% Link Styling
+    linkStyle default stroke:#546e7a,stroke-width:2px
+```
+
+If multiple dependencies provide different values for the exact same key, the
+merging strategy is left undefined. Consequently, you cannot rely on a specific
+order of precedence. You must ensure keys are unique or that collisions are
+intentional and identical. In practice this should not matter, but it's
+important to be aware of this behavior.
+
 ## Execution Model
 
 The execution engine (`executor.rs`) manages the lifecycle of the build:

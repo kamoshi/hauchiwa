@@ -106,12 +106,15 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-## Feature Flags
+## Feature flags
 
-- `asyncrt`: Enables the Tokio runtime for async tasks.
-- `styles`: Enables SCSS/Sass compilation.
-- `images`: Enables image optimization (WebP, resizing).
-- `reload`: Enables live-reload during development.
+By default, Hauchiwa is built with the following features, but you can opt out
+of them by disabling them in your `Cargo.toml` file, if you don't need them.
+
+- `grass`: Enables SCSS/Sass compilation.
+- `image`: Enables image optimization (WebP, resizing).
+- `tokio`: Enables the Tokio runtime for async tasks.
+- `live`: Enables live-reload during development.
 - `server`: Enables the built-in development server.
 
 ## Documentation

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-#[cfg(feature = "reload")]
+#[cfg(feature = "live")]
 use std::sync::mpsc::{RecvError, SendError};
 
 pub use anyhow::Error as RuntimeError;
@@ -26,6 +26,7 @@ pub enum HauchiwaError {
     #[error(transparent)]
     AnyhowArc(#[from] Arc<anyhow::Error>),
 
+    #[cfg(feature = "tokio")]
     #[error("Failed to build runtime")]
     RuntimeBuild(#[from] tokio::io::Error),
 
@@ -47,7 +48,7 @@ pub enum HauchiwaError {
     #[error("Error while building the website.\n{0}")]
     Build(#[from] BuildError),
 
-    #[cfg(feature = "reload")]
+    #[cfg(feature = "live")]
     #[error("Error while watching for file changes:\n{0}")]
     Watch(#[from] WatchError),
 
@@ -100,7 +101,7 @@ pub enum BuildError {
     Other(anyhow::Error),
 }
 
-#[cfg(feature = "reload")]
+#[cfg(feature = "live")]
 #[derive(Debug, Error)]
 pub enum WatchError {
     #[error(transparent)]
