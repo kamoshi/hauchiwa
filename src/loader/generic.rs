@@ -21,14 +21,14 @@ pub enum FrontmatterError {
     Parse(anyhow::Error),
 }
 
-/// Represents a loaded content file with parsed metadata and body content.
+/// This is the standard output of the [`SiteConfig::load_frontmatter`] loader.
 ///
 /// # Generics
 ///
-/// * `T`: The type of the metadata (frontmatter).
+/// * `T`: The type of the metadata (frontmatter), typically a struct deriving `Deserialize`.
 #[derive(Clone)]
 pub struct Content<T> {
-    /// The original path of the content file.
+    /// The original path of content file.
     pub path: Utf8PathBuf,
     /// The parsed metadata (frontmatter).
     pub metadata: T,
@@ -40,37 +40,35 @@ impl<G> SiteConfig<G>
 where
     G: Send + Sync + 'static,
 {
-    /// Add a task that finds files matching a glob pattern, processes each file
-    /// using a provided callback, and collects the data into a `Registry`.
+    /// Registers a generic asset loader.
     ///
-    /// # Parameters
+    /// This method allows you to process files matching a glob pattern using a
+    /// custom closure. It is useful for loading assets that don't fit into
+    /// standard categories (like simple text files, JSON data, or binary
+    /// assets).
     ///
-    /// * `site_config`: The mutable `SiteConfig` to which the new task will be added.
-    /// * `path_glob`: A glob pattern (e.g., `"static/**/*"`) used to find files. This
-    ///   pattern is used for both the initial file discovery and for watching for changes.
-    /// * `callback`: A closure that defines the processing for each file. It receives
-    ///   the `&Globals<G>` and a `File<Vec<u8>>` (containing the file's path and
-    ///   raw byte content) and must return an `anyhow::Result<R>`.
+    /// # Type Parameters
     ///
-    /// # Generics
+    /// * `R`: The return type of the callback, which will be stored in the Registry.
     ///
-    /// * `G`: The type of the global data.
-    /// * `R`: The return type of the `callback` for a single file. This is the
-    ///   value that will be stored in the `Registry`.
+    /// # Arguments
+    ///
+    /// * `path_glob` - A glob pattern to find files (e.g., `"assets/**/*.json"`).
+    /// * `callback` - A function that takes the global context, a runtime
+    ///   handle, and the raw file. It should return the processed data.
     ///
     /// # Returns
     ///
-    /// Returns a `Handle<super::Registry<R>>`, which is a typed reference to the
-    /// task's output in the build graph. The output will be the `Registry`
-    /// containing all processed file results.
+    /// A `Handle` to a `Registry<R>`, mapping file paths to your processed data.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// // A simple loader that reads files as UTF-8 strings.
-    /// let text_files = config.load("content/**/*.txt", |_, _, file| {
-    ///     let content = String::from_utf8(file.metadata)?;
-    ///     Ok(content)
+    /// // Load all .txt files and reverse their content.
+    /// let reversed_texts = config.load("content/**/*.txt", |globals, file| {
+    ///     let content = String::from_utf8(file.data.into())?;
+    ///     let reversed = content.chars().rev().collect::<String>();
+    ///     Ok(reversed)
     /// })?;
     /// ```
     pub fn load<R>(
@@ -94,37 +92,38 @@ where
         )?))
     }
 
-    /// Scans for content files matching a glob pattern and parses their frontmatter.
+    /// Registers a content loader that parses frontmatter.
     ///
-    /// This loader reads files, treats them as UTF-8, and parses optional YAML frontmatter
-    /// at the beginning of the file. The remaining content is treated as the body.
+    /// This is the primary way to load Markdown (or other text) files that contain
+    /// YAML frontmatter. The loader will:
+    /// 1. Read the file as UTF-8.
+    /// 2. Extract and parse the YAML frontmatter into type `R`.
+    /// 3. Return the frontmatter and the remaining body content.
     ///
     /// # Type Parameters
     ///
-    /// * `G`: The global site context type.
-    /// * `R`: The type of the metadata (frontmatter) to deserialize into.
+    /// * `R`: The type to deserialize the frontmatter into. Must implement `serde::Deserialize`.
     ///
     /// # Arguments
     ///
-    /// * `site_config`: The site configuration builder.
-    /// * `path_glob`: The glob pattern to find files (e.g., "posts/*.md").
+    /// * `path_glob` - A glob pattern to find files (e.g., `"content/posts/**/*.md"`).
     ///
     /// # Returns
     ///
-    /// A handle to a registry mapping file paths to `Content<R>` objects.
+    /// A `Handle` to a `Registry<Content<R>>`.
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// #[derive(serde::Deserialize, Clone)]
-    /// struct PostMeta {
+    /// struct Post {
     ///     title: String,
     ///     date: String,
     /// }
     ///
     /// // Load all markdown files in the posts directory, parsing their
     /// // frontmatter into PostMeta structs.
-    /// let posts = config.load_frontmatter::<PostMeta>("content/posts/*.md")?;
+    /// let posts = config.load_frontmatter::<Post>("content/posts/*.md")?;
     /// ```
     pub fn load_frontmatter<R>(
         &mut self,

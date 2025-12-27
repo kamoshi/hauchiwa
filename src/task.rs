@@ -1,4 +1,16 @@
 //! All the generic task-related abstractions.
+//!
+//! The Task system is the core of Hauchiwa. A [Task] is a unit of work that
+//! produces a result. Tasks are organized into a Directed Acyclic Graph (DAG),
+//! where dependencies are explicitly declared.
+//!
+//! # Key Types
+//!
+//! * [`Handle<T>`]: A lightweight reference to the *future* result of a task.
+//!   You use handles to declare dependencies between tasks.
+//! * [`TaskDependencies`]: A trait implemented for tuples of handles (e.g.,
+//!   `(Handle<A>, Handle<B>)`) that allows tasks to accept multiple inputs.
+
 use petgraph::graph::NodeIndex;
 use std::any::Any;
 use std::sync::Arc;
@@ -34,6 +46,11 @@ pub(crate) trait TypedTask<G: Send + Sync = ()>: Send + Sync {
     }
 }
 
+/// The core trait for all tasks in the graph.
+///
+/// While most users will interact with the typed [`SiteConfig::add_task`](crate::SiteConfig::add_task)
+/// API, this trait is the type-erased foundation that allows the graph to hold
+/// tasks with different output types.
 pub(crate) trait Task<G: Send + Sync = ()>: Send + Sync {
     fn get_name(&self) -> String;
     fn dependencies(&self) -> Vec<NodeIndex>;
@@ -81,10 +98,17 @@ where
 
 /// A type-safe reference to a task in the build graph.
 ///
-/// A `Handle<T>` is a lightweight, copyable token that represents a future result of type `T`.
-/// It is used to define dependencies between tasks. When one task depends on another, it holds
-/// a handle to that dependency. The build system ensures that the dependency is executed
-/// before the task that depends on it.
+/// A `Handle<T>` is a lightweight, copyable token that represents a future
+/// result of type `T`. It is used to define dependencies between tasks. When
+/// one task depends on another, it holds a handle to that dependency. The build
+/// system ensures that the dependency is executed before the task that depends
+/// on it.
+///
+/// # Diamond Dependencies
+///
+/// Handles are smart enough to handle "diamond dependencies". If Task C and
+/// Task B both depend on Task A, and Task D depends on both B and C, Task A
+/// will only be executed *once*, and its result will be shared.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Handle<T> {
     pub(crate) index: NodeIndex,

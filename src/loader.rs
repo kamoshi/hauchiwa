@@ -1,3 +1,17 @@
+//! Loaders are tasks that ingest data from the filesystem or external sources.
+//!
+//! A "Loader" is typically a task with **zero dependencies** that reads files
+//! matching a glob pattern, processes them (e.g., parsing frontmatter, resizing
+//! images), and stores them in a [`Registry`].
+//!
+//! This module provides the core types for loaders:
+//! - [`Registry`]: A map of paths to processed data.
+//! - [`File`]: Represents a raw file read from disk.
+//! - [`Runtime`]: A thread-safe helper for tasks to store artifacts (like images)
+//!   and register import maps.
+//!
+//! It also contains the `GlobRegistryTask`, which is the workhorse for most loaders.
+
 pub mod generic;
 pub use generic::Content;
 
@@ -35,12 +49,21 @@ use crate::{
     task::{Dynamic, TypedTask},
 };
 
-/// A collection of processed assets, mapping source file paths to their
-/// resulting data.
+/// A collection of processed assets, indexed by their source file path.
 ///
-/// `Registry` is a common return type for loader tasks that process multiple
-/// files, such as `load` or `load_frontmatter`. It provides a way to access the
-/// processed output of each file by its original path.
+/// `Registry<T>` is the standard return type for most loaders. It allows you to
+/// access processed items (like posts or images) using their original file path.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Assuming `posts` is a Registry<Content<Post>>
+/// for post in posts.values() {
+///     println!("Title: {}", post.metadata.title);
+/// }
+///
+/// let specific_post = posts.get("content/posts/hello.md")?;
+/// ```
 #[derive(Debug)]
 pub struct Registry<T> {
     map: HashMap<camino::Utf8PathBuf, T>,
@@ -48,6 +71,10 @@ pub struct Registry<T> {
 
 impl<T: Clone> Registry<T> {
     /// Retrieves a reference to the processed data for a given source path.
+    ///
+    /// # Errors
+    ///
+    /// Returns `HauchiwaError::AssetNotFound` if the path does not exist in the registry.
     pub fn get(&self, path: impl AsRef<Utf8Path>) -> Result<&T, HauchiwaError> {
         self.map
             .get(path.as_ref())
@@ -56,13 +83,16 @@ impl<T: Clone> Registry<T> {
             ))
     }
 
-    /// Returns an iterator over the processed data of all files in the registry.
+    /// Returns an iterator over all items in the registry.
     pub fn values(&self) -> std::collections::hash_map::Values<'_, Utf8PathBuf, T> {
         self.map.values()
     }
 
-    /// Finds all assets whose paths match the given glob pattern.
-    /// Returns a vector of (Path, Value) tuples.
+    /// Finds all items whose source paths match the given glob pattern.
+    ///
+    /// # Returns
+    ///
+    /// A vector of `(Path, &Item)` tuples.
     pub fn glob(&self, pattern: &str) -> Result<Vec<(&Utf8PathBuf, &T)>, HauchiwaError> {
         let matcher = Pattern::new(pattern)?;
 
@@ -76,44 +106,48 @@ impl<T: Clone> Registry<T> {
     }
 }
 
-/// A loaded source file containing its path and raw byte content.
+/// A raw file read from the filesystem.
+///
+/// This struct is passed to the callback of custom loaders.
 pub struct File {
     /// The path to the source file.
     pub path: Utf8PathBuf,
-    /// The content of the file.
+    /// The raw binary content of the file.
     pub data: Box<[u8]>,
 }
 
-/// storage, enabling immutability and reproducibility guarantees through
-/// content hashing. Also handles import map registration.
+/// A helper for managing side effects and imports within a task.
+///
+/// `Runtime` is passed to task callbacks to allow them to:
+/// 1. Store generated artifacts (like optimized images or compiled CSS) to the `dist` directory.
+/// 2. Register module imports (for the Import Map) that this task introduces.
+///
+/// It handles content-addressable storage (hashing) automatically to ensure caching works correctly.
 #[derive(Clone)]
 pub struct Runtime {
     pub(crate) new_imports: ImportMap,
 }
 
 impl Runtime {
+    /// Creates a new, empty Runtime.
     pub fn new() -> Self {
         Self {
             new_imports: ImportMap::new(),
         }
     }
 
-    /// Persist the given binary `data` under a hash-based path with the
-    /// specified file extension `ext`.
+    /// Stores raw data as a content-addressed artifact.
     ///
-    /// This method computes a 32-bit hash of `data` to uniquely identify the
-    /// artifact. It stores the artifact in a local cache directory. The
-    /// returned path is a stable, canonicalized URI rooted at `/hash/`.
+    /// The data is hashed, and the file is stored at `/hash/<hash>.<ext>`.
     ///
-    /// # Parameters
-    /// - `data`: The raw bytes of the artifact to store.
-    /// - `ext`: The file extension (e.g., "js", "css", "webp") used for the
-    ///   output artifact, influencing MIME-type recognition and loader behavior.
+    /// # Arguments
+    ///
+    /// * `data` - The raw bytes to store.
+    /// * `ext` - The file extension for the stored file (e.g., "png", "css").
     ///
     /// # Returns
-    /// - On success, returns the logical asset path as a `Utf8PathBuf` rooted
-    ///   under `/hash/`, suitable for inclusion in HTML.
-    /// - On failure, returns a `BuildError` for I/O or hashing errors.
+    ///
+    /// The logical path to the file (e.g., `/hash/abcdef123.png`), suitable for use in HTML `src` attributes.
     pub fn store(&self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuildError> {
         let hash = Hash32::hash(data);
         let hash = hash.to_hex();
@@ -134,11 +168,14 @@ impl Runtime {
         Ok(path_root)
     }
 
-    /// Register a new module key and its path into the import map for this task.
+    /// Registers a new entry in the global Import Map.
+    ///
+    /// This tells the browser how to resolve a specific module specifier.
     ///
     /// # Arguments
-    /// * `key` - The module specifier (e.g., "svelte")
-    /// * `value` - The URL or path (e.g., "/_app/svelte.js")
+    ///
+    /// * `key` - The module specifier (e.g., "react", "my-lib").
+    /// * `value` - The URL to the module (e.g., "/hash/1234.js", "https://cdn.example.com/lib.js").
     pub fn register(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.new_imports.register(key, value);
     }
@@ -153,6 +190,10 @@ impl Default for Runtime {
 type GlobCallback<G, R> =
     Box<dyn Fn(&Context<G>, &mut Runtime, File) -> anyhow::Result<(Utf8PathBuf, R)> + Send + Sync>;
 
+/// A task that finds files matching a glob pattern and processes them in parallel.
+///
+/// This is the implementation behind helper methods like `load_frontmatter` and `load_images`.
+/// It is generic over the global context `G` and the result type `R`.
 pub struct GlobRegistryTask<G, R>
 where
     G: Send + Sync + 'static,
@@ -168,6 +209,13 @@ where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
+    /// Creates a new `GlobRegistryTask`.
+    ///
+    /// # Arguments
+    ///
+    /// * `glob_entry` - Patterns to search for files to process.
+    /// * `glob_watch` - Patterns to watch for changes (retriggering the task).
+    /// * `callback` - A function that processes each found file.
     pub fn new<F>(
         glob_entry: Vec<&'static str>,
         glob_watch: Vec<&'static str>,

@@ -78,41 +78,49 @@ impl Debug for Hash32 {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+/// The mode in which the site generator is running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
+    /// A one-time build.
     Build,
+    /// A continuous watch mode for development.
     Watch,
 }
 
-/// Represents globally accessible data and settings available to all tasks during the build process.
+/// Global configuration and state available to all tasks.
 ///
-/// This struct holds information such as the project's generator name, the current build mode (build or watch),
-/// and any user-defined data `G` that needs to be shared across different tasks.
+/// This struct allows you to share global data (like configuration options or
+/// shared state) across your entire task graph.
+///
+/// # Type Parameters
+///
+/// * `G`: The type of the user-defined global data. Must be `Send + Sync`.
 #[derive(Clone)]
 pub struct Globals<G: Send + Sync = ()> {
-    /// The name and version of the generator.
+    /// The name of the generator (defaults to "hauchiwa").
     pub generator: &'static str,
-    /// The current build mode, indicating whether the site is being built for production or watched for development.
+    /// The current build mode (Build or Watch).
     pub mode: Mode,
-    /// The port for the live-reload WebSocket server, if applicable.
+    /// The port of the development server (if running).
     pub port: Option<u16>,
-    /// User-defined global data that can be accessed by tasks.
+    /// User-defined global data.
     pub data: G,
 }
 
-/// The context passed to every task.
-/// It contains immutable data: globals and the import map constructed from dependencies.
-pub struct Context<'a, G: Send + Sync = ()> {
-    pub globals: &'a Globals<G>,
-    pub importmap: &'a ImportMap,
-}
-
 impl<G: Send + Sync> Globals<G> {
-    /// Returns an inline JavaScript snippet for live-reloading the page in watch mode.
+    /// Returns a JavaScript snippet to enable live-reloading.
     ///
-    /// If the site is running in watch mode, this function provides a script
-    /// that establishes a WebSocket connection to the development server.
-    /// A `None` value indicates that live-reload is disabled.
+    /// If the site is running in `Watch` mode and a port is configured, this returns
+    /// a script that connects to the WebSocket server to listen for reload events.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let script = ctx.globals.get_refresh_script();
+    /// if let Some(s) = script {
+    ///     // Inject `s` into your HTML <head> or <body>
+    /// }
+    /// ```
     pub fn get_refresh_script(&self) -> Option<String> {
         self.port.map(|port| {
             format!(
@@ -125,6 +133,18 @@ socket.addEventListener("message", event => {{
             )
         })
     }
+}
+
+/// The context passed to every task execution.
+///
+/// `Context` provides access to global settings and the aggregated import map
+/// from all dependencies. It is immutable during task execution.
+pub struct Context<'a, G: Send + Sync = ()> {
+    /// Access to global configuration and data.
+    pub globals: &'a Globals<G>,
+    /// The current import map, containing JavaScript module mappings from all
+    /// upstream dependencies.
+    pub importmap: &'a ImportMap,
 }
 
 #[derive(Debug)]
@@ -175,10 +195,22 @@ where
     }
 }
 
-/// Configures and builds the task graph for a site.
+/// The blueprint for your static site.
 ///
-/// `SiteConfig` is the main entry point for defining tasks and their dependencies.
-/// After all tasks are added, it is used to create a `Site` instance.
+/// `SiteConfig` is used to define the Task graph of your website. You add
+/// tasks (including loaders) to the config, and wire them together using their
+/// [Handle](crate::task::Handle)s.
+///
+/// Once configured, you convert this into a [Site] to execute the build.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use hauchiwa::SiteConfig;
+///
+/// let mut config: SiteConfig<()> = SiteConfig::new();
+/// // Add tasks here...
+/// ```
 pub struct SiteConfig<G: Send + Sync = ()> {
     graph: Graph<Arc<dyn Task<G>>, ()>,
 }
@@ -190,29 +222,27 @@ impl<G: Send + Sync + 'static> Default for SiteConfig<G> {
 }
 
 impl<G: Send + Sync + 'static> SiteConfig<G> {
-    /// Creates a new, empty `SiteConfig`.
+    /// Creates a new, empty configuration.
     pub fn new() -> Self {
         Self {
             graph: Graph::new(),
         }
     }
 
-    /// Adds a new task to the build graph.
+    /// Adds a custom task to the graph.
     ///
-    /// # Type Parameters
+    /// This is the low-level method for adding tasks. For a more ergonomic
+    /// experience, consider using the [`task!`](crate::task!) macro.
     ///
-    /// - `D`: A tuple of `Handle<T>`s representing the task's dependencies.
-    /// - `F`: The task's execution logic, provided as a closure.
-    /// - `R`: The return type of the task's closure.
+    /// # Arguments
     ///
-    /// # Parameters
-    ///
-    /// - `dependencies`: A tuple of handles to the tasks that must be completed before this one.
-    /// - `callback`: A closure that takes `Context`, `Runtime` and the resolved outputs of the dependencies.
+    /// * `dependencies` - A tuple of handles to tasks that must run before this one.
+    /// * `callback` - The closure that executes the task. It receives the
+    ///   `Context` and the resolved outputs of the dependencies.
     ///
     /// # Returns
     ///
-    /// A `Handle<R>` that can be used as a dependency for other tasks.
+    /// A [`Handle`](crate::task::Handle) representing the future result of this task.
     pub fn add_task<D, F, R>(&mut self, dependencies: D, callback: F) -> task::Handle<R>
     where
         D: TaskDependencies + Send + Sync + 'static,
@@ -261,10 +291,17 @@ impl<G: Send + Sync> Site<G> {
         }
     }
 
-    /// Executes a one-time build of the site.
+    /// Runs the build process once.
     ///
-    /// This runs all defined tasks in the correct order, handling dependencies,
-    /// and outputs the resulting files to the `dist` directory.
+    /// This will:
+    /// 1. Clean the `dist` directory.
+    /// 2. Copy static files.
+    /// 3. Execute the task graph in parallel.
+    /// 4. Save the generated `Page`s to `dist`.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The global user data to pass to all tasks.
     pub fn build(&mut self, data: G) -> anyhow::Result<()> {
         let globals = Globals {
             generator: "hauchiwa",
@@ -283,11 +320,14 @@ impl<G: Send + Sync> Site<G> {
         Ok(())
     }
 
-    /// Starts a development server and watches for file changes.
+    /// Starts the development server in watch mode.
     ///
-    /// This method performs an initial build and then monitors the project directory.
-    /// When a file is modified, it intelligently re-runs only the necessary tasks.
-    /// It also includes live-reloading functionality for a smooth development experience.
+    /// This will perform an initial build and then watch for file changes.
+    /// When a file changes, only the affected tasks are re-run.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The global user data to pass to all tasks.
     pub fn watch(&mut self, data: G) -> anyhow::Result<()> {
         utils::clear_dist().expect("Failed to clear dist directory");
         utils::clone_static().expect("Failed to copy static files");
@@ -298,17 +338,35 @@ impl<G: Send + Sync> Site<G> {
     }
 }
 
-/// A declarative macro for conveniently adding tasks to a `SiteConfig`.
+/// A convenient macro for defining tasks.
 ///
-/// This macro simplifies the process of defining tasks and their dependencies,
-/// reducing boilerplate code.
+/// This macro wraps `SiteConfig::add_task` to reduce boilerplate when
+/// extracting dependencies.
 ///
-/// # Usage
+/// # Syntax
 ///
 /// ```rust,ignore
-/// use hauchiwa::task;
-/// task!(config, |ctx, rt, dep1, dep2| {
-///     // Task logic here
+/// task!(config, |context, dep1, dep2| {
+///     // body
+/// })
+/// ```
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # use hauchiwa::{SiteConfig, task};
+/// # let mut config: SiteConfig<()> = SiteConfig::new();
+/// // Assume `dep_a` and `dep_b` are Handles from previous tasks.
+/// // let dep_a = ...;
+/// // let dep_b = ...;
+///
+/// # let dep_a = config.add_task((), |_, _| Ok(()));
+/// # let dep_b = config.add_task((), |_, _| Ok(()));
+///
+/// task!(config, |ctx, dep_a, dep_b| {
+///     // `dep_a` and `dep_b` here are the *results* of the tasks, not the handles.
+///     println!("Task running!");
+///     Ok(())
 /// });
 /// ```
 #[macro_export]

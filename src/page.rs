@@ -1,3 +1,8 @@
+//! Utilities for working with pages and paths.
+//!
+//! This module contains the [`Page`] struct, which represents a final output file,
+//! and helper functions for path normalization and slugification.
+
 use camino::Utf8Component;
 use camino::{Utf8Path, Utf8PathBuf};
 

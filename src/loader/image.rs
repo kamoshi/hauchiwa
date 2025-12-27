@@ -27,9 +27,12 @@ pub enum ImageError {
 }
 
 /// Represents a processed image asset.
+///
+/// Images loaded via [`SiteConfig::glob_images`] are automatically optimized
+/// and cached. This struct provides the path to the optimized version.
 #[derive(Clone)]
 pub struct Image {
-    /// The path to the processed image file (e.g., in the distribution directory).
+    /// The web-accessible path to the optimized image (e.g., `/hash/img/abc1234.webp`).
     pub path: Utf8PathBuf,
 }
 
@@ -37,19 +40,20 @@ impl<G> SiteConfig<G>
 where
     G: Send + Sync + 'static,
 {
-    /// Scans for image files matching the provided glob patterns and converts them to WebP.
+    /// Registers an image loader that optimizes and caches images.
     ///
-    /// This loader processes images found via the glob patterns. It converts them to
-    /// generic WebP format, hashes the content for caching, and places the result in the
-    /// distribution directory.
+    /// This loader finds images matching the provided glob patterns, converts
+    /// them to generic WebP format, and stores them in the distribution
+    /// directory. It uses content hashing to avoid re-processing images that
+    /// haven't changed.
     ///
     /// # Arguments
     ///
-    /// * `path_glob`: A list of glob patterns to find images (e.g., `&["assets/images/**/*.png"]`).
+    /// * `path_glob` - A slice of glob patterns to find images (e.g., `&["assets/**/*.png", "photos/*.jpg"]`).
     ///
     /// # Returns
     ///
-    /// A handle to a registry mapping original file paths to `Image` objects.
+    /// A `Handle` to a `Registry<Image>`, mapping original file paths to the processed `Image` struct.
     ///
     /// # Example
     ///

@@ -50,7 +50,7 @@ where
     ///
     /// # Returns
     ///
-    /// A handle to a registry mapping original file paths to `JS` objects.
+    /// A handle to a registry mapping original file paths to `Script` objects.
     ///
     /// # Example
     ///

@@ -42,13 +42,26 @@ type Prerender<P> = Arc<dyn Fn(&P) -> Result<String, SvelteError> + Send + Sync>
 // The LazyLock now holds a specific Result type.
 static RUNTIME: LazyLock<Result<String, SvelteError>> = LazyLock::new(compile_svelte_runtime);
 
+/// Represents a compiled Svelte component.
+///
+/// This struct allows you to:
+/// 1. Server-side render (SSR) the component into HTML string using the `html` closure.
+/// 2. Client-side hydrate the component using the scripts in `init` and `rt`.
+///
+/// # Generics
+///
+/// * `P`: The type of the component's props.
 #[derive(Clone)]
 pub struct Svelte<P = ()>
 where
     P: serde::Serialize,
 {
+    /// A closure that takes props `P` and returns the rendered HTML string.
+    /// This is used for Server-Side Rendering (SSR).
     pub html: Prerender<P>,
+    /// The initialization script for this specific component (client-side hydration).
     pub init: Script,
+    /// The shared Svelte runtime library script.
     pub rt: Script,
 }
 

@@ -1,170 +1,124 @@
 # Hauchiwa
 
-A flexible static website generator library featuring incremental rebuilds and
-cached image optimization. This library is designed to be the robust backbone
-for your custom static site generator, handling all the common tasks:
+[![Crates.io](https://img.shields.io/crates/v/hauchiwa.svg)](https://crates.io/crates/hauchiwa)
+[![Docs.rs](https://docs.rs/hauchiwa/badge.svg)](https://docs.rs/hauchiwa)
 
-- **Loading content**: Efficiently collects content files from your file system.
-- **Image optimization**: Optimizes images and intelligently caches the results
-  to speed up subsequent builds.
-- **Stylesheet compilation**: Compiles SCSS and CSS stylesheets.
-- **JavaScript compilation**: Processes JavaScript applications using ESBuild.
-- **Watch mode**: Monitors for changes and performs fast, incremental rebuilds.
-- and much more...
+A flexible, incremental, graph-based static site generator library for Rust. It
+provides the building blocks to create your own custom static site generator
+tailored exactly to your needs.
 
-## Why This Library?
+Unlike traditional SSGs that force a specific directory structure or build pipeline,
+Hauchiwa gives you a **Task Graph**. You define the inputs (files, data), the transformations
+(markdown parsing, image optimization, SCSS compilation), and the dependencies between them.
+Hauchiwa handles the parallel execution, caching, and incremental rebuilds.
 
-I created this library out of dissatisfaction with existing static site
-generators. Many felt either too **rigid** (like Jekyll, Hugo, and Zola),
-**arcane** (like Hakyll), or simply **bloated** JavaScript frameworks (like
-Gatsby and Astro).
+If you are tired of:
+- Rigid frameworks that force their file structure on you (Jekyll, Hugo).
+- Complex config files that are hard to debug.
+- Bloated JavaScript bundles for simple static content.
 
-In contrast, this library's API is purposefully **small**, **simple**,
-**flexible**, and **powerful**. If you're looking to generate a static blog, you
-likely won't need any other generator. Its true strength lies in its
-extensibility, as you can leverage the entire Rust ecosystem to customize it in
-countless ways. Also, the codebase is compact enough to be easily forked and
-maintained by a single person, a feature that might be particularly appealing to
-hackers like yourself!
+Then Hauchiwa is for you.
 
-## Feature flags
+## Key Features
 
-You can selectively enable features by specifying them in your Cargo.toml file.
-This allows you to include only the functionalities your project needs, keeping
-your dependencies lean.
+* **Task Graph Architecture**: Define your build as a dependency graph. If Task
+  B needs Task A, Hauchiwa ensures they run in order.
+* **Incremental**: Because it knows the graph, Hauchiwa only rebuilds what has
+  really changed.
+* **Parallel**: Tasks run in parallel automatically.
+* **Type-safe**: Leveraging Rust's type system to ensure dependencies are sound.
+* **Asset pipeline**: Built-in support for:
+  * **Images**: Automatic optimization via `image` and caching.
+  * **Sass/SCSS**: Compilation via `grass`.
+  * **JavaScript**: Bundling and minification via `esbuild`.
+  * **Svelte**: SSR and hydration support via `deno` and `esbuild`.
+  
+## Core Concepts
+
+- **[SiteConfig]**: The blueprint of your site. You use this to register tasks
+  and loaders.
+- **[Task](crate::task::Task)**: A single unit of work. Tasks can depend on
+  other tasks.
+- **[Handle](crate::task::Handle)**: A reference to the future result of a task.
+  You pass these to other tasks to define dependencies.
+- **[Loader](crate::loader)**: A kind of a task that reads data from the
+  filesystem (e.g., markdown files, images).
+- **[Site]**: The engine that converts the graph defined in `SiteConfig` into a
+  proper static website.
+
+## Quick Start
+
+Add `hauchiwa` to your `Cargo.toml`:
 
 ```toml
-[dependencies.hauchiwa]
-features = [
-    "asyncrt",  # Adds an asynchronous runtime (Tokio) and an async loader.
-    "styles",   # Includes the Sass loader for CSS pre-processing.
-    "images",   # Enables image loading and optimization capabilities.
-    "reload",   # Activates live reloading in watch mode for a smoother development experience.
-    "server",   # Provides an HTTP server for local development and writing in watch mode.
-]
+[dependencies]
+hauchiwa = "*" # Check crates.io for the latest version
+serde = { version = "1", features = ["derive"] }
 ```
 
-## Get started
+Create your generator in `src/main.rs`:
 
-To begin using Hauchiwa, add the following snippet to your Cargo.toml file.
-Remember to replace "*" with the latest version available on Crates.io.
-
-```toml
-hauchiwa = "*" # change this version to the latest
-```
-
-## Declarative configuration
-
-The configuration API is designed to be extremely minimal, yet powerful and
-flexible, allowing you to define your website's structure and behavior with
-clarity.
-
-Here's a small sample demonstrating how you can use this library to create your
-own static site generator. Let's start by defining the shape of the front matter
-for a single post, typically stored as a Markdown file.
-
-```rust ignore
-/// Represents a simple post, this is the metadata for your Markdown content.
-#[derive(Deserialize, Debug, Clone)]
-pub struct Post {
-    pub title: String,
-    #[serde(with = "isodate")]
-    pub date: DateTime<Utc>,
-}
-```
-
-Within your application's main function, you can configure precisely how the
-website should be generated, defining content loaders, tasks, and hooks.
-
-```rust
+```rust,no_run
+use hauchiwa::{SiteConfig, Site, Page};
+use hauchiwa::loader::{self, Content};
 use serde::Deserialize;
-use hauchiwa::{SiteConfig, Site, Globals};
-use hauchiwa::page::Page;
-use hauchiwa::loader::{self, Runtime};
 
-struct Bibtex {
-    path: camino::Utf8PathBuf,
-    data: String,
+
+// 1. Define your content structure (Frontmatter)
+#[derive(Deserialize, Clone)]
+struct Post {
+    title: String,
 }
-
-#[derive(Default)]
-struct MyData {};
 
 fn main() -> anyhow::Result<()> {
-    // Here we start by creating a new configuration.
-    let mut config = SiteConfig::new();
+    // 2. Create the configuration
+    // We explicitly specify the global data type as `()` since we don't have any shared state yet.
+    let mut config: SiteConfig<()> = SiteConfig::new();
 
-    const BASE: &str = "content";
+    // 3. Add a loader to glob markdown files
+    // `posts` is a Handle<Registry<Content<Post>>>
+    let posts = config.glob_content::<Post>("content/**/*.md")?;
 
-    // We can configure the collections of files used to build the pages.
-    // glob_content expects YAML frontmatter matching the Post struct.
-    let posts = config.glob_content::<MyData, Post>("content/posts/**/*.md")?;
+    // 4. Define a task to render pages
+    // We declare that this task depends on `posts`.
+    hauchiwa::task!(config, |ctx, posts| {
+        let mut pages = Vec::new();
 
-    // We can configure the generator to process additional files like images or custom assets.
-    let images = config.glob_images(&["content/**/*.jpg", "content/**/*.png"])?;
-
-    // We can add directories containing global stylesheets, either CSS or SCSS.
-    let styles = config.build_styles("styles/main.scss", "styles/**/*.scss")?;
-    
-    // We can add JavaScript scripts compiled via ESBuild
-    let scripts = config.build_scripts("scripts/main.ts", "scripts/**/*.ts")?;
-
-    // We can add custom assets processing using glob_assets
-    let bibtex = config.glob_assets("content/**/*.bib", |globals, file| {
-         let rt = Runtime;
-         // save the raw data in cache and return path
-         let path = rt.store(&file.metadata, "bib")?;
-         let text = String::from_utf8_lossy(&file.metadata);
-         let data = todo!(); // TODO: load bibtex via `hayagriva`
-
-         // return data (path to file + parsed bibtex)
-         Ok(Bibtex { path, data: data })
-    })?;
-
-    // We can add a simple task to generate the `index.html` page.
-    // The task! macro makes it easy to declare dependencies.
-    hauchiwa::task!(config, |ctx, posts, images, styles, scripts| {
-        let mut pages = vec![];
-        
-        // posts is Registry<Content<Post>>
+        // Iterate over loaded posts
         for post in posts.values() {
-            // Retrieve any assets required to build the page.
-            // ...
-
-            // Parse the content of a Markdown file, bring your own library.
-            let (parsed, outline, bibliography): (String, (), ()) =
-                todo!("whatever you want to use, e.g pulldown_cmark");
+            let html_content = format!("<h1>{}</h1>", post.metadata.title);
             
-            // Generate the HTML page, bring your own library.
-            let rendered = todo!("whatever you want to use, e.g maud");
-            
-            // Add the page to the list
-            pages.push(Page::text(post.path.with_extension("html"), rendered));
+            // Create a page structure
+            pages.push(Page::html(&post.path, html_content));
         }
 
         Ok(pages)
     });
 
-    // Create the site from the configuration
+    // 5. Build the site
     let mut site = Site::new(config);
+    site.build(())?;
 
-    // Start the library in either the *build* or the *watch* mode.
-    site.build(MyData::default())?;
-    // site.watch(MyData::default())?;
-    
     Ok(())
 }
 ```
 
-The full documentation for this library is always available on
-[docs.rs](https://docs.rs/hauchiwa/latest/hauchiwa/). The loader submodule
-contains all the available loader implementations along with documentation.
-Please feel free to take a look! 😊
+## Feature Flags
 
-## Examples
+- `asyncrt`: Enables the Tokio runtime for async tasks.
+- `styles`: Enables SCSS/Sass compilation.
+- `images`: Enables image optimization (WebP, resizing).
+- `reload`: Enables live-reload during development.
+- `server`: Enables the built-in development server.
 
-- [kamoshi.org](https://git.kamoshi.org/kamov/kamoshi.org)
+## Documentation
+
+The best place to learn is the [API Documentation](https://docs.rs/hauchiwa). It
+covers the core concepts in depth:
+- **[SiteConfig]**: How to wire up your graph.
+- **[Loader]**: How to read files.
+- **[Task]**: How to process data.
 
 ## License
 
-This library is available under the GPL 2.0 (or later) license.
+GPL-2.0 or later.
