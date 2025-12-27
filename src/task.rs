@@ -15,7 +15,7 @@ use petgraph::graph::NodeIndex;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::{Context, importmap::ImportMap, loader::Runtime};
+use crate::{TaskContext, importmap::ImportMap, loader::Store};
 
 pub(crate) type Dynamic = Arc<dyn Any + Send + Sync>;
 
@@ -35,8 +35,8 @@ pub(crate) trait TypedTask<G: Send + Sync = ()>: Send + Sync {
     fn dependencies(&self) -> Vec<NodeIndex>;
     fn execute(
         &self,
-        context: &Context<G>,
-        runtime: &mut Runtime,
+        context: &TaskContext<G>,
+        runtime: &mut Store,
         dependencies: &[Dynamic],
     ) -> anyhow::Result<Self::Output>;
 
@@ -56,8 +56,8 @@ pub(crate) trait Task<G: Send + Sync = ()>: Send + Sync {
     fn dependencies(&self) -> Vec<NodeIndex>;
     fn execute(
         &self,
-        context: &Context<G>,
-        runtime: &mut Runtime,
+        context: &TaskContext<G>,
+        runtime: &mut Store,
         dependencies: &[Dynamic],
     ) -> anyhow::Result<Dynamic>;
 
@@ -83,8 +83,8 @@ where
 
     fn execute(
         &self,
-        context: &Context<G>,
-        runtime: &mut Runtime,
+        context: &TaskContext<G>,
+        runtime: &mut Store,
         dependencies: &[Dynamic],
     ) -> anyhow::Result<Dynamic> {
         // Call the typed method, then erase the result.

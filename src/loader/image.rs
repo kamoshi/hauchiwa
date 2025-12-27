@@ -4,9 +4,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use thiserror::Error;
 
 use crate::{
-    Hash32, SiteConfig,
+    Blueprint, Hash32,
     error::{BuildError, HauchiwaError},
-    loader::{File, GlobRegistryTask, Registry},
+    loader::{Assets, GlobAssetsTask, Input},
     task::Handle,
 };
 
@@ -36,7 +36,7 @@ pub struct Image {
     pub path: Utf8PathBuf,
 }
 
-impl<G> SiteConfig<G>
+impl<G> Blueprint<G>
 where
     G: Send + Sync + 'static,
 {
@@ -64,11 +64,11 @@ where
     pub fn load_images(
         &mut self,
         path_glob: &'static [&'static str],
-    ) -> Result<Handle<Registry<Image>>, HauchiwaError> {
-        Ok(self.add_task_opaque(GlobRegistryTask::new(
+    ) -> Result<Handle<Assets<Image>>, HauchiwaError> {
+        Ok(self.add_task_opaque(GlobAssetsTask::new(
             path_glob.to_vec(),
             path_glob.to_vec(),
-            move |_, _, file: File| {
+            move |_, _, file: Input| {
                 let hash = Hash32::hash_file(&file.path)?;
                 let path = build_image(hash, &file.path)?;
 

@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{SiteConfig, error::HauchiwaError, loader::GlobRegistryTask, task::Handle};
+use crate::{Blueprint, error::HauchiwaError, loader::GlobAssetsTask, task::Handle};
 
 /// Errors that can occur when compiling Stylesheets.
 #[derive(Debug, Error)]
@@ -25,7 +25,7 @@ pub struct Stylesheet {
     pub path: camino::Utf8PathBuf,
 }
 
-impl<G> SiteConfig<G>
+impl<G> Blueprint<G>
 where
     G: Send + Sync + 'static,
 {
@@ -53,17 +53,15 @@ where
         &mut self,
         glob_entry: &'static str,
         glob_watch: &'static str,
-    ) -> Result<Handle<super::Registry<Stylesheet>>, HauchiwaError> {
-        Ok(self.add_task_opaque(GlobRegistryTask::new(
+    ) -> Result<Handle<super::Assets<Stylesheet>>, HauchiwaError> {
+        Ok(self.add_task_opaque(GlobAssetsTask::new(
             vec![glob_entry],
             vec![glob_watch],
             move |_, rt, file| {
                 let data = grass::from_path(&file.path, &grass::Options::default())
                     .map_err(StyleError::Sass)?;
 
-                let path = rt
-                    .store(data.as_bytes(), "css")
-                    .map_err(StyleError::Build)?;
+                let path = rt.save(data.as_bytes(), "css").map_err(StyleError::Build)?;
 
                 Ok((file.path, Stylesheet { path }))
             },

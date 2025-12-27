@@ -17,13 +17,14 @@ use petgraph::{algo::toposort, visit::Dfs};
 use tungstenite::WebSocket;
 
 use crate::{
-    Context, Globals, Mode, Site, importmap::ImportMap, loader::Runtime, page::Page, task::NodeData,
+    Environment, Mode, TaskContext, Website, importmap::ImportMap, loader::Store, page::Output,
+    task::NodeData,
 };
 
 pub fn run_once_parallel<G: Send + Sync>(
-    site: &mut Site<G>,
-    globals: &Globals<G>,
-) -> anyhow::Result<(HashMap<NodeIndex, NodeData>, Vec<Page>)> {
+    site: &mut Website<G>,
+    globals: &Environment<G>,
+) -> anyhow::Result<(HashMap<NodeIndex, NodeData>, Vec<Output>)> {
     // We run toposort primarily to detect any cycles in the graph.
     toposort(&site.graph, None).expect("Cycle detected in task graph");
 
@@ -52,8 +53,8 @@ pub fn run_once_parallel<G: Send + Sync>(
 /// 6. If a task's dependency count reaches zero, it is sent to the workers.
 /// 7. The loop continues until all tasks have been completed.
 fn run_tasks_parallel<G: Send + Sync>(
-    site: &Site<G>,
-    globals: &Globals<G>,
+    site: &Website<G>,
+    globals: &Environment<G>,
     cache: &mut HashMap<NodeIndex, NodeData>,
     nodes_to_run: &HashSet<NodeIndex>,
 ) -> anyhow::Result<()> {
@@ -134,18 +135,18 @@ fn run_tasks_parallel<G: Send + Sync>(
                 task_pb.set_message(task.get_name());
                 task_pb.enable_steady_tick(Duration::from_millis(100));
 
-                let context = Context {
-                    globals,
+                let context = TaskContext {
+                    env: globals,
                     importmap: &importmap,
                 };
 
                 let output = {
-                    let mut rt = Runtime::new();
+                    let mut rt = Store::new();
 
                     task.execute(&context, &mut rt, &dependencies)
                         .map(|output| NodeData {
                             output,
-                            importmap: rt.new_imports,
+                            importmap: rt.imports,
                         })
                 };
 
@@ -195,24 +196,24 @@ fn run_tasks_parallel<G: Send + Sync>(
     Ok(())
 }
 
-fn collect_pages(cache: &HashMap<NodeIndex, NodeData>) -> Vec<Page> {
-    let mut pages: Vec<Page> = Vec::new();
+fn collect_pages(cache: &HashMap<NodeIndex, NodeData>) -> Vec<Output> {
+    let mut pages: Vec<Output> = Vec::new();
     for node_data in cache.values() {
         let value = &node_data.output;
-        if let Some(page) = value.downcast_ref::<Page>() {
+        if let Some(page) = value.downcast_ref::<Output>() {
             pages.push(page.clone());
-        } else if let Some(page_vec) = value.downcast_ref::<Vec<Page>>() {
+        } else if let Some(page_vec) = value.downcast_ref::<Vec<Output>>() {
             pages.extend(page_vec.clone());
         }
     }
     pages
 }
 
-pub fn watch<G: Send + Sync>(site: &mut Site<G>, data: G) -> anyhow::Result<()> {
+pub fn watch<G: Send + Sync>(site: &mut Website<G>, data: G) -> anyhow::Result<()> {
     let (tcp, port) = reserve_port().unwrap();
     let pwd = env::current_dir().unwrap();
 
-    let globals = Globals {
+    let globals = Environment {
         generator: "hauchiwa",
         mode: Mode::Watch,
         port: Some(port),
@@ -391,15 +392,15 @@ mod tests {
     #[test]
     fn test_collect_pages() {
         let mut cache: HashMap<NodeIndex, NodeData> = HashMap::new();
-        let page1 = Page {
+        let page1 = Output {
             url: "/".into(),
             content: "Home".to_string(),
         };
-        let page2 = Page {
+        let page2 = Output {
             url: "/about".into(),
             content: "About".to_string(),
         };
-        let page3 = Page {
+        let page3 = Output {
             url: "/contact".into(),
             content: "Contact".to_string(),
         };

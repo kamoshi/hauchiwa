@@ -110,17 +110,18 @@ pub fn absolutize(prefix: &str, path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
 
 /// Represents a single output file to be written to the `dist` directory.
 ///
-/// A `Page` is a common output type for tasks that generate HTML, CSS, or other static assets.
-/// The build system collects all `Page` instances and writes them to the filesystem.
+/// A `Output` is a common output type for tasks that generate HTML, TXT, or
+/// other static assets. The build system collects all `Output` instances and
+/// writes them to the filesystem.
 #[derive(Debug, Clone)]
-pub struct Page {
+pub struct Output {
     /// The destination path of the file, relative to the `dist` directory.
     pub url: Utf8PathBuf,
     /// The content of the file to be written.
     pub content: String,
 }
 
-impl Page {
+impl Output {
     /// Creates a new `Page` with a normalized URL, suitable for HTML files.
     ///
     /// The path is automatically adjusted to create "pretty URLs". For example:
@@ -150,7 +151,7 @@ use std::io;
 use std::path::Path;
 
 /// Saves all pages to the "dist" directory.
-pub(crate) fn save_pages_to_dist(pages: &[Page]) -> io::Result<()> {
+pub(crate) fn save_pages_to_dist(pages: &[Output]) -> io::Result<()> {
     let output_dir = Path::new("dist");
 
     fs::create_dir_all(output_dir)?;

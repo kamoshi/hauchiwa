@@ -3,9 +3,9 @@ use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 use crate::{
-    Globals, SiteConfig,
+    Blueprint, Environment,
     error::HauchiwaError,
-    loader::{File, GlobRegistryTask, Runtime},
+    loader::{GlobAssetsTask, Input, Store},
     task::Handle,
 };
 
@@ -21,22 +21,22 @@ pub enum FrontmatterError {
     Parse(anyhow::Error),
 }
 
-/// This is the standard output of the [`SiteConfig::load_frontmatter`] loader.
+/// This is the standard output of the [`SiteConfig::load_documents`] loader.
 ///
 /// # Generics
 ///
 /// * `T`: The type of the metadata (frontmatter), typically a struct deriving `Deserialize`.
 #[derive(Clone)]
-pub struct Content<T> {
-    /// The original path of content file.
-    pub path: Utf8PathBuf,
+pub struct Document<T> {
     /// The parsed metadata (frontmatter).
     pub metadata: T,
+    /// The original path of content file.
+    pub path: Utf8PathBuf,
     /// The body content of the file (excluding frontmatter).
-    pub content: String,
+    pub body: String,
 }
 
-impl<G> SiteConfig<G>
+impl<G> Blueprint<G>
 where
     G: Send + Sync + 'static,
 {
@@ -74,18 +74,21 @@ where
     pub fn load<R>(
         &mut self,
         path_glob: &'static str,
-        callback: impl Fn(&Globals<G>, &mut Runtime, File) -> anyhow::Result<R> + Send + Sync + 'static,
-    ) -> Result<Handle<super::Registry<R>>, HauchiwaError>
+        callback: impl Fn(&Environment<G>, &mut Store, Input) -> anyhow::Result<R>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Result<Handle<super::Assets<R>>, HauchiwaError>
     where
         G: Send + Sync + 'static,
         R: Send + Sync + 'static,
     {
-        Ok(self.add_task_opaque(GlobRegistryTask::new(
+        Ok(self.add_task_opaque(GlobAssetsTask::new(
             vec![path_glob],
             vec![path_glob],
             move |ctx, rt, file| {
                 let path = file.path.clone();
-                let data = callback(ctx.globals, rt, file)?;
+                let data = callback(ctx.env, rt, file)?;
 
                 Ok((path, data))
             },
@@ -125,28 +128,28 @@ where
     /// // frontmatter into PostMeta structs.
     /// let posts = config.load_frontmatter::<Post>("content/posts/*.md")?;
     /// ```
-    pub fn load_frontmatter<R>(
+    pub fn load_documents<R>(
         &mut self,
         path_glob: &'static str,
-    ) -> Result<Handle<super::Registry<Content<R>>>, HauchiwaError>
+    ) -> Result<Handle<super::Assets<Document<R>>>, HauchiwaError>
     where
         G: Send + Sync + 'static,
         R: DeserializeOwned + Send + Sync + 'static,
     {
-        Ok(self.add_task_opaque(GlobRegistryTask::new(
+        Ok(self.add_task_opaque(GlobAssetsTask::new(
             vec![path_glob],
             vec![path_glob],
-            move |_, _, file: File| {
+            move |_, _, file: Input| {
                 let data = std::str::from_utf8(&file.data).map_err(FrontmatterError::Utf8)?;
                 let (metadata, content) =
                     super::parse_yaml::<R>(data).map_err(FrontmatterError::Parse)?;
 
                 Ok((
                     file.path.clone(),
-                    Content {
+                    Document {
                         path: file.path,
                         metadata,
-                        content,
+                        body: content,
                     },
                 ))
             },

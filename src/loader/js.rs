@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 use camino::{Utf8Path, Utf8PathBuf};
 use thiserror::Error;
 
-use crate::{SiteConfig, error::HauchiwaError, loader::GlobRegistryTask, task::Handle};
+use crate::{Blueprint, error::HauchiwaError, loader::GlobAssetsTask, task::Handle};
 
 /// Errors that can occur when compiling JavaScript files.
 #[derive(Debug, Error)]
@@ -32,7 +32,7 @@ pub struct Script {
     pub path: Utf8PathBuf,
 }
 
-impl<G> SiteConfig<G>
+impl<G> Blueprint<G>
 where
     G: Send + Sync + 'static,
 {
@@ -62,13 +62,13 @@ where
         &mut self,
         glob_entry: &'static str,
         glob_watch: &'static str,
-    ) -> Result<Handle<super::Registry<Script>>, HauchiwaError> {
-        Ok(self.add_task_opaque(GlobRegistryTask::new(
+    ) -> Result<Handle<super::Assets<Script>>, HauchiwaError> {
+        Ok(self.add_task_opaque(GlobAssetsTask::new(
             vec![glob_entry],
             vec![glob_watch],
             move |_, rt, file| {
                 let data = compile_esbuild(&file.path)?;
-                let path = rt.store(&data, "js").map_err(ScriptError::Build)?;
+                let path = rt.save(&data, "js").map_err(ScriptError::Build)?;
 
                 Ok((file.path, Script { path }))
             },

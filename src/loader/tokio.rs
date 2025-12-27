@@ -1,9 +1,9 @@
 use std::future::Future;
 
 use crate::error::HauchiwaError;
-use crate::{SiteConfig, task::Handle};
+use crate::{Blueprint, task::Handle};
 
-impl<G> SiteConfig<G>
+impl<G> Blueprint<G>
 where
     G: Send + Sync + 'static,
 {

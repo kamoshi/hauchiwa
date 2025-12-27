@@ -13,7 +13,7 @@
 //! It also contains the `GlobRegistryTask`, which is the workhorse for most loaders.
 
 pub mod generic;
-pub use generic::Content;
+pub use generic::Document;
 
 #[cfg(feature = "images")]
 pub mod image;
@@ -43,7 +43,7 @@ use petgraph::graph::NodeIndex;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
-    Context, Hash32,
+    Hash32, TaskContext,
     error::{BuildError, HauchiwaError},
     importmap::ImportMap,
     task::{Dynamic, TypedTask},
@@ -51,13 +51,14 @@ use crate::{
 
 /// A collection of processed assets, indexed by their source file path.
 ///
-/// `Registry<T>` is the standard return type for most loaders. It allows you to
-/// access processed items (like posts or images) using their original file path.
+/// `Assets<T>` is the standard return type for most loaders. It allows you to
+/// access processed items (like posts or images) using their original file
+/// path.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// // Assuming `posts` is a Registry<Content<Post>>
+/// // Assuming `posts` is a Assets<Content<Post>>
 /// for post in posts.values() {
 ///     println!("Title: {}", post.metadata.title);
 /// }
@@ -65,11 +66,11 @@ use crate::{
 /// let specific_post = posts.get("content/posts/hello.md")?;
 /// ```
 #[derive(Debug)]
-pub struct Registry<T> {
+pub struct Assets<T> {
     map: HashMap<camino::Utf8PathBuf, T>,
 }
 
-impl<T: Clone> Registry<T> {
+impl<T: Clone> Assets<T> {
     /// Retrieves a reference to the processed data for a given source path.
     ///
     /// # Errors
@@ -109,7 +110,7 @@ impl<T: Clone> Registry<T> {
 /// A raw file read from the filesystem.
 ///
 /// This struct is passed to the callback of custom loaders.
-pub struct File {
+pub struct Input {
     /// The path to the source file.
     pub path: Utf8PathBuf,
     /// The raw binary content of the file.
@@ -118,25 +119,25 @@ pub struct File {
 
 /// A helper for managing side effects and imports within a task.
 ///
-/// `Runtime` is passed to task callbacks to allow them to:
+/// `Store` is passed to task callbacks to allow them to:
 /// 1. Store generated artifacts (like optimized images or compiled CSS) to the `dist` directory.
 /// 2. Register module imports (for the Import Map) that this task introduces.
 ///
 /// It handles content-addressable storage (hashing) automatically to ensure caching works correctly.
 #[derive(Clone)]
-pub struct Runtime {
-    pub(crate) new_imports: ImportMap,
+pub struct Store {
+    pub(crate) imports: ImportMap,
 }
 
-impl Runtime {
-    /// Creates a new, empty Runtime.
+impl Store {
+    /// Creates a new, empty Store.
     pub fn new() -> Self {
         Self {
-            new_imports: ImportMap::new(),
+            imports: ImportMap::new(),
         }
     }
 
-    /// Stores raw data as a content-addressed artifact.
+    /// Saves raw data as a content-addressed artifact.
     ///
     /// The data is hashed, and the file is stored at `/hash/<hash>.<ext>`.
     ///
@@ -148,7 +149,7 @@ impl Runtime {
     /// # Returns
     ///
     /// The logical path to the file (e.g., `/hash/abcdef123.png`), suitable for use in HTML `src` attributes.
-    pub fn store(&self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuildError> {
+    pub fn save(&self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuildError> {
         let hash = Hash32::hash(data);
         let hash = hash.to_hex();
 
@@ -177,24 +178,25 @@ impl Runtime {
     /// * `key` - The module specifier (e.g., "react", "my-lib").
     /// * `value` - The URL to the module (e.g., "/hash/1234.js", "https://cdn.example.com/lib.js").
     pub fn register(&mut self, key: impl Into<String>, value: impl Into<String>) {
-        self.new_imports.register(key, value);
+        self.imports.register(key, value);
     }
 }
 
-impl Default for Runtime {
+impl Default for Store {
     fn default() -> Self {
         Self::new()
     }
 }
 
-type GlobCallback<G, R> =
-    Box<dyn Fn(&Context<G>, &mut Runtime, File) -> anyhow::Result<(Utf8PathBuf, R)> + Send + Sync>;
+type GlobCallback<G, R> = Box<
+    dyn Fn(&TaskContext<G>, &mut Store, Input) -> anyhow::Result<(Utf8PathBuf, R)> + Send + Sync,
+>;
 
 /// A task that finds files matching a glob pattern and processes them in parallel.
 ///
 /// This is the implementation behind helper methods like `load_frontmatter` and `load_images`.
 /// It is generic over the global context `G` and the result type `R`.
-pub struct GlobRegistryTask<G, R>
+pub struct GlobAssetsTask<G, R>
 where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
@@ -204,7 +206,7 @@ where
     callback: GlobCallback<G, R>,
 }
 
-impl<G, R> GlobRegistryTask<G, R>
+impl<G, R> GlobAssetsTask<G, R>
 where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
@@ -222,7 +224,7 @@ where
         callback: F,
     ) -> Result<Self, HauchiwaError>
     where
-        F: Fn(&Context<G>, &mut Runtime, File) -> anyhow::Result<(Utf8PathBuf, R)>
+        F: Fn(&TaskContext<G>, &mut Store, Input) -> anyhow::Result<(Utf8PathBuf, R)>
             + Send
             + Sync
             + 'static,
@@ -238,12 +240,12 @@ where
     }
 }
 
-impl<G, R> TypedTask<G> for GlobRegistryTask<G, R>
+impl<G, R> TypedTask<G> for GlobAssetsTask<G, R>
 where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
-    type Output = Registry<R>;
+    type Output = Assets<R>;
 
     fn get_name(&self) -> String {
         self.glob_entry.join(", ")
@@ -255,8 +257,8 @@ where
 
     fn execute(
         &self,
-        context: &Context<G>,
-        runtime: &mut Runtime,
+        context: &TaskContext<G>,
+        runtime: &mut Store,
         _: &[Dynamic],
     ) -> anyhow::Result<Self::Output> {
         let mut paths = Vec::new();
@@ -271,24 +273,24 @@ where
             .into_par_iter()
             .map(|path| {
                 let data = fs::read(&path)?.into();
-                let file = File { path, data };
+                let file = Input { path, data };
 
-                let mut rt = Runtime::new();
+                let mut rt = Store::new();
 
                 // Call the user callback
                 let (out_path, res) = (self.callback)(context, &mut rt, file)?;
 
-                Ok((out_path, res, rt.new_imports))
+                Ok((out_path, res, rt.imports))
             })
             .collect();
 
         let mut registry = HashMap::new();
         for (path, res, imports) in results? {
             registry.insert(path, res);
-            runtime.new_imports.merge(imports);
+            runtime.imports.merge(imports);
         }
 
-        let registry = Registry { map: registry };
+        let registry = Assets { map: registry };
 
         Ok(registry)
     }

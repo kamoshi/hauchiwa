@@ -9,9 +9,9 @@ use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 use crate::{
-    Hash32, SiteConfig,
+    Blueprint, Hash32,
     error::HauchiwaError,
-    loader::{GlobRegistryTask, Script},
+    loader::{GlobAssetsTask, Script},
     task::Handle,
 };
 
@@ -65,7 +65,7 @@ where
     pub rt: Script,
 }
 
-impl<G> SiteConfig<G>
+impl<G> Blueprint<G>
 where
     G: Send + Sync + 'static,
 {
@@ -110,16 +110,16 @@ where
         &mut self,
         glob_entry: &'static str,
         glob_watch: &'static str,
-    ) -> Result<Handle<super::Registry<Svelte<P>>>, HauchiwaError>
+    ) -> Result<Handle<super::Assets<Svelte<P>>>, HauchiwaError>
     where
         P: Clone + DeserializeOwned + Serialize + 'static,
     {
-        Ok(self.add_task_opaque(GlobRegistryTask::new(
+        Ok(self.add_task_opaque(GlobAssetsTask::new(
             vec![glob_entry],
             vec![glob_watch],
             move |_, rt, file| {
                 let svelte = match RUNTIME.as_ref() {
-                    Ok(svelte) => rt.store(svelte.as_bytes(), "js")?,
+                    Ok(svelte) => rt.save(svelte.as_bytes(), "js")?,
                     Err(err) => return Err(SvelteError::Runtime(err.to_string()).into()),
                 };
 
@@ -135,7 +135,7 @@ where
 
                 // Compile lean browser glue
                 let client = compile_svelte_init(&file.path, anchor)?;
-                let client = rt.store(client.as_bytes(), "js")?;
+                let client = rt.save(client.as_bytes(), "js")?;
 
                 // With the compiled SSR script we can now pre-render the
                 // component on demand.

@@ -27,7 +27,7 @@ pub use gitscan;
 
 use crate::{
     importmap::ImportMap,
-    loader::Runtime,
+    loader::Store,
     task::{Dynamic, Task, TypedTask},
 };
 
@@ -96,7 +96,7 @@ pub enum Mode {
 ///
 /// * `G`: The type of the user-defined global data. Must be `Send + Sync`.
 #[derive(Clone)]
-pub struct Globals<G: Send + Sync = ()> {
+pub struct Environment<D: Send + Sync = ()> {
     /// The name of the generator (defaults to "hauchiwa").
     pub generator: &'static str,
     /// The current build mode (Build or Watch).
@@ -104,10 +104,10 @@ pub struct Globals<G: Send + Sync = ()> {
     /// The port of the development server (if running).
     pub port: Option<u16>,
     /// User-defined global data.
-    pub data: G,
+    pub data: D,
 }
 
-impl<G: Send + Sync> Globals<G> {
+impl<G: Send + Sync> Environment<G> {
     /// Returns a JavaScript snippet to enable live-reloading.
     ///
     /// If the site is running in `Watch` mode and a port is configured, this returns
@@ -137,11 +137,11 @@ socket.addEventListener("message", event => {{
 
 /// The context passed to every task execution.
 ///
-/// `Context` provides access to global settings and the aggregated import map
-/// from all dependencies. It is immutable during task execution.
-pub struct Context<'a, G: Send + Sync = ()> {
+/// `TaskContext` provides access to global settings and the aggregated import
+/// map from all dependencies. It is immutable during task execution.
+pub struct TaskContext<'a, G: Send + Sync = ()> {
     /// Access to global configuration and data.
-    pub globals: &'a Globals<G>,
+    pub env: &'a Environment<G>,
     /// The current import map, containing JavaScript module mappings from all
     /// upstream dependencies.
     pub importmap: &'a ImportMap,
@@ -159,7 +159,7 @@ where
     G: Send + Sync,
     R: Send + Sync + 'static,
     D: TaskDependencies,
-    F: for<'a> Fn(&Context<'a, G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync,
+    F: for<'a> Fn(&TaskContext<'a, G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync,
 {
     name: &'static str,
     dependencies: D,
@@ -172,7 +172,7 @@ where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
     D: TaskDependencies + Send + Sync,
-    F: for<'a> Fn(&Context<'a, G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync + 'static,
+    F: for<'a> Fn(&TaskContext<'a, G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync + 'static,
 {
     type Output = R;
 
@@ -186,8 +186,8 @@ where
 
     fn execute(
         &self,
-        context: &Context<G>,
-        _: &mut Runtime,
+        context: &TaskContext<G>,
+        _: &mut Store,
         dependencies: &[Dynamic],
     ) -> anyhow::Result<Self::Output> {
         let dependencies = self.dependencies.resolve(dependencies);
@@ -197,8 +197,8 @@ where
 
 /// The blueprint for your static site.
 ///
-/// `SiteConfig` is used to define the Task graph of your website. You add
-/// tasks (including loaders) to the config, and wire them together using their
+/// `Blueprint` is used to define the Task graph of your website. You add tasks
+/// (including loaders) to the config, and wire them together using their
 /// [Handle](crate::task::Handle)s.
 ///
 /// Once configured, you convert this into a [Site] to execute the build.
@@ -206,27 +206,25 @@ where
 /// # Example
 ///
 /// ```rust,no_run
-/// use hauchiwa::SiteConfig;
+/// use hauchiwa::Blueprint;
 ///
-/// let mut config: SiteConfig<()> = SiteConfig::new();
+/// let mut config: Blueprint<()> = Blueprint::new();
 /// // Add tasks here...
 /// ```
-pub struct SiteConfig<G: Send + Sync = ()> {
+pub struct Blueprint<G: Send + Sync = ()> {
     graph: Graph<Arc<dyn Task<G>>, ()>,
 }
 
-impl<G: Send + Sync + 'static> Default for SiteConfig<G> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<G: Send + Sync + 'static> SiteConfig<G> {
+impl<G: Send + Sync + 'static> Blueprint<G> {
     /// Creates a new, empty configuration.
     pub fn new() -> Self {
         Self {
             graph: Graph::new(),
         }
+    }
+
+    pub fn finish(self) -> Website<G> {
+        Website { graph: self.graph }
     }
 
     /// Adds a custom task to the graph.
@@ -246,7 +244,10 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
     pub fn add_task<D, F, R>(&mut self, dependencies: D, callback: F) -> task::Handle<R>
     where
         D: TaskDependencies + Send + Sync + 'static,
-        F: for<'a> Fn(&Context<'a, G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync + 'static,
+        F: for<'a> Fn(&TaskContext<'a, G>, D::Output<'a>) -> anyhow::Result<R>
+            + Send
+            + Sync
+            + 'static,
         R: Send + Sync + 'static,
     {
         self.add_task_opaque(TaskNode {
@@ -273,22 +274,27 @@ impl<G: Send + Sync + 'static> SiteConfig<G> {
     }
 }
 
-/// Represents the configured site and provides methods for building and serving it.
+impl<G: Send + Sync + 'static> Default for Blueprint<G> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Represents the configured site and provides methods for building and serving
+/// it with a development server.
 ///
-/// A `Site` is created from a `SiteConfig` and is the primary interface for
+/// A `Website` is created from a `Blueprint` and is the primary interface for
 /// executing the build process.
-pub struct Site<G: Send + Sync = ()> {
+pub struct Website<G: Send + Sync = ()> {
     graph: Graph<Arc<dyn Task<G>>, ()>,
 }
 
-impl<G: Send + Sync> Site<G> {
-    /// Creates a new `Site` from a `SiteConfig`.
-    ///
-    /// This method consumes the configuration and prepares the site for execution.
-    pub fn new(config: SiteConfig<G>) -> Self {
-        Self {
-            graph: config.graph,
-        }
+impl<G> Website<G>
+where
+    G: Send + Sync + 'static,
+{
+    pub fn design() -> Blueprint<G> {
+        Blueprint::default()
     }
 
     /// Runs the build process once.
@@ -303,7 +309,7 @@ impl<G: Send + Sync> Site<G> {
     ///
     /// * `data` - The global user data to pass to all tasks.
     pub fn build(&mut self, data: G) -> anyhow::Result<()> {
-        let globals = Globals {
+        let globals = Environment {
             generator: "hauchiwa",
             mode: Mode::Build,
             port: None,
@@ -354,8 +360,8 @@ impl<G: Send + Sync> Site<G> {
 /// # Example
 ///
 /// ```rust,no_run
-/// # use hauchiwa::{SiteConfig, task};
-/// # let mut config: SiteConfig<()> = SiteConfig::new();
+/// # use hauchiwa::{Blueprint, task};
+/// # let mut config: Blueprint<()> = Blueprint::new();
 /// // Assume `dep_a` and `dep_b` are Handles from previous tasks.
 /// // let dep_a = ...;
 /// // let dep_b = ...;
