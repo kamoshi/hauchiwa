@@ -5,7 +5,7 @@ edition     = "2024"
 authors     = ["Maciej Jur <maciej@kamoshi.org>"]
 keywords    = ["ssg"]
 license     = "GPL-2.0-or-later"
-description = "Incredibly flexible static site generator library with incremental rebuilds and cached image optimization"
+description = "Flexible static website generator library with incremental rebuilds and cached image optimization"
 repository  = "https://github.com/kamoshi/hauchiwa"
 
 [features]

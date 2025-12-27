@@ -287,8 +287,8 @@ impl<G: Send + Sync + 'static> Default for Blueprint<G> {
 /// Represents the configured site and provides methods for building and serving
 /// it with a development server.
 ///
-/// A `Website` is created from a `Blueprint` and is the primary interface for
-/// executing the build process.
+/// A [`Website`] is created from a [`Blueprint`] and is the primary interface
+/// for executing the build process.
 pub struct Website<G: Send + Sync = ()> {
     graph: Graph<Arc<dyn Task<G>>, ()>,
 }
@@ -307,7 +307,7 @@ where
     /// 1. Clean the `dist` directory.
     /// 2. Copy static files.
     /// 3. Execute the task graph in parallel.
-    /// 4. Save the generated `Page`s to `dist`.
+    /// 4. Save the generated [`Output`]s to `dist`.
     ///
     /// # Arguments
     ///

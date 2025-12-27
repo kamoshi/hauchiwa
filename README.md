@@ -119,6 +119,10 @@ fn main() -> anyhow::Result<()> {
 The best place to learn is the [API Documentation](https://docs.rs/hauchiwa). It
 covers the core concepts in depth.
 
+## Examples
+
+- [kamoshi.org](https://github.com/kamoshi/kamoshi.org)
+
 ## License
 
 GPL-2.0 or later.
