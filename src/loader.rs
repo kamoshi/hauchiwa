@@ -113,8 +113,15 @@ impl<T: Clone> Assets<T> {
 pub struct Input {
     /// The path to the source file.
     pub path: Utf8PathBuf,
-    /// The raw binary content of the file.
-    pub data: Box<[u8]>,
+    /// The hash of the file content.
+    pub(crate) hash: Hash32,
+}
+
+impl Input {
+    /// Reads the file content from the filesystem.
+    pub fn read(&self) -> std::io::Result<Box<[u8]>> {
+        fs::read(&self.path).map(Into::into)
+    }
 }
 
 /// A helper for managing side effects and imports within a task.
@@ -272,8 +279,8 @@ where
         let results: anyhow::Result<Vec<_>> = paths
             .into_par_iter()
             .map(|path| {
-                let data = fs::read(&path)?.into();
-                let file = Input { path, data };
+                let hash = Hash32::hash_file(&path)?;
+                let file = Input { path, hash };
 
                 let mut rt = Store::new();
 

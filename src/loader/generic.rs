@@ -140,7 +140,9 @@ where
             vec![path_glob],
             vec![path_glob],
             move |_, _, file: Input| {
-                let data = std::str::from_utf8(&file.data).map_err(FrontmatterError::Utf8)?;
+                let bytes = file.read().map_err(|e| FrontmatterError::Parse(e.into()))?;
+                let data = std::str::from_utf8(&bytes).map_err(FrontmatterError::Utf8)?;
+
                 let (metadata, content) =
                     super::parse_yaml::<R>(data).map_err(FrontmatterError::Parse)?;
 

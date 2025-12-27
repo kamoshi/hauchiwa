@@ -4,7 +4,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use thiserror::Error;
 
 use crate::{
-    Blueprint, Hash32,
+    Blueprint,
     error::{BuildError, HauchiwaError},
     loader::{Assets, GlobAssetsTask, Input},
     task::Handle,
@@ -69,8 +69,7 @@ where
             path_glob.to_vec(),
             path_glob.to_vec(),
             move |_, _, file: Input| {
-                let hash = Hash32::hash_file(&file.path)?;
-                let path = build_image(hash, &file.path)?;
+                let path = build_image(&file)?;
 
                 Ok((file.path, Image { path }))
             },
@@ -91,8 +90,8 @@ fn process_image(buffer: &[u8]) -> Result<Vec<u8>, ImageError> {
     Ok(out)
 }
 
-fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, ImageError> {
-    let hash = hash.to_hex();
+fn build_image(file: &Input) -> Result<Utf8PathBuf, ImageError> {
+    let hash = file.hash.to_hex();
     let path_root = Utf8Path::new("/hash/img/")
         .join(&hash)
         .with_extension("webp");
@@ -105,7 +104,7 @@ fn build_image(hash: Hash32, file: &Utf8Path) -> Result<Utf8PathBuf, ImageError>
 
     // If this hash exists it means the work is already done.
     if !path_hash.exists() {
-        let buffer = fs::read(file)?;
+        let buffer = file.read()?;
         let buffer = process_image(&buffer)?;
 
         fs::create_dir_all(".cache/hash/img/")?;
