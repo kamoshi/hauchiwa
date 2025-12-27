@@ -17,8 +17,8 @@ use petgraph::{algo::toposort, visit::Dfs};
 use tungstenite::WebSocket;
 
 use crate::{
-    Environment, Mode, TaskContext, Website, importmap::ImportMap, loader::Store, page::Output,
-    task::NodeData,
+    Environment, Mode, TaskContext, Website, graph::NodeData, importmap::ImportMap, loader::Store,
+    page::Output,
 };
 
 pub fn run_once_parallel<G: Send + Sync>(
@@ -385,7 +385,7 @@ mod server {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::task::Dynamic;
+    use crate::graph::Dynamic;
     use petgraph::graph::NodeIndex;
     use std::sync::Arc;
 

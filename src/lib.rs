@@ -7,29 +7,27 @@
 
 pub mod error;
 mod executor;
+mod graph;
 pub mod importmap;
 pub mod loader;
 pub mod page;
-pub mod task;
 mod utils;
-
-pub use camino;
 
 use std::{any::type_name, fmt::Debug, sync::Arc};
 
 use camino::Utf8PathBuf;
+use graph::TaskDependencies;
 use petgraph::{Graph, graph::NodeIndex};
-use task::TaskDependencies;
 
-#[deprecated = "Use hauchiwa::gitscan instead"]
-pub use gitscan as gitmap;
-pub use gitscan;
+pub use camino;
+pub use gitscan as git;
 
-use crate::{
-    importmap::ImportMap,
-    loader::Store,
-    task::{Dynamic, Task, TypedTask},
-};
+pub use crate::graph::Handle;
+pub use crate::importmap::ImportMap;
+pub use crate::loader::Store;
+pub use crate::page::Output;
+
+use crate::graph::{Dynamic, Task, TypedTask};
 
 /// 32 bytes length generic hash
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -151,7 +149,7 @@ pub struct TaskContext<'a, G: Send + Sync = ()> {
 pub struct FileMetadata {
     pub file: Utf8PathBuf,
     pub area: Utf8PathBuf,
-    pub info: Option<gitmap::GitInfo>,
+    pub info: Option<crate::git::GitInfo>,
 }
 
 struct TaskNode<G, R, D, F>
@@ -241,7 +239,7 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
     /// # Returns
     ///
     /// A [`Handle`](crate::task::Handle) representing the future result of this task.
-    pub fn add_task<D, F, R>(&mut self, dependencies: D, callback: F) -> task::Handle<R>
+    pub fn add_task<D, F, R>(&mut self, dependencies: D, callback: F) -> graph::Handle<R>
     where
         D: TaskDependencies + Send + Sync + 'static,
         F: for<'a> Fn(&TaskContext<'a, G>, D::Output<'a>) -> anyhow::Result<R>
@@ -258,7 +256,7 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
         })
     }
 
-    pub(crate) fn add_task_opaque<O, T>(&mut self, task: T) -> task::Handle<O>
+    pub(crate) fn add_task_opaque<O, T>(&mut self, task: T) -> graph::Handle<O>
     where
         O: 'static,
         T: TypedTask<G, Output = O> + 'static,
@@ -270,7 +268,7 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
             self.graph.add_edge(dependency, index, ());
         }
 
-        task::Handle::new(index)
+        graph::Handle::new(index)
     }
 }
 

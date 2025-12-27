@@ -45,8 +45,8 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use crate::{
     Hash32, TaskContext,
     error::{BuildError, HauchiwaError},
+    graph::{Dynamic, TypedTask},
     importmap::ImportMap,
-    task::{Dynamic, TypedTask},
 };
 
 /// A collection of processed assets, indexed by their source file path.

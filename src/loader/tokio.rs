@@ -1,7 +1,8 @@
 use std::future::Future;
 
+use crate::TaskContext;
 use crate::error::HauchiwaError;
-use crate::{Blueprint, task::Handle};
+use crate::{Blueprint, graph::Handle};
 
 impl<G> Blueprint<G>
 where
@@ -41,7 +42,7 @@ where
     where
         G: Send + Sync + 'static,
         R: Send + Sync + 'static,
-        F: Fn() -> Fut + Send + Sync + 'static,
+        F: Fn(&TaskContext<G>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = anyhow::Result<R>> + Send + 'static,
     {
         let executor = Box::new(
@@ -50,6 +51,6 @@ where
                 .build()?,
         );
 
-        Ok(self.add_task((), move |_, _| executor.block_on(callback())))
+        Ok(self.add_task((), move |ctx, ()| executor.block_on(callback(ctx))))
     }
 }

@@ -1,4 +1,4 @@
-//! All the generic task-related abstractions.
+//! All the generic task graph related abstractions.
 //!
 //! The Task system is the core of Hauchiwa. A [Task] is a unit of work that
 //! produces a result. Tasks are organized into a Directed Acyclic Graph (DAG),
@@ -15,14 +15,16 @@ use petgraph::graph::NodeIndex;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::{TaskContext, importmap::ImportMap, loader::Store};
+use crate::TaskContext;
+use crate::importmap::ImportMap;
+use crate::loader::Store;
 
 pub(crate) type Dynamic = Arc<dyn Any + Send + Sync>;
 
 /// Represents the data stored in the graph for each node.
 /// Includes the user's output and the concatenated import map.
 #[derive(Clone, Debug)]
-pub struct NodeData {
+pub(crate) struct NodeData {
     pub output: Dynamic,
     pub importmap: ImportMap,
 }
@@ -168,6 +170,21 @@ impl TaskDependencies for () {
     fn resolve<'a>(&self, _outputs: &'a [Dynamic]) -> Self::Output<'a> {}
 }
 
+impl<T> TaskDependencies for Handle<T>
+where
+    T: Send + Sync + 'static,
+{
+    type Output<'a> = &'a T;
+
+    fn dependencies(&self) -> Vec<NodeIndex> {
+        vec![self.index]
+    }
+
+    fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> Self::Output<'a> {
+        outputs[0].downcast_ref::<T>().unwrap()
+    }
+}
+
 macro_rules! impl_deps {
     ($($T:ident),*) => {
         #[allow(non_snake_case)]
@@ -183,9 +200,7 @@ macro_rules! impl_deps {
                 let mut iter = outputs.iter();
                 ($({
                     let out = iter.next().unwrap();
-                    out.downcast_ref::<$T>().unwrap_or_else(|| {
-                        panic!("Expected {} but got something else", std::any::type_name::<$T>())
-                    })
+                    out.downcast_ref::<$T>().unwrap()
                 },)*)
             }
         }

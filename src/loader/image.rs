@@ -6,8 +6,8 @@ use thiserror::Error;
 use crate::{
     Blueprint,
     error::{BuildError, HauchiwaError},
+    graph::Handle,
     loader::{Assets, GlobAssetsTask, Input},
-    task::Handle,
 };
 
 /// Errors that can occur when processing images.
@@ -68,10 +68,10 @@ where
         Ok(self.add_task_opaque(GlobAssetsTask::new(
             path_glob.to_vec(),
             path_glob.to_vec(),
-            move |_, _, file: Input| {
-                let path = build_image(&file)?;
+            move |_, _, input: Input| {
+                let path = build_image(&input)?;
 
-                Ok((file.path, Image { path }))
+                Ok((input.path, Image { path }))
             },
         )?))
     }

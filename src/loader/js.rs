@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 use camino::{Utf8Path, Utf8PathBuf};
 use thiserror::Error;
 
-use crate::{Blueprint, error::HauchiwaError, loader::GlobAssetsTask, task::Handle};
+use crate::{Blueprint, error::HauchiwaError, graph::Handle, loader::GlobAssetsTask};
 
 /// Errors that can occur when compiling JavaScript files.
 #[derive(Debug, Error)]
@@ -66,11 +66,11 @@ where
         Ok(self.add_task_opaque(GlobAssetsTask::new(
             vec![glob_entry],
             vec![glob_watch],
-            move |_, rt, file| {
-                let data = compile_esbuild(&file.path)?;
-                let path = rt.save(&data, "js").map_err(ScriptError::Build)?;
+            move |_, store, input| {
+                let data = compile_esbuild(&input.path)?;
+                let path = store.save(&data, "js").map_err(ScriptError::Build)?;
 
-                Ok((file.path, Script { path }))
+                Ok((input.path, Script { path }))
             },
         )?))
     }

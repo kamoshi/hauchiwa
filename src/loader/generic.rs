@@ -5,8 +5,8 @@ use thiserror::Error;
 use crate::{
     Blueprint, Environment,
     error::HauchiwaError,
+    graph::Handle,
     loader::{GlobAssetsTask, Input, Store},
-    task::Handle,
 };
 
 /// Errors that can occur when loading files with frontmatter.
@@ -86,9 +86,9 @@ where
         Ok(self.add_task_opaque(GlobAssetsTask::new(
             vec![path_glob],
             vec![path_glob],
-            move |ctx, rt, file| {
-                let path = file.path.clone();
-                let data = callback(ctx.env, rt, file)?;
+            move |ctx, store, input| {
+                let path = input.path.clone();
+                let data = callback(ctx.env, store, input)?;
 
                 Ok((path, data))
             },
@@ -139,17 +139,20 @@ where
         Ok(self.add_task_opaque(GlobAssetsTask::new(
             vec![path_glob],
             vec![path_glob],
-            move |_, _, file: Input| {
-                let bytes = file.read().map_err(|e| FrontmatterError::Parse(e.into()))?;
+            move |_, _, input: Input| {
+                let bytes = input
+                    .read()
+                    .map_err(|e| FrontmatterError::Parse(e.into()))?;
+
                 let data = std::str::from_utf8(&bytes).map_err(FrontmatterError::Utf8)?;
 
                 let (metadata, content) =
                     super::parse_yaml::<R>(data).map_err(FrontmatterError::Parse)?;
 
                 Ok((
-                    file.path.clone(),
+                    input.path.clone(),
                     Document {
-                        path: file.path,
+                        path: input.path,
                         metadata,
                         body: content,
                     },

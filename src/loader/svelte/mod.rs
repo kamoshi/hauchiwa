@@ -11,8 +11,8 @@ use thiserror::Error;
 use crate::{
     Blueprint, Hash32,
     error::HauchiwaError,
+    graph::Handle,
     loader::{GlobAssetsTask, Script},
-    task::Handle,
 };
 
 #[derive(Debug, Error)]
@@ -58,11 +58,11 @@ where
 {
     /// A closure that takes props `P` and returns the rendered HTML string.
     /// This is used for Server-Side Rendering (SSR).
-    pub html: Prerender<P>,
+    pub prerender: Prerender<P>,
     /// The initialization script for this specific component (client-side hydration).
-    pub init: Script,
+    pub hydration: Script,
     /// The shared Svelte runtime library script.
-    pub rt: Script,
+    pub runtime: Script,
 }
 
 impl<G> Blueprint<G>
@@ -117,29 +117,29 @@ where
         Ok(self.add_task_opaque(GlobAssetsTask::new(
             vec![glob_entry],
             vec![glob_watch],
-            move |_, rt, file| {
-                let svelte = match RUNTIME.as_ref() {
-                    Ok(svelte) => rt.save(svelte.as_bytes(), "js")?,
+            move |_, store, input| {
+                let runtime = match RUNTIME.as_ref() {
+                    Ok(runtime) => store.save(runtime.as_bytes(), "js")?,
                     Err(err) => return Err(SvelteError::Runtime(err.to_string()).into()),
                 };
 
                 // In the import map "svelte" should be registered, so that it
                 // points to the runtime file.
-                rt.register("svelte", svelte.as_str());
-                rt.register("svelte/internal/client", svelte.as_str());
-                rt.register("svelte/internal/disclose-version", svelte.as_str());
+                store.register("svelte", runtime.as_str());
+                store.register("svelte/internal/client", runtime.as_str());
+                store.register("svelte/internal/disclose-version", runtime.as_str());
 
                 // Compile the SSR script
-                let server = compile_svelte_server(&file.path)?;
+                let server = compile_svelte_server(&input.path)?;
                 let anchor = Hash32::hash(&server);
 
                 // Compile lean browser glue
-                let client = compile_svelte_init(&file.path, anchor)?;
-                let client = rt.save(client.as_bytes(), "js")?;
+                let client = compile_svelte_init(&input.path, anchor)?;
+                let client = store.save(client.as_bytes(), "js")?;
 
                 // With the compiled SSR script we can now pre-render the
                 // component on demand.
-                let html = Arc::new({
+                let prerender = Arc::new({
                     let anchor = anchor.to_hex();
 
                     move |props: &P| {
@@ -153,11 +153,11 @@ where
                 });
 
                 Ok((
-                    file.path,
+                    input.path,
                     Svelte::<P> {
-                        html,
-                        init: Script { path: client },
-                        rt: Script { path: svelte },
+                        prerender,
+                        hydration: Script { path: client },
+                        runtime: Script { path: runtime },
                     },
                 ))
             },

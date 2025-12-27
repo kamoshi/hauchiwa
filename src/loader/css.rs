@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{Blueprint, error::HauchiwaError, loader::GlobAssetsTask, task::Handle};
+use crate::{Blueprint, error::HauchiwaError, graph::Handle, loader::GlobAssetsTask};
 
 /// Errors that can occur when compiling Stylesheets.
 #[derive(Debug, Error)]
@@ -57,13 +57,15 @@ where
         Ok(self.add_task_opaque(GlobAssetsTask::new(
             vec![glob_entry],
             vec![glob_watch],
-            move |_, rt, file| {
-                let data = grass::from_path(&file.path, &grass::Options::default())
+            move |_, store, input| {
+                let data = grass::from_path(&input.path, &grass::Options::default())
                     .map_err(StyleError::Sass)?;
 
-                let path = rt.save(data.as_bytes(), "css").map_err(StyleError::Build)?;
+                let path = store
+                    .save(data.as_bytes(), "css")
+                    .map_err(StyleError::Build)?;
 
-                Ok((file.path, Stylesheet { path }))
+                Ok((input.path, Stylesheet { path }))
             },
         )?))
     }
