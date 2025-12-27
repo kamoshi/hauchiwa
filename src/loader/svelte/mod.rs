@@ -45,8 +45,8 @@ static RUNTIME: LazyLock<Result<String, SvelteError>> = LazyLock::new(compile_sv
 /// Represents a compiled Svelte component.
 ///
 /// This struct allows you to:
-/// 1. Server-side render (SSR) the component into HTML string using the `html` closure.
-/// 2. Client-side hydrate the component using the scripts in `init` and `rt`.
+/// 1. Server-side render (SSR) the component into HTML string using the `prerender` closure.
+/// 2. Client-side hydrate the component using the scripts in `hydration` and `runtime`.
 ///
 /// # Generics
 ///
@@ -74,7 +74,7 @@ where
     /// This loader uses Deno to compile Svelte components found by the entry glob.
     /// It produces an SSR-capable script and a client-side hydration script.
     ///
-    /// The `Svelte` object returned in the registry provides an `html` function (for SSR)
+    /// The [`Svelte`] object returned in [`crate::loader::Assets`] provides an `prerender` function (for SSR)
     /// and handles to the client-side JavaScript assets.
     ///
     /// **Note:** This loader requires the `deno` binary to be available in the system PATH.
@@ -91,11 +91,13 @@ where
     ///
     /// # Returns
     ///
-    /// A handle to a registry mapping original file paths to `Svelte<P>` objects.
+    /// A [`Handle`] to a [`crate::loader::Assets`] mapping original file paths to [`Svelte<P>`] objects.
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// # let mut config = hauchiwa::Blueprint::<()>::new();
+    ///
     /// #[derive(serde::Serialize, serde::Deserialize, Clone)]
     /// struct ButtonProps {
     ///     label: String,
@@ -104,7 +106,7 @@ where
     /// let buttons = config.load_svelte::<ButtonProps>(
     ///     "components/Button.svelte",
     ///     "components/**/*.svelte"
-    /// )?;
+    /// );
     /// ```
     pub fn load_svelte<P>(
         &mut self,

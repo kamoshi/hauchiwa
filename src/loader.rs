@@ -2,15 +2,15 @@
 //!
 //! A "Loader" is typically a task with **zero dependencies** that reads files
 //! matching a glob pattern, processes them (e.g., parsing frontmatter, resizing
-//! images), and stores them in a [`Registry`].
+//! images), and stores them in the [`Assets`] collection.
 //!
 //! This module provides the core types for loaders:
-//! - [`Registry`]: A map of paths to processed data.
-//! - [`File`]: Represents a raw file read from disk.
-//! - [`Runtime`]: A thread-safe helper for tasks to store artifacts (like images)
+//! - [`Assets`]: A map of paths to processed data.
+//! - [`Input`]: Represents a raw file read from disk.
+//! - [`Store`]: A thread-safe helper for tasks to store artifacts (like images)
 //!   and register import maps.
 //!
-//! It also contains the `GlobRegistryTask`, which is the workhorse for most loaders.
+//! It also contains the [`GlobAssetsTask`], which is the workhorse for most loaders.
 
 pub mod generic;
 pub use generic::Document;
@@ -57,13 +57,21 @@ use crate::{
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// // Assuming `posts` is a Assets<Content<Post>>
+/// ```rust,no_run
+/// # use hauchiwa::{Blueprint, task, loader::{Assets, Document}};
+/// # #[derive(Clone, serde::Deserialize)]
+/// # struct Post { title: String }
+/// # let mut config = Blueprint::<()>::default();
+/// # let posts = config.load_documents::<Post>("content/posts/*.md").unwrap();
+/// # task!(config, |ctx, posts| {
+/// // Assuming `posts` is a Assets<Document<Post>>
 /// for post in posts.values() {
 ///     println!("Title: {}", post.metadata.title);
 /// }
 ///
 /// let specific_post = posts.get("content/posts/hello.md")?;
+/// # Ok(())
+/// # });
 /// ```
 #[derive(Debug)]
 pub struct Assets<T> {
@@ -183,7 +191,7 @@ impl Store {
     /// # Arguments
     ///
     /// * `key` - The module specifier (e.g., "react", "my-lib").
-    /// * `value` - The URL to the module (e.g., "/hash/1234.js", "https://cdn.example.com/lib.js").
+    /// * `value` - The URL to the module (e.g., "/hash/1234.js", "`https://cdn.example.com/lib.js`").
     pub fn register(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.imports.register(key, value);
     }
@@ -218,7 +226,7 @@ where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
-    /// Creates a new `GlobRegistryTask`.
+    /// Creates a new `GlobAssetsTask`.
     ///
     /// # Arguments
     ///

@@ -3,12 +3,9 @@ use std::fs;
 use camino::{Utf8Path, Utf8PathBuf};
 use thiserror::Error;
 
-use crate::{
-    Blueprint,
-    error::{BuildError, HauchiwaError},
-    graph::Handle,
-    loader::{Assets, GlobAssetsTask, Input},
-};
+use crate::error::{BuildError, HauchiwaError};
+use crate::loader::{Assets, GlobAssetsTask, Input};
+use crate::{Blueprint, Handle};
 
 /// Errors that can occur when processing images.
 #[derive(Debug, Error)]
@@ -28,7 +25,7 @@ pub enum ImageError {
 
 /// Represents a processed image asset.
 ///
-/// Images loaded via [`SiteConfig::glob_images`] are automatically optimized
+/// Images loaded via `SiteConfig::glob_images` are automatically optimized
 /// and cached. This struct provides the path to the optimized version.
 #[derive(Clone)]
 pub struct Image {
@@ -53,13 +50,14 @@ where
     ///
     /// # Returns
     ///
-    /// A `Handle` to a `Registry<Image>`, mapping original file paths to the processed `Image` struct.
+    /// A [`Handle`] to a [`Assets<Image>`], mapping original file paths to the processed [`Image`] struct.
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// # let mut config = hauchiwa::Blueprint::<()>::new();
     /// // Load all PNG and JPG images in the assets directory.
-    /// let images = config.load_images(&["assets/**/*.png", "assets/**/*.jpg"])?;
+    /// let images = config.load_images(&["assets/**/*.png", "assets/**/*.jpg"]);
     /// ```
     pub fn load_images(
         &mut self,

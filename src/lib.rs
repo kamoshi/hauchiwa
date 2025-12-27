@@ -1,3 +1,4 @@
+#![doc = include_str!("../README.md")]
 #![deny(
     unsafe_code,
     // clippy::unwrap_used,
@@ -113,11 +114,16 @@ impl<G: Send + Sync> Environment<G> {
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// let script = ctx.globals.get_refresh_script();
+    /// ```rust,no_run
+    /// # use hauchiwa::{Blueprint, task};
+    /// # let mut config = Blueprint::<()>::default();
+    /// # task!(config, |ctx| {
+    /// let script = ctx.env.get_refresh_script();
     /// if let Some(s) = script {
     ///     // Inject `s` into your HTML <head> or <body>
     /// }
+    /// # Ok(())
+    /// # });
     /// ```
     pub fn get_refresh_script(&self) -> Option<String> {
         self.port.map(|port| {
@@ -197,9 +203,9 @@ where
 ///
 /// `Blueprint` is used to define the Task graph of your website. You add tasks
 /// (including loaders) to the config, and wire them together using their
-/// [Handle](crate::task::Handle)s.
+/// [`Handle`]s.
 ///
-/// Once configured, you convert this into a [Site] to execute the build.
+/// Once configured, you convert this into a [`Website`] to execute the build.
 ///
 /// # Example
 ///
@@ -238,7 +244,7 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
     ///
     /// # Returns
     ///
-    /// A [`Handle`](crate::task::Handle) representing the future result of this task.
+    /// A [`Handle`] representing the future result of this task.
     pub fn add_task<D, F, R>(&mut self, dependencies: D, callback: F) -> graph::Handle<R>
     where
         D: TaskDependencies + Send + Sync + 'static,
@@ -344,15 +350,20 @@ where
 
 /// A convenient macro for defining tasks.
 ///
-/// This macro wraps `SiteConfig::add_task` to reduce boilerplate when
+/// This macro wraps `Blueprint::add_task` to reduce boilerplate when
 /// extracting dependencies.
 ///
 /// # Syntax
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// # use hauchiwa::{Blueprint, task};
+/// # let mut config = Blueprint::<()>::default();
+/// # let dep1 = config.load_documents::<()>("content/posts/*.md").unwrap();
+/// # let dep2 = config.load_documents::<()>("content/posts/*.md").unwrap();
 /// task!(config, |context, dep1, dep2| {
 ///     // body
-/// })
+///     # Ok(())
+/// });
 /// ```
 ///
 /// # Example

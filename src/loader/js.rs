@@ -50,13 +50,14 @@ where
     ///
     /// # Returns
     ///
-    /// A handle to a registry mapping original file paths to `Script` objects.
+    /// A [`Handle`] to a [`crate::loader::Assets<Script>`], mapping original file paths to [`Script`] objects.
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// # let mut config = hauchiwa::Blueprint::<()>::new();
     /// // Compile main.ts using esbuild, watching all ts files in the scripts directory.
-    /// let scripts = config.load_js("scripts/main.ts", "scripts/**/*.ts")?;
+    /// let scripts = config.load_js("scripts/main.ts", "scripts/**/*.ts");
     /// ```
     pub fn load_js(
         &mut self,

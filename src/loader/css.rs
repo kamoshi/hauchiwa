@@ -41,13 +41,14 @@ where
     ///
     /// # Returns
     ///
-    /// A handle to a registry mapping original file paths to `CSS` objects.
+    /// A [`Handle`] to a [`crate::loader::Assets`] mapping original file paths to [`Stylesheet`] objects.
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// # let mut config = hauchiwa::Blueprint::<()>::new();
     /// // Compile main.scss, watching all scss files in the styles directory for changes.
-    /// let styles = config.load_css("styles/main.scss", "styles/**/*.scss")?;
+    /// let styles = config.load_css("styles/main.scss", "styles/**/*.scss");
     /// ```
     pub fn load_css(
         &mut self,

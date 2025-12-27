@@ -1,6 +1,6 @@
 //! Utilities for working with pages and paths.
 //!
-//! This module contains the [`Page`] struct, which represents a final output file,
+//! This module contains the [`Output`] struct, which represents a final output file,
 //! and helper functions for path normalization and slugification.
 
 use camino::Utf8Component;
@@ -35,7 +35,7 @@ pub fn to_slug(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
 /// fail, or on Windows returns annoying device paths.
 ///
 /// Adapted from
-/// https://github.com/rust-lang/cargo/blob/f7acf448fc127df9a77c52cc2bba027790ac4931/crates/cargo-util/src/paths.rs#L76-L116
+/// <https://github.com/rust-lang/cargo/blob/f7acf448fc127df9a77c52cc2bba027790ac4931/crates/cargo-util/src/paths.rs#L76-L116>
 pub fn normalize_path(path: &Utf8Path) -> Utf8PathBuf {
     let mut components = path.components().peekable();
     let mut ret = if let Some(c @ Utf8Component::Prefix(..)) = components.peek().cloned() {

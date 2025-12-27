@@ -50,7 +50,7 @@ pub(crate) trait TypedTask<G: Send + Sync = ()>: Send + Sync {
 
 /// The core trait for all tasks in the graph.
 ///
-/// While most users will interact with the typed [`SiteConfig::add_task`](crate::SiteConfig::add_task)
+/// While most users will interact with the typed [`Blueprint::add_task`](crate::Blueprint::add_task)
 /// API, this trait is the type-erased foundation that allows the graph to hold
 /// tasks with different output types.
 pub(crate) trait Task<G: Send + Sync = ()>: Send + Sync {
@@ -139,17 +139,17 @@ impl<T> Handle<T> {
     }
 }
 
-/// A trait that enables a collection of `Handle<T>`s to be used as dependencies for a task.
+/// A trait that enables a collection of [`Handle<T>`]s to be used as dependencies for a task.
 ///
-/// This trait is implemented for tuples of `Handle<T>`s, allowing them to be passed
-/// as the `dependencies` argument to `SiteConfig::add_task`. It provides the necessary logic
+/// This trait is implemented for tuples of [`Handle<T>`]s, allowing them to be passed
+/// as the `dependencies` argument to `Blueprint::add_task`. It provides the necessary logic
 /// for the build system to extract dependency information and resolve their outputs.
 pub trait TaskDependencies {
     /// The resulting type when all dependencies are resolved.
-    /// For a tuple of `Handle<T>`s, this will be a tuple of `&'a T`s.
+    /// For a tuple of [`Handle<T>`]s, this will be a tuple of `&'a T`s.
     type Output<'a>;
 
-    /// Returns the `NodeIndex` for each dependency in the collection.
+    /// Returns the [`NodeIndex`] for each dependency in the collection.
     fn dependencies(&self) -> Vec<NodeIndex>;
 
     /// Takes a slice of type-erased dependency outputs and resolves them into a concrete `Output` type.

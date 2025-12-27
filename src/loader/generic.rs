@@ -21,7 +21,7 @@ pub enum FrontmatterError {
     Parse(anyhow::Error),
 }
 
-/// This is the standard output of the [`SiteConfig::load_documents`] loader.
+/// This is the standard output of the [`Blueprint::load_documents`] loader.
 ///
 /// # Generics
 ///
@@ -49,27 +49,28 @@ where
     ///
     /// # Type Parameters
     ///
-    /// * `R`: The return type of the callback, which will be stored in the Registry.
+    /// * `R`: The return type of the callback, which will be stored in [`crate::loader::Assets`].
     ///
     /// # Arguments
     ///
     /// * `path_glob` - A glob pattern to find files (e.g., `"assets/**/*.json"`).
-    /// * `callback` - A function that takes the global context, a runtime
-    ///   handle, and the raw file. It should return the processed data.
+    /// * `callback` - A function that takes the task context, a store handle,
+    ///   and the input. It should return the processed data.
     ///
     /// # Returns
     ///
-    /// A `Handle` to a `Registry<R>`, mapping file paths to your processed data.
+    /// A [`Handle`] to a [`crate::loader::Assets<R>`], mapping file paths to your processed data.
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// # let mut config = hauchiwa::Blueprint::<()>::new();
     /// // Load all .txt files and reverse their content.
-    /// let reversed_texts = config.load("content/**/*.txt", |globals, file| {
-    ///     let content = String::from_utf8(file.data.into())?;
+    /// let reversed_texts = config.load("content/**/*.txt", |_, _, input| {
+    ///     let content = String::from_utf8(input.read()?.to_vec())?;
     ///     let reversed = content.chars().rev().collect::<String>();
     ///     Ok(reversed)
-    /// })?;
+    /// });
     /// ```
     pub fn load<R>(
         &mut self,
@@ -105,7 +106,7 @@ where
     ///
     /// # Type Parameters
     ///
-    /// * `R`: The type to deserialize the frontmatter into. Must implement `serde::Deserialize`.
+    /// * `R`: The type to deserialize the frontmatter into. Must implement [`serde::Deserialize`].
     ///
     /// # Arguments
     ///
@@ -113,20 +114,21 @@ where
     ///
     /// # Returns
     ///
-    /// A `Handle` to a `Registry<Content<R>>`.
+    /// A [`Handle`] to a [`crate::loader::Assets<Document<R>>`].
     ///
     /// # Example
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
     /// #[derive(serde::Deserialize, Clone)]
     /// struct Post {
     ///     title: String,
     ///     date: String,
     /// }
     ///
+    /// # let mut config = hauchiwa::Blueprint::<()>::new();
     /// // Load all markdown files in the posts directory, parsing their
     /// // frontmatter into PostMeta structs.
-    /// let posts = config.load_frontmatter::<Post>("content/posts/*.md")?;
+    /// let posts = config.load_documents::<Post>("content/posts/*.md");
     /// ```
     pub fn load_documents<R>(
         &mut self,

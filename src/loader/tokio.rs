@@ -18,16 +18,16 @@ where
     ///
     /// * `R`: The return type of the future.
     /// * `F`: The type of the closure that returns the future.
-    /// * `Fut`: The type of the future returned by the closure.
+    /// * `Fut`: The type of the [`Future`] returned by the closure.
     ///
     /// # Arguments
     ///
-    /// * `callback`: A closure that takes no arguments and returns a future
-    ///   resolving to an `anyhow::Result<R>`.
+    /// * `callback`: A closure that takes no arguments and returns a [`Future`]
+    ///   resolving to an [`anyhow::Result<R>`].
     ///
     /// # Returns
     ///
-    /// A handle to the result `R` in the build graph.
+    /// A [`Handle`] to the result `R` in the build graph.
     ///
     /// # Example
     ///
