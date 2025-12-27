@@ -144,9 +144,11 @@ fn run_tasks_parallel<G: Send + Sync>(
                     let mut rt = Store::new();
 
                     task.execute(&context, &mut rt, &dependencies)
-                        .map(|output| NodeData {
-                            output,
-                            importmap: rt.imports,
+                        .map(|output| {
+                            let mut importmap = importmap.clone();
+                            importmap.merge(rt.imports);
+
+                            NodeData { output, importmap }
                         })
                 };
 
