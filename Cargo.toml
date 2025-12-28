@@ -1,6 +1,6 @@
 [package]
 name        = "hauchiwa"
-version     = "0.9.0"
+version     = "0.9.1"
 edition     = "2024"
 authors     = ["Maciej Jur <maciej@kamoshi.org>"]
 keywords    = ["ssg"]

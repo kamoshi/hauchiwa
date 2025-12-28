@@ -1,11 +1,18 @@
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufReader, BufWriter};
 
 use camino::{Utf8Path, Utf8PathBuf};
+use image::codecs::webp::WebPEncoder;
+use image::{ExtendedColorType, ImageReader};
 use thiserror::Error;
 
 use crate::error::{BuildError, HauchiwaError};
 use crate::loader::{Assets, GlobAssetsTask, Input};
 use crate::{Blueprint, Handle};
+
+const STORE: &str = "/hash/img/";
+const CACHE: &str = ".cache/hash/img/";
+const DIST: &str = "dist/hash/img/";
 
 /// Errors that can occur when processing images.
 #[derive(Debug, Error)]
@@ -75,43 +82,46 @@ where
     }
 }
 
-fn process_image(buffer: &[u8]) -> Result<Vec<u8>, ImageError> {
-    let img = image::load_from_memory(buffer)?;
-    let w = img.width();
-    let h = img.height();
-
-    let mut out = Vec::new();
-    let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
-
-    encoder.encode(&img.to_rgba8(), w, h, image::ExtendedColorType::Rgba8)?;
-
-    Ok(out)
-}
-
 fn build_image(file: &Input) -> Result<Utf8PathBuf, ImageError> {
     let hash = file.hash.to_hex();
-    let path_root = Utf8Path::new("/hash/img/")
-        .join(&hash)
-        .with_extension("webp");
-    let path_hash = Utf8Path::new(".cache/hash/img/")
-        .join(&hash)
-        .with_extension("webp");
-    let path_dist = Utf8Path::new("dist/hash/img/")
-        .join(&hash)
-        .with_extension("webp");
 
-    // If this hash exists it means the work is already done.
-    if !path_hash.exists() {
-        let buffer = file.read()?;
-        let buffer = process_image(&buffer)?;
+    // Setup paths
+    let path_store = Utf8Path::new(STORE).join(&hash).with_extension("webp");
+    let path_cache = Utf8Path::new(CACHE).join(&hash).with_extension("webp");
+    let path_dist = Utf8Path::new(DIST).join(&hash).with_extension("webp");
 
-        fs::create_dir_all(".cache/hash/img/")?;
-        fs::write(&path_hash, buffer)?;
+    if !path_cache.exists() {
+        fs::create_dir_all(CACHE)?;
+
+        let cache = File::create(&path_cache)?;
+        let mut writer = BufWriter::new(cache);
+
+        let source = File::open(&file.path)?;
+        let reader = BufReader::new(source);
+
+        process_image_to_writer(reader, &mut writer)?;
     }
 
-    let dir = path_dist.parent().unwrap_or(&path_dist);
-    fs::create_dir_all(dir)?;
-    fs::copy(&path_hash, &path_dist)?;
+    fs::create_dir_all(DIST)?;
 
-    Ok(path_root)
+    if std::fs::hard_link(&path_cache, &path_dist).is_err() {
+        std::fs::copy(&path_cache, &path_dist)?;
+    }
+
+    Ok(path_store)
+}
+
+fn process_image_to_writer(
+    reader: impl std::io::BufRead + std::io::Seek,
+    writer: &mut impl std::io::Write,
+) -> Result<(), ImageError> {
+    let img = ImageReader::new(reader).with_guessed_format()?.decode()?;
+
+    let w = img.width();
+    let h = img.height();
+    let rgba = img.into_rgba8();
+
+    WebPEncoder::new_lossless(writer).encode(&rgba, w, h, ExtendedColorType::Rgba8)?;
+
+    Ok(())
 }
