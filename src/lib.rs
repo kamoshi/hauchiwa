@@ -284,6 +284,45 @@ impl<G: Send + Sync + 'static> Default for Blueprint<G> {
     }
 }
 
+impl<G> std::fmt::Display for Blueprint<G>
+where
+    G: Send + Sync + 'static,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "graph LR")?;
+
+        for index in self.graph.node_indices() {
+            let task = &self.graph[index];
+            let name = task.get_name().replace('"', "\\\""); // Simple escape
+            writeln!(f, "    {:?}[\"{}\"]", index.index(), name)?;
+
+            if task.is_output() {
+                writeln!(f, "    {:?} --> Output", index.index())?;
+            }
+        }
+
+        writeln!(f, "    Output[Output]")?;
+
+        for edge in self.graph.edge_indices() {
+            let (source, target) = self.graph.edge_endpoints(edge).unwrap();
+            let source_task = &self.graph[source];
+            let type_name = source_task
+                .get_output_type_name()
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            writeln!(
+                f,
+                "    {:?} -- \"{}\" --> {:?}",
+                source.index(),
+                type_name,
+                target.index()
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
 /// Represents the configured site and provides methods for building and serving
 /// it with a development server.
 ///

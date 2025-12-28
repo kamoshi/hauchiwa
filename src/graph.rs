@@ -70,7 +70,13 @@ pub(crate) trait TypedTask<G: Send + Sync = ()>: Send + Sync {
 /// tasks with different output types.
 pub(crate) trait Task<G: Send + Sync = ()>: Send + Sync {
     fn get_name(&self) -> String;
+
+    fn get_output_type_name(&self) -> &'static str;
+
+    fn is_output(&self) -> bool;
+
     fn dependencies(&self) -> Vec<NodeIndex>;
+
     fn execute(
         &self,
         context: &TaskContext<G>,
@@ -94,6 +100,18 @@ where
     fn get_name(&self) -> String {
         T::get_name(self)
     }
+
+    fn get_output_type_name(&self) -> &'static str {
+        std::any::type_name::<T::Output>()
+    }
+
+    fn is_output(&self) -> bool {
+        use std::any::TypeId;
+
+        TypeId::of::<T::Output>() == TypeId::of::<crate::Output>()
+            || TypeId::of::<T::Output>() == TypeId::of::<Vec<crate::Output>>()
+    }
+
     fn dependencies(&self) -> Vec<NodeIndex> {
         T::dependencies(self)
     }
