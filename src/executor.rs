@@ -1,9 +1,11 @@
+mod diagnostics;
+
 use std::{
     collections::{HashMap, HashSet},
     net::{TcpListener, TcpStream},
     sync::{Arc, Mutex, mpsc::Sender},
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use camino::Utf8Path;
@@ -12,28 +14,33 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use petgraph::graph::NodeIndex;
 use petgraph::{algo::toposort, visit::Dfs};
 
-use crate::{
-    Environment, Mode, TaskContext, Website, graph::NodeData, importmap::ImportMap, loader::Store,
-    page::Output,
-};
+pub use crate::executor::diagnostics::Diagnostics;
+use crate::graph::NodeData;
+use crate::{Environment, ImportMap, Mode, Output, Store, TaskContext, Website};
 
 #[cfg(feature = "live")]
 pub use live::watch;
 
+#[derive(Debug, Clone)]
+pub struct TaskExecution {
+    pub start: Instant,
+    pub duration: Duration,
+}
+
 pub fn run_once_parallel<G: Send + Sync>(
-    site: &mut Website<G>,
+    website: &mut Website<G>,
     globals: &Environment<G>,
-) -> anyhow::Result<(HashMap<NodeIndex, NodeData>, Vec<Output>)> {
+) -> anyhow::Result<(HashMap<NodeIndex, NodeData>, Vec<Output>, Diagnostics)> {
     // We run toposort primarily to detect any cycles in the graph.
-    toposort(&site.graph, None).expect("Cycle detected in task graph");
+    toposort(&website.graph, None).expect("Cycle detected in task graph");
 
-    let mut cache: HashMap<NodeIndex, NodeData> = HashMap::new();
-    let nodes_to_run: HashSet<NodeIndex> = site.graph.node_indices().collect();
+    let mut cache = HashMap::new();
+    let pending = website.graph.node_indices().collect();
 
-    run_tasks_parallel(site, globals, &mut cache, &nodes_to_run)?;
+    let diagnostics = run_tasks_parallel(website, globals, &mut cache, &pending)?;
 
     let pages = collect_pages(&cache);
-    Ok((cache, pages))
+    Ok((cache, pages, diagnostics))
 }
 
 /// This function executes the task graph using a thread pool. It performs a
@@ -56,7 +63,7 @@ fn run_tasks_parallel<G: Send + Sync>(
     globals: &Environment<G>,
     cache: &mut HashMap<NodeIndex, NodeData>,
     nodes_to_run: &HashSet<NodeIndex>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Diagnostics> {
     // Build a map from a dependency to the nodes that depend on it for the entire graph.
     let mut dependents: HashMap<NodeIndex, Vec<NodeIndex>> = HashMap::new();
     for edge in site.graph.raw_edges() {
@@ -85,7 +92,7 @@ fn run_tasks_parallel<G: Send + Sync>(
     let mut completed_tasks = 0;
 
     if total_tasks == 0 {
-        return Ok(());
+        return Ok(Diagnostics::default());
     }
 
     // Setup MultiProgress and the main overall progress bar
@@ -105,7 +112,10 @@ fn run_tasks_parallel<G: Send + Sync>(
         .unwrap();
 
     // We only need a channel for results and tasks are distributed by Rayon.
-    let (result_sender, result_receiver) = unbounded::<(NodeIndex, anyhow::Result<NodeData>)>();
+    let (result_sender, result_receiver) =
+        unbounded::<(NodeIndex, anyhow::Result<NodeData>, Instant, Duration)>();
+
+    let mut execution_times = HashMap::new();
 
     rayon::scope(|s| -> anyhow::Result<()> {
         // A helper closure to spawn a task
@@ -139,6 +149,7 @@ fn run_tasks_parallel<G: Send + Sync>(
                     importmap: &importmap,
                 };
 
+                let start_time = Instant::now();
                 let output = {
                     let mut rt = Store::new();
 
@@ -153,11 +164,12 @@ fn run_tasks_parallel<G: Send + Sync>(
                             }
                         })
                 };
+                let elapsed = start_time.elapsed();
 
                 task_pb.finish_and_clear();
 
                 // Send result back to main thread
-                sender.send((index, output)).unwrap();
+                sender.send((index, output, start_time, elapsed)).unwrap();
             });
         };
 
@@ -172,10 +184,11 @@ fn run_tasks_parallel<G: Send + Sync>(
         // The main thread sits here while Rayon workers execute tasks.
         while completed_tasks < total_tasks {
             // Wait for any task to finish
-            let (completed_index, output) = result_receiver.recv().unwrap();
+            let (completed_index, output, start, duration) = result_receiver.recv().unwrap();
 
             // Update state
             cache.insert(completed_index, output?);
+            execution_times.insert(completed_index, TaskExecution { start, duration });
             completed_tasks += 1;
             main_pb.inc(1);
 
@@ -197,7 +210,7 @@ fn run_tasks_parallel<G: Send + Sync>(
     })?;
 
     main_pb.finish_with_message("Build complete!");
-    Ok(())
+    Ok(Diagnostics { execution_times })
 }
 
 fn collect_pages(cache: &HashMap<NodeIndex, NodeData>) -> Vec<Output> {
@@ -256,7 +269,7 @@ mod live {
         };
 
         println!("Performing initial build...");
-        let (mut cache, pages) = run_once_parallel(site, &globals)?;
+        let (mut cache, pages, _diagnostics) = run_once_parallel(site, &globals)?;
         println!("Collected {} pages", pages.len());
         crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
 
@@ -303,7 +316,8 @@ mod live {
                             }
                         }
 
-                        run_tasks_parallel(site, &globals, &mut cache, &to_rerun)?;
+                        let _diagnostics =
+                            run_tasks_parallel(site, &globals, &mut cache, &to_rerun)?;
 
                         let pages = collect_pages(&cache);
                         println!("Collected {} pages", pages.len());

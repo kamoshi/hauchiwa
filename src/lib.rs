@@ -23,6 +23,7 @@ use petgraph::{Graph, graph::NodeIndex};
 pub use camino;
 pub use gitscan as git;
 
+pub use crate::executor::Diagnostics;
 pub use crate::graph::Handle;
 pub use crate::importmap::ImportMap;
 pub use crate::loader::Store;
@@ -351,7 +352,7 @@ where
     /// # Arguments
     ///
     /// * `data` - The global user data to pass to all tasks.
-    pub fn build(&mut self, data: G) -> anyhow::Result<()> {
+    pub fn build(&mut self, data: G) -> anyhow::Result<Diagnostics> {
         let globals = Environment {
             generator: "hauchiwa",
             mode: Mode::Build,
@@ -362,11 +363,11 @@ where
         utils::clear_dist().expect("Failed to clear dist directory");
         utils::clone_static().expect("Failed to copy static files");
 
-        let (_, pages) = crate::executor::run_once_parallel(self, &globals)?;
+        let (_, pages, diagnostics) = crate::executor::run_once_parallel(self, &globals)?;
 
         crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
 
-        Ok(())
+        Ok(diagnostics)
     }
 
     /// Starts the development server in watch mode.
