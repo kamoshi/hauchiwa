@@ -215,6 +215,27 @@ fn collect_pages(cache: &HashMap<NodeIndex, NodeData>) -> Vec<Output> {
 
 #[cfg(feature = "live")]
 mod live {
+    //! Watch mode is implemented as a three-part system:
+    //!
+    //! 1. **File watcher**: Uses the `notify` crate to monitor filesystem
+    //!    events recursively. It includes debouncing to prevent duplicate builds
+    //!    from rapid file saves.
+    //! 2. **WebSocket server**: Spawns a dedicated thread using `tungstenite`
+    //!    to maintain persistent connections with open browser tabs.
+    //! 3. **Client script**: The [`Environment`](crate::Environment) injects
+    //!    a lightweight JavaScript snippet into generated pages. This script
+    //!    connects to the WebSocket server and listens for a `"reload"` message.
+    //!
+    //! ## The Loop
+    //!
+    //! When a file change is detected:
+    //! 1. The graph identifies and rebuilds only the "dirty" subgraph
+    //!    (incremental build).
+    //! 2. Upon successful completion, the executor signals the WebSocket
+    //!    thread.
+    //! 3. The server broadcasts the reload command to all connected clients,
+    //!    triggering an immediate browser refresh.
+
     use super::*;
 
     use std::env;

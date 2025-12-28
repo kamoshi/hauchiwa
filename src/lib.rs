@@ -351,8 +351,10 @@ where
 
 /// A convenient macro for defining tasks.
 ///
-/// This macro wraps `Blueprint::add_task` to reduce boilerplate when
-/// extracting dependencies.
+/// To avoid manual tuple destructuring of dependencies, the `task!` macro
+/// provides a DSL that makes dependencies look like standard function
+/// arguments. It compiles down to the standard `Blueprint::add_task` call but
+/// hides the tuple boilerplate.
 ///
 /// # Syntax
 ///

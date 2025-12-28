@@ -4,16 +4,31 @@
 //! produces a result. Tasks are organized into a Directed Acyclic Graph (DAG),
 //! where dependencies are explicitly declared.
 //!
-//! # Key Types
+//! ## Core abstractions
 //!
-//! * [`Handle<T>`]: A lightweight reference to the *future* result of a task.
-//!   You use handles to declare dependencies between tasks.
+//! * [`Handle<T>`]: A lightweight token representing the *future* result of a
+//!   task. It is used to wire dependencies between tasks in the blueprint.
 //! * [`TaskDependencies`]: A trait implemented for tuples of handles (e.g.,
-//!   `(Handle<A>, Handle<B>)`) that allows tasks to accept multiple inputs.
+//!   `(Handle<A>, Handle<B>)`). It auto-magically resolves these tokens into
+//!   their concrete values `(&A, &B)` before executing the task.
+//!
+//! ## Phantom handles
+//!
+//! Under the hood, the graph is entirely type-erased. It stores all outputs as
+//! `Arc<dyn Any + Send + Sync>`.
+//!
+//! We use a **phantom handle** to bridge this gap:
+//! * **Compile-time**: `Handle<T>` carries no data but holds the type `T` in
+//!   `PhantomData`. This allows the compiler to enforce that Task B receives
+//!   exactly the type Task A produces.
+//! * **Runtime**: The `TaskDependencies` trait performs the necessary `downcast_ref`
+//!   logic. It acts as the safe bridge, panicking only if the strictly-typed
+//!   blueprint construction was somehow bypassed (which the compiler prevents).
 
-use petgraph::graph::NodeIndex;
 use std::any::Any;
 use std::sync::Arc;
+
+use petgraph::graph::NodeIndex;
 
 use crate::TaskContext;
 use crate::importmap::ImportMap;
@@ -117,14 +132,6 @@ pub struct Handle<T> {
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T> Clone for Handle<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for Handle<T> {}
-
 impl<T> Handle<T> {
     pub(crate) fn new(index: NodeIndex) -> Self {
         Self {
@@ -139,11 +146,21 @@ impl<T> Handle<T> {
     }
 }
 
-/// A trait that enables a collection of [`Handle<T>`]s to be used as dependencies for a task.
+impl<T> Copy for Handle<T> {}
+
+impl<T> Clone for Handle<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+/// A trait that enables a collection of [`Handle<T>`]s to be used as
+/// dependencies for a task.
 ///
-/// This trait is implemented for tuples of [`Handle<T>`]s, allowing them to be passed
-/// as the `dependencies` argument to `Blueprint::add_task`. It provides the necessary logic
-/// for the build system to extract dependency information and resolve their outputs.
+/// This trait is implemented for tuples of [`Handle<T>`]s, allowing them to be
+/// passed as the `dependencies` argument to `Blueprint::add_task`. It provides
+/// the necessary logic for the build system to extract dependency information
+/// and resolve their outputs.
 pub trait TaskDependencies {
     /// The resulting type when all dependencies are resolved.
     /// For a tuple of [`Handle<T>`]s, this will be a tuple of `&'a T`s.
@@ -152,11 +169,13 @@ pub trait TaskDependencies {
     /// Returns the [`NodeIndex`] for each dependency in the collection.
     fn dependencies(&self) -> Vec<NodeIndex>;
 
-    /// Takes a slice of type-erased dependency outputs and resolves them into a concrete `Output` type.
+    /// Takes a slice of type-erased dependency outputs and resolves them into a
+    /// concrete `Output` type.
     ///
     /// # Panics
-    /// This method will panic if the type-erased outputs cannot be downcast to their expected concrete types,
-    /// indicating a severe logic error in the build system.
+    /// This method will panic if the type-erased outputs cannot be downcast to
+    /// their expected concrete types, indicating a severe logic error in the
+    /// build system.
     fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> Self::Output<'a>;
 }
 

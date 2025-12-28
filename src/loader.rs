@@ -4,13 +4,10 @@
 //! matching a glob pattern, processes them (e.g., parsing frontmatter, resizing
 //! images), and stores them in the [`Assets`] collection.
 //!
-//! This module provides the core types for loaders:
-//! - [`Assets`]: A map of paths to processed data.
-//! - [`Input`]: Represents a raw file read from disk.
-//! - [`Store`]: A thread-safe helper for tasks to store artifacts (like images)
-//!   and register import maps.
-//!
-//! It also contains the [`GlobAssetsTask`], which is the workhorse for most loaders.
+//! Loaders that require JavaScript execution (like Svelte) do not embed V8.
+//! Instead, they act as orchestrators, spawning `deno` subprocesses to handle
+//! the compilation. This keeps the Rust binary small and compilation times
+//! fast, leveraging Deno's existing toolchain for transpilation.
 
 pub mod generic;
 pub use generic::Document;
