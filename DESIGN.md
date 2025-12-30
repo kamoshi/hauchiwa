@@ -88,10 +88,8 @@ tasks can also produce a side-channel of information: the `ImportMap`.
 1. When a Loader (like `load_svelte`) processes a file, it registers the
    resulting artifact in its internal Store. Example: Register
    `"components/Button.svelte"` -> `"/hash/d41d8cd9.js"`
-
 2. When Task B depends on Task A, the execution engine automatically merges Task
    A's import map into Task B's context.
-
 3. Task B (e.g., a page renderer) receives a TaskContext containing the
    pre-merged ImportMap. It can then serialize this map into the `<head>` of the
    generated HTML.
@@ -139,19 +137,46 @@ order of precedence. You must ensure keys are unique or that collisions are
 intentional and identical. In practice this should not matter, but it's
 important to be aware of this behavior.
 
-## Execution Model
+## Content-addressable storage
+
+Hauchiwa utilizes a content-addressable storage (CAS) model for managing generated
+assets (like compiled JavaScript, CSS, or optimized images). This is handled via
+the Store struct passed to task callbacks.
+
+Instead of managing file names manually (e.g., bundle.js), tasks pass raw bytes
+to the store:
+
+```rust
+// In a task callback
+let path = store.save(my_data, "js")?;
+// returns "/hash/a1b2c3d4.js"
+```
+
+The store calculates a cryptographic hash of the content and saves the file to a
+global `/hash/` directory.
+
+### Benefits:
+
+1. Since the filename is derived from the content, any change in the content
+   results in a new filename. This allows browsers to cache assets indefinitely
+   (immutable caching).
+2. If multiple tasks produce the exact same output (e.g., the same utility
+   script used by multiple components), it is stored only once on the disk.
+3. Atomicity: Assets are fully written before they are referenced, preventing
+   race conditions where a browser might request a partially written file.
+
+## Execution model
 
 The execution engine (`executor.rs`) manages the lifecycle of the build:
 
-1. **Topological Sort:** The graph is analyzed to determine the execution order
-and detect cycles.
-2. **Parallel Execution:** Tasks are scheduled on a thread pool. A task is ready
-to run as soon as all its dependencies have finished.
-3. **Caching:** Results of tasks are cached in memory.
+1. The graph is analyzed to determine the execution order and detect cycles.
+2. Tasks are scheduled on a thread pool. A task is ready to run as soon as all
+   its dependencies have finished.
+3. Results of tasks are cached in memory.
 
 Because the build is a graph, `hauchiwa` can perform smart incremental builds.
 When a file changes:
 1. The system identifies which "Loader" task is responsible for that file.
 2. It marks that task and all its descendants as "dirty".
 3. Only the dirty subgraph is re-executed. Unaffected parts of the site are
-    preserved.
+   preserved.
