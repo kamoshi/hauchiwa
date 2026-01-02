@@ -255,6 +255,7 @@ mod live {
 
     use notify::RecursiveMode;
     use notify_debouncer_full::new_debouncer;
+    use petgraph::visit::IntoNodeReferences;
     use tungstenite::WebSocket;
 
     pub fn watch<G: Send + Sync>(site: &mut Website<G>, data: G) -> anyhow::Result<()> {
@@ -268,12 +269,12 @@ mod live {
             data,
         };
 
-        println!("Performing initial build...");
+        println!("[watch] performing initial build...");
         let (mut cache, pages, _diagnostics) = run_once_parallel(site, &globals)?;
-        println!("Collected {} pages", pages.len());
+        println!("[watch] collected {} pages", pages.len());
         crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
 
-        println!("Initial build complete. Watching for changes...");
+        println!("[watch] initial build completed, now watching for changes...");
         let clients = Arc::new(Mutex::new(vec![]));
 
         let _thread_i = new_thread_ws_incoming(tcp, clients.clone());
@@ -281,9 +282,16 @@ mod live {
 
         let (tx, rx) = std::sync::mpsc::channel();
         let mut debouncer = new_debouncer(Duration::from_millis(250), None, tx).unwrap();
-        debouncer
-            .watch(Utf8Path::new(".").as_std_path(), RecursiveMode::Recursive)
-            .unwrap();
+
+        for (_, task) in site.graph.node_references() {
+            for path in &task.get_watched() {
+                if let Ok(path) = path.as_std_path().canonicalize() {
+                    debouncer.watch(path, RecursiveMode::Recursive).unwrap();
+                } else {
+                    eprintln!("[watch] failed to resolve path: {}", &path);
+                };
+            }
+        }
 
         #[cfg(feature = "server")]
         let _thread_http = server::start();
@@ -307,7 +315,7 @@ mod live {
                     }
 
                     if !dirty_nodes.is_empty() {
-                        println!("Change detected. Re-running tasks...");
+                        println!("[watch] change detected, re-running tasks...");
                         let mut to_rerun = HashSet::new();
                         for start_node in &dirty_nodes {
                             let mut dfs = Dfs::new(&site.graph, *start_node);
@@ -320,10 +328,10 @@ mod live {
                             run_tasks_parallel(site, &globals, &mut cache, &to_rerun)?;
 
                         let pages = collect_pages(&cache);
-                        println!("Collected {} pages", pages.len());
+                        println!("[watch] collected {} pages", pages.len());
                         crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
                         tx_reload.send(()).unwrap();
-                        println!("Rebuild complete. Watching for changes...");
+                        println!("[watch] rebuild complete, watching for changes...");
                     }
                 }
                 Ok(Err(e)) => println!("watch error: {:?}", e),
@@ -408,7 +416,7 @@ mod server {
     pub fn start() -> thread::JoinHandle<Result<(), anyhow::Error>> {
         let port = 8080;
         let url = style(format!("http://localhost:{port}/")).yellow();
-        eprintln!("Starting a HTTP server on {url}");
+        eprintln!("[server] starting a HTTP server on {url}");
 
         thread::spawn(move || {
             tokio::runtime::Builder::new_current_thread()

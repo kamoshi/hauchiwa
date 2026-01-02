@@ -49,7 +49,11 @@ pub(crate) trait TypedTask<G: Send + Sync = ()>: Send + Sync {
     type Output: Send + Sync + 'static;
 
     fn get_name(&self) -> String;
+
     fn dependencies(&self) -> Vec<NodeIndex>;
+
+    fn get_watched(&self) -> Vec<camino::Utf8PathBuf>;
+
     fn execute(
         &self,
         context: &TaskContext<G>,
@@ -76,6 +80,8 @@ pub(crate) trait Task<G: Send + Sync = ()>: Send + Sync {
     fn is_output(&self) -> bool;
 
     fn dependencies(&self) -> Vec<NodeIndex>;
+
+    fn get_watched(&self) -> Vec<camino::Utf8PathBuf>;
 
     fn execute(
         &self,
@@ -114,6 +120,10 @@ where
 
     fn dependencies(&self) -> Vec<NodeIndex> {
         T::dependencies(self)
+    }
+
+    fn get_watched(&self) -> Vec<camino::Utf8PathBuf> {
+        T::get_watched(self)
     }
 
     fn execute(

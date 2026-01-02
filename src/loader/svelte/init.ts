@@ -31,7 +31,7 @@ const ssr = await build({
   platform: "browser",
   format: "esm",
   bundle: true,
-  minify: true,
+  minify: false,
   write: false,
   mainFields: ["svelte", "browser", "module", "main"],
   conditions: ["svelte", "browser", "production"],

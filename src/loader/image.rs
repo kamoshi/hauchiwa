@@ -72,7 +72,7 @@ where
     ) -> Result<Handle<Assets<Image>>, HauchiwaError> {
         Ok(self.add_task_opaque(GlobAssetsTask::new(
             path_glob.to_vec(),
-            path_glob.to_vec(),
+            vec![],
             move |_, _, input: Input| {
                 let path = build_image(&input)?;
 

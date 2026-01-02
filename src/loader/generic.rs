@@ -86,7 +86,7 @@ where
     {
         Ok(self.add_task_opaque(GlobAssetsTask::new(
             vec![path_glob],
-            vec![path_glob],
+            vec![],
             move |ctx, store, input| {
                 let path = input.path.clone();
                 let data = callback(ctx.env, store, input)?;

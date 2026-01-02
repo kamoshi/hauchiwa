@@ -3,6 +3,7 @@ import { build } from "npm:esbuild@0.27.2";
 const contents = `
   export * from "svelte";
   export * from "svelte/internal/client";
+  export * from "svelte/internal/flags/legacy";
   import "svelte/internal/disclose-version";
 `;
 
@@ -15,7 +16,7 @@ const bundle = await build({
   platform: "browser",
   format: "esm",
   bundle: true,
-  minify: true,
+  minify: false,
   write: false,
   mainFields: ["svelte", "browser", "module", "main"],
   conditions: ["svelte", "browser", "production"],

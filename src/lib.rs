@@ -189,6 +189,10 @@ where
         self.dependencies.dependencies()
     }
 
+    fn get_watched(&self) -> Vec<camino::Utf8PathBuf> {
+        vec![]
+    }
+
     fn execute(
         &self,
         context: &TaskContext<G>,

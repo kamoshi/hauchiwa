@@ -267,6 +267,13 @@ where
         vec![]
     }
 
+    fn get_watched(&self) -> Vec<camino::Utf8PathBuf> {
+        self.glob_watch
+            .iter()
+            .map(|pat| Utf8PathBuf::from(pat.as_str()))
+            .collect()
+    }
+
     fn execute(
         &self,
         context: &TaskContext<G>,
