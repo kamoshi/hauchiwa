@@ -253,6 +253,8 @@ mod live {
 
     use std::env;
 
+    use camino::Utf8PathBuf;
+    use glob::Pattern;
     use notify::RecursiveMode;
     use notify_debouncer_full::new_debouncer;
     use petgraph::visit::IntoNodeReferences;
@@ -283,14 +285,22 @@ mod live {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut debouncer = new_debouncer(Duration::from_millis(250), None, tx).unwrap();
 
+        let mut watched = HashSet::new();
+        let mut filters = HashSet::new();
         for (_, task) in site.graph.node_references() {
             for path in &task.get_watched() {
-                if let Ok(path) = path.as_std_path().canonicalize() {
-                    debouncer.watch(path, RecursiveMode::Recursive).unwrap();
+                if let Ok((path, pattern)) = resolve_watch_path(path) {
+                    watched.insert(path);
+                    filters.insert(pattern);
                 } else {
                     eprintln!("[watch] failed to resolve path: {}", &path);
                 };
             }
+        }
+
+        for path in watched {
+            println!("[watch] watching {}", path);
+            debouncer.watch(path, RecursiveMode::Recursive)?;
         }
 
         #[cfg(feature = "server")]
@@ -302,6 +312,10 @@ mod live {
                     let mut dirty_nodes = HashSet::new();
                     for de in events {
                         for path in &de.event.paths {
+                            if !filters.iter().any(|filter| filter.matches_path(path)) {
+                                continue;
+                            }
+
                             if let Some(path) = Utf8Path::from_path(path) {
                                 let path = path.strip_prefix(&pwd).unwrap();
                                 for index in site.graph.node_indices() {
@@ -402,6 +416,94 @@ mod live {
         });
 
         (tx, thread)
+    }
+
+    /// Splits a glob string into a canonicalized static root path (for
+    /// watching) and a compiled absolute Pattern (for matching).
+    pub fn resolve_watch_path(glob_str: impl AsRef<str>) -> anyhow::Result<(Utf8PathBuf, Pattern)> {
+        let path = Utf8Path::new(glob_str.as_ref());
+
+        // Split path into static root and dynamic suffix (containing wildcards)
+        let components: Vec<_> = path.components().collect();
+        let split_idx = components
+            .iter()
+            .position(|c| c.as_str().contains(['*', '?', '[']))
+            .unwrap_or(components.len());
+
+        let root_part: Utf8PathBuf = components.iter().take(split_idx).collect();
+        let suffix_part: Utf8PathBuf = components.iter().skip(split_idx).collect();
+
+        // Canonicalize the static root (must exist on disk)
+        let absolute_root = root_part.canonicalize_utf8()?;
+
+        // If the suffix is empty, we must check if the root is a file or
+        // directory. If it's a file, we watch its parent to ensure atomic
+        // writes are caught.
+        let (watch_root, match_pattern_str) =
+            if suffix_part.as_str().is_empty() && absolute_root.is_file() {
+                // Case: Concrete File (e.g., "README.md") -> Watch Parent, Match File
+                let parent = absolute_root
+                    .parent()
+                    .unwrap_or(&absolute_root)
+                    .to_path_buf();
+                (parent, absolute_root)
+            } else {
+                // Case: Directory (e.g., "src/") or Wildcard (e.g., "src/**/*.rs")
+                // -> Watch Dir, Match Pattern
+                let pattern_str = absolute_root.join(&suffix_part);
+                (absolute_root, pattern_str)
+            };
+
+        let pattern = Pattern::new(watch_root.join(match_pattern_str).as_str())?;
+
+        Ok((watch_root, pattern))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn test_concrete_file() {
+            // Input: "README.md" (concrete file)
+            let (watch, pattern) = resolve_watch_path("README.md").expect("Should resolve");
+
+            let cwd = Utf8PathBuf::try_from(std::env::current_dir().unwrap()).unwrap();
+
+            // Expectation:
+            // Watch: "$CWD/README.md"
+            // Pattern: "$CWD/README.md"
+            assert_eq!(watch.as_str(), cwd);
+            assert_eq!(pattern.as_str(), cwd.join("README.md"));
+        }
+
+        #[test]
+        fn test_concrete_directory() {
+            // Input: "src" (concrete directory)
+            let (watch, pattern) = resolve_watch_path("src").expect("Should resolve");
+
+            let cwd = Utf8PathBuf::try_from(std::env::current_dir().unwrap()).unwrap();
+
+            // Expectation:
+            // Watch: "src" directory
+            // Pattern: "src"
+            assert_eq!(watch.as_str(), cwd.join("src"));
+            assert_eq!(pattern.as_str(), cwd.join("src"));
+        }
+
+        #[test]
+        fn test_directory_wildcard() {
+            // Input: "src/**/*.rs"
+            let (watch, pattern) = resolve_watch_path("src/**/*.rs").expect("Should resolve");
+
+            let cwd = Utf8PathBuf::try_from(std::env::current_dir().unwrap()).unwrap();
+
+            // Expectation:
+            // Watch: "src" directory (the static part)
+            // Pattern: "src/**/*.rs"
+            assert_eq!(watch.as_str(), cwd.join("src/"));
+            assert_eq!(pattern.as_str(), cwd.join("src/**/*.rs"));
+        }
     }
 }
 
