@@ -34,13 +34,21 @@ pub enum SvelteError {
 
     #[error("Svelte runtime compilation failed: {0}")]
     Runtime(String),
+
+    #[error("Failed to parse Deno output: {0}")]
+    ParseOutput(String),
+}
+
+struct MappedJs {
+    code: String,
+    map: Vec<u8>,
 }
 
 // Update the Prerender type alias to use the specific error
 type Prerender<P> = Arc<dyn Fn(&P) -> Result<String, SvelteError> + Send + Sync>;
 
 // The LazyLock now holds a specific Result type.
-static RUNTIME: LazyLock<Result<String, SvelteError>> = LazyLock::new(compile_svelte_runtime);
+static RUNTIME: LazyLock<Result<MappedJs, SvelteError>> = LazyLock::new(compile_svelte_runtime);
 
 /// Represents a compiled Svelte component.
 ///
@@ -121,7 +129,11 @@ where
             vec![glob_watch],
             move |_, store, input| {
                 let runtime = match RUNTIME.as_ref() {
-                    Ok(runtime) => store.save(runtime.as_bytes(), "js")?,
+                    Ok(runtime) => {
+                        let srcmap = store.save(&runtime.map, "js.map")?;
+                        let script = format!("{}\n//# sourceMappingURL={}", runtime.code, srcmap);
+                        store.save(script.as_bytes(), "js")?
+                    }
                     Err(err) => return Err(SvelteError::Runtime(err.to_string()).into()),
                 };
 
@@ -136,8 +148,12 @@ where
                 let anchor = Hash32::hash(&server);
 
                 // Compile lean browser glue
-                let client = compile_svelte_init(&input.path, anchor)?;
-                let client = store.save(client.as_bytes(), "js")?;
+                let client = {
+                    let client = compile_svelte_init(&input.path, anchor)?;
+                    let srcmap = store.save(&client.map, "js.map")?;
+                    let script = format!("{}\n//# sourceMappingURL={}", client.code, srcmap);
+                    store.save(script.as_bytes(), "js")?
+                };
 
                 // With the compiled SSR script we can now pre-render the
                 // component on demand.
@@ -229,7 +245,7 @@ fn run_ssr(server: &str, props: &str) -> Result<String, SvelteError> {
     Ok(String::from_utf8(output.stdout)?)
 }
 
-fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> Result<String, SvelteError> {
+fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> Result<MappedJs, SvelteError> {
     const INIT: &[u8] = include_bytes!("./init.ts");
 
     let mut child = Command::new("deno")
@@ -259,10 +275,10 @@ fn compile_svelte_init(file: &Utf8Path, hash_class: Hash32) -> Result<String, Sv
         return Err(SvelteError::Deno(format!("Deno bundler failed:\n{stderr}")));
     }
 
-    Ok(String::from_utf8(output.stdout)?)
+    parse_deno_output(&output.stdout)
 }
 
-fn compile_svelte_runtime() -> Result<String, SvelteError> {
+fn compile_svelte_runtime() -> Result<MappedJs, SvelteError> {
     const RT: &[u8] = include_bytes!("./rt.ts");
 
     let mut child = Command::new("deno")
@@ -292,5 +308,40 @@ fn compile_svelte_runtime() -> Result<String, SvelteError> {
         )));
     }
 
-    Ok(String::from_utf8(output.stdout)?)
+    parse_deno_output(&output.stdout)
+}
+
+fn parse_deno_output(output: &[u8]) -> Result<MappedJs, SvelteError> {
+    // Header format: "CODE_LEN MAP_LEN\n"
+    let header_end = output
+        .iter()
+        .position(|&b| b == b'\n')
+        .ok_or_else(|| SvelteError::ParseOutput("Missing header newline".into()))?;
+
+    let header_str = String::from_utf8(output[0..header_end].to_vec())?;
+    let parts: Vec<&str> = header_str.split_whitespace().collect();
+
+    if parts.len() != 2 {
+        return Err(SvelteError::ParseOutput("Invalid header format".into()));
+    }
+
+    let code_len: usize = parts[0]
+        .parse()
+        .map_err(|_| SvelteError::ParseOutput("Invalid code length".into()))?;
+    let map_len: usize = parts[1]
+        .parse()
+        .map_err(|_| SvelteError::ParseOutput("Invalid map length".into()))?;
+
+    let body_start = header_end + 1;
+    if output.len() < body_start + code_len + map_len {
+        return Err(SvelteError::ParseOutput("Incomplete data".into()));
+    }
+
+    let code_bytes = &output[body_start..body_start + code_len];
+    let map_bytes = &output[body_start + code_len..body_start + code_len + map_len];
+
+    Ok(MappedJs {
+        code: String::from_utf8(code_bytes.to_vec())?,
+        map: map_bytes.to_vec(),
+    })
 }

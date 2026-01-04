@@ -16,11 +16,21 @@ const bundle = await build({
   platform: "browser",
   format: "esm",
   bundle: true,
-  minify: false,
+  minify: true,
   write: false,
+  outfile: "bundle.js",
+  sourcemap: "external",
   mainFields: ["svelte", "browser", "module", "main"],
   conditions: ["svelte", "browser", "production"],
 });
 
-const out = new TextEncoder().encode(bundle.outputFiles[0].text);
-await Deno.stdout.write(out);
+const script = bundle.outputFiles.find((f) => f.path.endsWith(".js"))!;
+const srcmap = bundle.outputFiles.find((f) => f.path.endsWith(".js.map"))!;
+
+const header = new TextEncoder().encode(
+  `${script.contents.length} ${srcmap.contents.length}\n`,
+);
+
+await Deno.stdout.write(header);
+await Deno.stdout.write(script.contents);
+await Deno.stdout.write(srcmap.contents);
