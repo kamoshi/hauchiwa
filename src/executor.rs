@@ -150,20 +150,37 @@ fn run_tasks_parallel<G: Send + Sync>(
                 };
 
                 let start_time = Instant::now();
-                let output = {
-                    let mut rt = Store::new();
 
+                // We use AssertUnwindSafe because we are confident that if the
+                // specific task logic panics, it won't corrupt the shared
+                // memory in a way that affects other threads (since we are
+                // using mostly cloned and/or immutable data).
+                let output = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut rt = Store::new();
                     task.execute(&context, &mut rt, &dependencies)
                         .map(|output| {
                             let mut imports = importmap.clone();
                             imports.merge(rt.imports);
-
                             NodeData {
                                 output,
                                 importmap: imports,
                             }
                         })
+                })) {
+                    Ok(result) => result,
+                    Err(panic) => {
+                        let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                            format!("Task panicked: {s}")
+                        } else if let Some(s) = panic.downcast_ref::<String>() {
+                            format!("Task panicked: {s}")
+                        } else {
+                            String::from("Task panicked with unknown payload")
+                        };
+
+                        Err(anyhow::anyhow!(msg))
+                    }
                 };
+
                 let elapsed = start_time.elapsed();
 
                 task_pb.finish_and_clear();
@@ -339,7 +356,13 @@ mod live {
                         }
 
                         let _diagnostics =
-                            run_tasks_parallel(site, &globals, &mut cache, &to_rerun)?;
+                            match run_tasks_parallel(site, &globals, &mut cache, &to_rerun) {
+                                Ok(res) => res,
+                                Err(e) => {
+                                    eprintln!("Error running tasks: {}", e);
+                                    continue;
+                                }
+                            };
 
                         let pages = collect_pages(&cache);
                         println!("[watch] collected {} pages", pages.len());
