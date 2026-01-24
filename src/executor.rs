@@ -496,10 +496,10 @@ mod live {
 
         let mut filtered = Vec::new();
         for path in paths {
-            if let Some(last) = filtered.last() {
-                if path.starts_with(last) {
-                    continue;
-                }
+            if let Some(last) = filtered.last()
+                && path.starts_with(last)
+            {
+                continue;
             }
             filtered.push(path);
         }
