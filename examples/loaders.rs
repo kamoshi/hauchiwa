@@ -65,7 +65,11 @@ fn main() -> anyhow::Result<()> {
     // D. Images
     // This loader finds images, optimizes them, and converts them to WebP.
     // The result is cached to speed up subsequent builds.
-    let images = config.load_images(&["examples/assets/images/*.ppm"])?;
+    let images = config
+        .load_images()
+        .format(hauchiwa::loader::image::ImageFormat::WebP)
+        .source("examples/assets/images/*.ppm")
+        .register()?;
 
     // -----------------------------------------------------------------------
     // 3. Define the build task
@@ -93,7 +97,7 @@ fn main() -> anyhow::Result<()> {
         // `images` is a Map, but we can search it using a glob pattern.
         if let Some(logo) = images.glob("**/logo.ppm")?.first() {
             // logo.1 contains the Image metadata (like its final path in `dist`).
-            html.push_str(&format!(r#"<img src="{}" alt="Logo">"#, logo.1.path));
+            html.push_str(&format!(r#"<img src="{}" alt="Logo">"#, logo.1.default));
         }
 
         html.push_str("<ul>");

@@ -11,7 +11,7 @@ repository  = "https://github.com/kamoshi/hauchiwa"
 [features]
 default     = ["grass", "image", "tokio", "live", "server"]
 grass       = ["dep:grass"]
-image       = ["dep:image", "dep:webp"]
+image       = ["dep:image"]
 tokio       = ["dep:tokio"]
 live        = ["dep:notify", "dep:notify-debouncer-full", "dep:tungstenite"]
 server      = ["tokio", "dep:axum", "dep:tower-http"]
@@ -48,10 +48,6 @@ features = ["random"]
 # Feature = "images"
 [dependencies.image]
 version = "0.25"
-optional = true
-
-[dependencies.webp]
-version = "0.3.1"
 optional = true
 
 # Feature = "reload"
