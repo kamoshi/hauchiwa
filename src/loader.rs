@@ -59,7 +59,7 @@ use crate::{
 /// # #[derive(Clone, serde::Deserialize)]
 /// # struct Post { title: String }
 /// # let mut config = Blueprint::<()>::default();
-/// # let posts = config.load_documents::<Post>("content/posts/*.md").unwrap();
+/// # let posts = config.load_documents::<Post>().source("content/posts/*.md").register().unwrap();
 /// # task!(config, |ctx, posts| {
 /// // Assuming `posts` is a Assets<Document<Post>>
 /// for post in posts.values() {

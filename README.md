@@ -79,7 +79,7 @@ fn main() -> anyhow::Result<()> {
 
     // 3. Add a loader to glob markdown files
     // `posts` is a Handle<Assets<Document<Post>>>
-    let posts = config.load_documents::<Post>("content/**/*.md")?;
+    let posts = config.load_documents::<Post>().source("content/**/*.md").register()?;
 
     // 4. Define a task to render pages
     // We declare that this task depends on `posts`.

@@ -45,7 +45,10 @@ fn main() -> anyhow::Result<()> {
     // -----------------------------------------------------------------------
     // We start by loading the raw content. This handle `posts` will be
     // injected into multiple downstream tasks.
-    let posts = config.load_documents::<Post>("examples/assets/content/*.md")?;
+    let posts = config
+        .load_documents::<Post>()
+        .source("examples/assets/content/*.md")
+        .register()?;
 
     // -----------------------------------------------------------------------
     // 2. Create taxonomy

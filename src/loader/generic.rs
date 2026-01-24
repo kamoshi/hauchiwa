@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
@@ -35,6 +37,8 @@ pub struct Document<T> {
     pub path: Utf8PathBuf,
     /// The body content of the file (excluding frontmatter).
     pub body: String,
+    /// The shared offset path used to calculate the href.
+    pub offset: Option<Arc<str>>,
 }
 
 impl<T> Document<T> {
@@ -58,13 +62,17 @@ impl<T> Document<T> {
 
     /// Generates the web-accessible URL path (href).
     ///
-    /// This strips the `dir` prefix, removes extensions, handles `index`
+    /// This strips the `offset` prefix (if present), removes extensions, handles `index`
     /// removal, and ensures a leading and trailing slash (directory style).
-    pub fn href(&self, dir: impl AsRef<Utf8Path>) -> String {
-        let path = self
-            .path
-            .strip_prefix(dir.as_ref().as_std_path())
-            .unwrap_or(&self.path);
+    pub fn href(&self) -> String {
+        let path = if let Some(offset) = &self.offset {
+            self.path
+                .strip_prefix(offset.as_ref())
+                .unwrap_or(&self.path)
+        } else {
+            &self.path
+        };
+
         let mut url = String::from("/");
 
         // If it's not index.md, we need to append the stem (e.g., 'some-file')
@@ -97,15 +105,86 @@ impl<T> Document<T> {
     /// Calculates the final output file path for the built artifact.
     ///
     /// This converts both `foo.md` and `foo/index.md` into `dist/.../foo/index.html`.
-    pub fn dist_path(&self, src: impl AsRef<Utf8Path>, out: impl AsRef<Utf8Path>) -> Utf8PathBuf {
+    pub fn dist_path(&self, out: impl AsRef<Utf8Path>) -> Utf8PathBuf {
         // Remove leading slash to join correctly with dist_dir
         out.as_ref()
-            .join(self.href(src).trim_start_matches('/'))
+            .join(self.href().trim_start_matches('/'))
             .join("index.html")
     }
 
     pub fn output(&self) -> OutputBuilder {
         Output::mapper(&self.path)
+    }
+}
+
+/// A builder for configuring the document loader task.
+pub struct DocumentLoader<'a, G, R>
+where
+    G: Send + Sync,
+    R: DeserializeOwned + Send + Sync + 'static,
+{
+    blueprint: &'a mut Blueprint<G>,
+    sources: Vec<&'static str>,
+    offset: Option<String>,
+    _phantom: std::marker::PhantomData<R>,
+}
+
+impl<'a, G, R> DocumentLoader<'a, G, R>
+where
+    G: Send + Sync + 'static,
+    R: DeserializeOwned + Send + Sync + 'static,
+{
+    fn new(blueprint: &'a mut Blueprint<G>) -> Self {
+        Self {
+            blueprint,
+            sources: Vec::new(),
+            offset: None,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Adds a glob pattern to find documents.
+    pub fn source(mut self, glob: &'static str) -> Self {
+        self.sources.push(glob);
+        self
+    }
+
+    /// Sets the offset path for the documents.
+    ///
+    /// This path will be stripped from the file path when calculating the `href`.
+    pub fn offset(mut self, offset: impl Into<String>) -> Self {
+        self.offset = Some(offset.into());
+        self
+    }
+
+    /// Registers the task with the Blueprint.
+    pub fn register(self) -> Result<Handle<super::Assets<Document<R>>>, HauchiwaError> {
+        let offset = self.offset.map(Arc::from);
+
+        Ok(self.blueprint.add_task_opaque(GlobAssetsTask::new(
+            self.sources.clone(),
+            self.sources,
+            move |_, _, input: Input| {
+                let bytes = input
+                    .read()
+                    .map_err(|e| FrontmatterError::Parse(e.into()))?;
+
+                let data = std::str::from_utf8(&bytes).map_err(FrontmatterError::Utf8)?;
+
+                let (metadata, content) =
+                    super::parse_yaml::<R>(data).map_err(FrontmatterError::Parse)?;
+
+                Ok((
+                    input.path.clone(),
+                    Document {
+                        path: input.path,
+                        metadata,
+                        body: content,
+                        offset: offset.clone(),
+                    },
+                ))
+            },
+        )?))
     }
 }
 
@@ -169,25 +248,14 @@ where
         )?))
     }
 
-    /// Registers a content loader that parses frontmatter.
+    /// Starts configuring a document loader task.
     ///
     /// This is the primary way to load Markdown (or other text) files that contain
-    /// YAML frontmatter. The loader will:
-    /// 1. Read the file as UTF-8.
-    /// 2. Extract and parse the YAML frontmatter into type `R`.
-    /// 3. Return the frontmatter and the remaining body content.
+    /// YAML frontmatter.
     ///
     /// # Type Parameters
     ///
     /// * `R`: The type to deserialize the frontmatter into. Must implement [`serde::Deserialize`].
-    ///
-    /// # Arguments
-    ///
-    /// * `path_glob` - A glob pattern to find files (e.g., `"content/posts/**/*.md"`).
-    ///
-    /// # Returns
-    ///
-    /// A [`Handle`] to a [`crate::loader::Assets<Document<R>>`].
     ///
     /// # Example
     ///
@@ -201,38 +269,15 @@ where
     /// # let mut config = hauchiwa::Blueprint::<()>::new();
     /// // Load all markdown files in the posts directory, parsing their
     /// // frontmatter into PostMeta structs.
-    /// let posts = config.load_documents::<Post>("content/posts/*.md");
+    /// let posts = config.load_documents::<Post>()
+    ///     .source("content/posts/*.md")
+    ///     .register();
     /// ```
-    pub fn load_documents<R>(
-        &mut self,
-        path_glob: &'static str,
-    ) -> Result<Handle<super::Assets<Document<R>>>, HauchiwaError>
+    pub fn load_documents<R>(&mut self) -> DocumentLoader<'_, G, R>
     where
         G: Send + Sync + 'static,
         R: DeserializeOwned + Send + Sync + 'static,
     {
-        Ok(self.add_task_opaque(GlobAssetsTask::new(
-            vec![path_glob],
-            vec![path_glob],
-            move |_, _, input: Input| {
-                let bytes = input
-                    .read()
-                    .map_err(|e| FrontmatterError::Parse(e.into()))?;
-
-                let data = std::str::from_utf8(&bytes).map_err(FrontmatterError::Utf8)?;
-
-                let (metadata, content) =
-                    super::parse_yaml::<R>(data).map_err(FrontmatterError::Parse)?;
-
-                Ok((
-                    input.path.clone(),
-                    Document {
-                        path: input.path,
-                        metadata,
-                        body: content,
-                    },
-                ))
-            },
-        )?))
+        DocumentLoader::new(self)
     }
 }

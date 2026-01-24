@@ -57,7 +57,10 @@ fn main() -> anyhow::Result<()> {
     // -------------------------------------------------------------------------
     // We scan for all markdown files. In hauchiwa, this returns a Handle
     // to a `HashMap<PathBuf, Document<Frontmatter>>`.
-    let content = config.load_documents::<Frontmatter>("examples/assets/content/*.md")?;
+    let content = config
+        .load_documents::<Frontmatter>()
+        .source("examples/assets/content/*.md")
+        .register()?;
 
     // -------------------------------------------------------------------------
     // 2. Styles

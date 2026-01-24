@@ -43,7 +43,10 @@ fn main() -> anyhow::Result<()> {
     // A. Markdown Documents
     // We tell Hauchiwa to look for `.md` files in the content folder.
     // We explicitly pass `<Post>` so it knows how to parse the frontmatter.
-    let posts = config.load_documents::<Post>("examples/assets/content/*.md")?;
+    let posts = config
+        .load_documents::<Post>()
+        .source("examples/assets/content/*.md")
+        .register()?;
 
     // B. Styles
     // We specify an "entry point" (main.scss) which imports other files,

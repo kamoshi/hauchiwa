@@ -405,8 +405,8 @@ where
 /// ```rust,no_run
 /// # use hauchiwa::{Blueprint, task};
 /// # let mut config = Blueprint::<()>::default();
-/// # let dep1 = config.load_documents::<()>("content/posts/*.md").unwrap();
-/// # let dep2 = config.load_documents::<()>("content/posts/*.md").unwrap();
+/// # let dep1 = config.load_documents::<()>().source("content/posts/*.md").register().unwrap();
+/// # let dep2 = config.load_documents::<()>().source("content/posts/*.md").register().unwrap();
 /// task!(config, |context, dep1, dep2| {
 ///     // body
 ///     # Ok(())
