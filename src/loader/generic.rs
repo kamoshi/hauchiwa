@@ -32,13 +32,15 @@ pub enum FrontmatterError {
 #[derive(Clone)]
 pub struct Document<T> {
     /// The parsed metadata (frontmatter).
-    pub metadata: T,
+    pub metadata: Box<T>,
     /// The original path of content file.
     pub path: Utf8PathBuf,
     /// The body content of the file (excluding frontmatter).
     pub body: String,
     /// The shared offset path used to calculate the href.
     pub offset: Option<Arc<str>>,
+    /// The web-accessible URL path.
+    pub href: String,
 }
 
 impl<T> Document<T> {
@@ -60,55 +62,13 @@ impl<T> Document<T> {
         }
     }
 
-    /// Generates the web-accessible URL path (href).
-    ///
-    /// This strips the `offset` prefix (if present), removes extensions, handles `index`
-    /// removal, and ensures a leading and trailing slash (directory style).
-    pub fn href(&self) -> String {
-        let path = if let Some(offset) = &self.offset {
-            self.path
-                .strip_prefix(offset.as_ref())
-                .unwrap_or(&self.path)
-        } else {
-            &self.path
-        };
-
-        let mut url = String::from("/");
-
-        // If it's not index.md, we need to append the stem (e.g., 'some-file')
-        // If it IS index.md, we only want the parent directory structure.
-        if let Some(parent) = path.parent() {
-            url.push_str(parent.as_str());
-        }
-
-        let stem = path.file_stem().unwrap_or_default();
-        if stem != "index" {
-            if !url.ends_with('/') {
-                url.push('/');
-            }
-            url.push_str(stem);
-        }
-
-        // Ensure trailing slash for directory-style routing
-        if !url.ends_with('/') {
-            url.push('/');
-        }
-
-        // Handling edge case: double slash at start if parent was empty
-        if url.starts_with("//") {
-            url.replace("//", "/")
-        } else {
-            url
-        }
-    }
-
     /// Calculates the final output file path for the built artifact.
     ///
     /// This converts both `foo.md` and `foo/index.md` into `dist/.../foo/index.html`.
     pub fn dist_path(&self, out: impl AsRef<Utf8Path>) -> Utf8PathBuf {
         // Remove leading slash to join correctly with dist_dir
         out.as_ref()
-            .join(self.href().trim_start_matches('/'))
+            .join(self.href.trim_start_matches('/'))
             .join("index.html")
     }
 
@@ -174,13 +134,16 @@ where
                 let (metadata, content) =
                     super::parse_yaml::<R>(data).map_err(FrontmatterError::Parse)?;
 
+                let href = compute_href(&input.path, offset.as_deref());
+
                 Ok((
                     input.path.clone(),
                     Document {
+                        metadata: Box::new(metadata),
                         path: input.path,
-                        metadata,
                         body: content,
                         offset: offset.clone(),
+                        href,
                     },
                 ))
             },
@@ -279,5 +242,89 @@ where
         R: DeserializeOwned + Send + Sync + 'static,
     {
         DocumentLoader::new(self)
+    }
+}
+
+/// Helper function to compute the web-accessible URL path (href).
+fn compute_href(path: &Utf8Path, offset: Option<&str>) -> String {
+    let path = if let Some(offset) = offset {
+        path.strip_prefix(offset).unwrap_or(path)
+    } else {
+        path
+    };
+
+    let mut url = String::from("/");
+
+    // If it's not index.md, we need to append the stem (e.g., 'some-file')
+    // If it IS index.md, we only want the parent directory structure.
+    if let Some(parent) = path.parent() {
+        url.push_str(parent.as_str());
+    }
+
+    let stem = path.file_stem().unwrap_or_default();
+    if stem != "index" {
+        if !url.ends_with('/') {
+            url.push('/');
+        }
+        url.push_str(stem);
+    }
+
+    // Ensure trailing slash for directory-style routing
+    if !url.ends_with('/') {
+        url.push('/');
+    }
+
+    // Handling edge case: double slash at start if parent was empty
+    if url.starts_with("//") {
+        url.replace("//", "/")
+    } else {
+        url
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compute_href() {
+        // Simple file
+        assert_eq!(
+            compute_href(Utf8Path::new("content/posts/hello.md"), Some("content")),
+            "/posts/hello/"
+        );
+
+        // Index file
+        assert_eq!(
+            compute_href(Utf8Path::new("content/posts/index.md"), Some("content")),
+            "/posts/"
+        );
+
+        // No offset
+        assert_eq!(
+            compute_href(Utf8Path::new("posts/hello.md"), None),
+            "/posts/hello/"
+        );
+
+        // Root index
+        assert_eq!(compute_href(Utf8Path::new("index.md"), None), "/");
+
+        // Double slash edge case (e.g. parent is empty after offset strip, but it's not index)
+        assert_eq!(
+            compute_href(Utf8Path::new("content/hello.md"), Some("content")),
+            "/hello/"
+        );
+
+        // Double slash edge case with index
+        assert_eq!(
+            compute_href(Utf8Path::new("content/index.md"), Some("content")),
+            "/"
+        );
+
+        // Deeply nested
+        assert_eq!(
+            compute_href(Utf8Path::new("content/a/b/c.md"), Some("content")),
+            "/a/b/c/"
+        );
     }
 }

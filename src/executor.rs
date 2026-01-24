@@ -315,6 +315,9 @@ mod live {
             }
         }
 
+        // Collapse watched paths to reduce the number of watches
+        let watched = collapse_watch_paths(watched);
+
         for path in watched {
             println!("[watch] watching {}", path);
             debouncer.watch(path, RecursiveMode::Recursive)?;
@@ -482,6 +485,28 @@ mod live {
         Ok((watch_root, pattern))
     }
 
+    /// Reduces a set of paths to the minimal set of watch roots.
+    ///
+    /// If we watch `/a` and `/a/b`, we only need to watch `/a` because
+    /// the watcher is recursive. This function sorts the paths and filters
+    /// out any path that is a subdirectory of a previously accepted path.
+    fn collapse_watch_paths(paths: HashSet<Utf8PathBuf>) -> Vec<Utf8PathBuf> {
+        let mut paths: Vec<_> = paths.into_iter().collect();
+        paths.sort();
+
+        let mut filtered = Vec::new();
+        for path in paths {
+            if let Some(last) = filtered.last() {
+                if path.starts_with(last) {
+                    continue;
+                }
+            }
+            filtered.push(path);
+        }
+
+        filtered
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -526,6 +551,60 @@ mod live {
             // Pattern: "src/**/*.rs"
             assert_eq!(watch.as_str(), cwd.join("src/"));
             assert_eq!(pattern.as_str(), cwd.join("src/**/*.rs"));
+        }
+
+        #[test]
+        fn test_collapse_watch_paths() {
+            let mut paths = HashSet::new();
+            paths.insert(Utf8PathBuf::from("/a"));
+            paths.insert(Utf8PathBuf::from("/a/b"));
+            paths.insert(Utf8PathBuf::from("/a/b/c"));
+            paths.insert(Utf8PathBuf::from("/b"));
+            paths.insert(Utf8PathBuf::from("/c/d"));
+
+            let collapsed = collapse_watch_paths(paths);
+
+            // Expected: /a, /b, /c/d
+            // /a/b and /a/b/c are covered by /a.
+            assert_eq!(
+                collapsed,
+                vec![
+                    Utf8PathBuf::from("/a"),
+                    Utf8PathBuf::from("/b"),
+                    Utf8PathBuf::from("/c/d")
+                ]
+            );
+        }
+
+        #[test]
+        fn test_collapse_watch_paths_siblings() {
+            let mut paths = HashSet::new();
+            paths.insert(Utf8PathBuf::from("/a/x"));
+            paths.insert(Utf8PathBuf::from("/a/y"));
+
+            let collapsed = collapse_watch_paths(paths);
+
+            // Expected: /a/x, /a/y (neither is a parent of the other)
+            assert_eq!(
+                collapsed,
+                vec![Utf8PathBuf::from("/a/x"), Utf8PathBuf::from("/a/y")]
+            );
+        }
+
+        #[test]
+        fn test_collapse_watch_paths_similar_names() {
+            let mut paths = HashSet::new();
+            paths.insert(Utf8PathBuf::from("/foo"));
+            paths.insert(Utf8PathBuf::from("/foo-bar"));
+
+            let collapsed = collapse_watch_paths(paths);
+
+            // Expected: /foo, /foo-bar
+            // /foo-bar is not a subdirectory of /foo
+            assert_eq!(
+                collapsed,
+                vec![Utf8PathBuf::from("/foo"), Utf8PathBuf::from("/foo-bar")]
+            );
         }
     }
 }
