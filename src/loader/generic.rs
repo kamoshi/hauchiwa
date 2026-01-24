@@ -72,10 +72,7 @@ impl DocumentMeta {
     ///
     /// This converts both `foo.md` and `foo/index.md` into `dist/.../foo/index.html`.
     pub fn dist_path(&self, out: impl AsRef<Utf8Path>) -> Utf8PathBuf {
-        // Remove leading slash to join correctly with dist_dir
-        out.as_ref()
-            .join(self.href.trim_start_matches('/'))
-            .join("index.html")
+        crate::page::href_to_dist(&self.href, out)
     }
 
     /// Generates a glob pattern for assets relative to this document.
@@ -85,7 +82,7 @@ impl DocumentMeta {
     /// - If the document is `posts/hello/index.md`, it also returns `"posts/hello/*.bib"`.
     pub fn assets(&self, pattern: &str) -> String {
         // Get the bundle scope (base directory) of the document
-        let base = crate::page::to_slug(&self.path);
+        let base = crate::page::source_to_bundle(&self.path);
 
         // Join the pattern with the base directory
         base.join(pattern).to_string()
@@ -102,7 +99,7 @@ impl DocumentMeta {
     /// - Result: `content/posts/world.md`
     pub fn resolve(&self, path: impl AsRef<str>) -> Utf8PathBuf {
         // Get the bundle scope (base directory) of the document
-        let base = crate::page::to_slug(&self.path);
+        let base = crate::page::source_to_bundle(&self.path);
 
         // Join the relative path (e.g. "../foo.png")
         let joined = base.join(path.as_ref());
@@ -175,7 +172,7 @@ where
                 let (metadata, content) =
                     super::parse_yaml::<R>(data).map_err(FrontmatterError::Parse)?;
 
-                let href = compute_href(&input.path, offset.as_deref());
+                let href = crate::page::source_to_href(&input.path, offset.as_deref());
 
                 Ok((
                     input.path.clone(),
@@ -285,89 +282,5 @@ where
         R: DeserializeOwned + Send + Sync + 'static,
     {
         DocumentLoader::new(self)
-    }
-}
-
-/// Helper function to compute the web-accessible URL path (href).
-fn compute_href(path: &Utf8Path, offset: Option<&str>) -> String {
-    let path = if let Some(offset) = offset {
-        path.strip_prefix(offset).unwrap_or(path)
-    } else {
-        path
-    };
-
-    let mut url = String::from("/");
-
-    // If it's not index.md, we need to append the stem (e.g., 'some-file')
-    // If it IS index.md, we only want the parent directory structure.
-    if let Some(parent) = path.parent() {
-        url.push_str(parent.as_str());
-    }
-
-    let stem = path.file_stem().unwrap_or_default();
-    if stem != "index" {
-        if !url.ends_with('/') {
-            url.push('/');
-        }
-        url.push_str(stem);
-    }
-
-    // Ensure trailing slash for directory-style routing
-    if !url.ends_with('/') {
-        url.push('/');
-    }
-
-    // Handling edge case: double slash at start if parent was empty
-    if url.starts_with("//") {
-        url.replace("//", "/")
-    } else {
-        url
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_compute_href() {
-        // Simple file
-        assert_eq!(
-            compute_href(Utf8Path::new("content/posts/hello.md"), Some("content")),
-            "/posts/hello/"
-        );
-
-        // Index file
-        assert_eq!(
-            compute_href(Utf8Path::new("content/posts/index.md"), Some("content")),
-            "/posts/"
-        );
-
-        // No offset
-        assert_eq!(
-            compute_href(Utf8Path::new("posts/hello.md"), None),
-            "/posts/hello/"
-        );
-
-        // Root index
-        assert_eq!(compute_href(Utf8Path::new("index.md"), None), "/");
-
-        // Double slash edge case (e.g. parent is empty after offset strip, but it's not index)
-        assert_eq!(
-            compute_href(Utf8Path::new("content/hello.md"), Some("content")),
-            "/hello/"
-        );
-
-        // Double slash edge case with index
-        assert_eq!(
-            compute_href(Utf8Path::new("content/index.md"), Some("content")),
-            "/"
-        );
-
-        // Deeply nested
-        assert_eq!(
-            compute_href(Utf8Path::new("content/a/b/c.md"), Some("content")),
-            "/a/b/c/"
-        );
     }
 }

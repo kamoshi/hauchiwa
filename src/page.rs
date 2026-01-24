@@ -6,8 +6,12 @@
 use camino::Utf8Component;
 use camino::{Utf8Path, Utf8PathBuf};
 
-/// index component from path
-pub(crate) fn to_slug(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
+/// Helper function to compute the bundle scope path.
+///
+/// It returns the "folder" that owns this piece of content.
+/// - content/foo/index.md -> content/foo
+/// - content/foo/bar.md -> content/foo/bar
+pub fn source_to_bundle(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     let path = path.as_ref().with_extension("");
 
     // Check if the last component of the path is exactly "index.*"
@@ -26,13 +30,63 @@ pub(crate) fn to_slug(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     path.to_path_buf()
 }
 
+/// Helper function to compute the web-accessible URL path (href).
+///
+/// It strips the offset and creates a pretty URL (ending in `/`).
+pub fn source_to_href(path: &Utf8Path, offset: Option<&str>) -> String {
+    let path = if let Some(offset) = offset {
+        path.strip_prefix(offset).unwrap_or(path)
+    } else {
+        path
+    };
+
+    let mut url = String::from("/");
+
+    // If it's not index.md, we need to append the stem (e.g., 'some-file')
+    // If it IS index.md, we only want the parent directory structure.
+    if let Some(parent) = path.parent() {
+        url.push_str(parent.as_str());
+    }
+
+    let stem = path.file_stem().unwrap_or_default();
+    if stem != "index" {
+        if !url.ends_with('/') {
+            url.push('/');
+        }
+        url.push_str(stem);
+    }
+
+    // Ensure trailing slash for directory-style routing
+    if !url.ends_with('/') {
+        url.push('/');
+    }
+
+    // Handling edge case: double slash at start if parent was empty
+    if url.starts_with("//") {
+        url.replace("//", "/")
+    } else {
+        url
+    }
+}
+
+/// Helper function to compute the dist path from the href.
+///
+/// It appends `index.html` to the href (relative to dist root).
+pub fn href_to_dist(href: &str, dist_root: impl AsRef<Utf8Path>) -> Utf8PathBuf {
+    // Remove leading slash to join correctly with dist_dir
+    dist_root
+        .as_ref()
+        .join(href.trim_start_matches('/'))
+        .join("index.html")
+}
+
 /// Normalize a path, removing things like `.` and `..`.
 ///
-/// CAUTION: This does not resolve symlinks (unlike
-/// [`std::fs::canonicalize`]). This may cause incorrect or surprising
-/// behavior at times. This should be used carefully. Unfortunately,
-/// [`std::fs::canonicalize`] can be hard to use correctly, since it can often
-/// fail, or on Windows returns annoying device paths.
+/// CAUTION: This does not resolve symlinks (unlike [`std::fs::canonicalize`]).
+/// This may cause incorrect or surprising behavior at times. This should be
+/// used carefully. Unfortunately, [`std::fs::canonicalize`] can be hard to use
+/// correctly, since it can often fail, or on Windows returns annoying device
+/// paths.
 ///
 /// Adapted from
 /// <https://github.com/rust-lang/cargo/blob/f7acf448fc127df9a77c52cc2bba027790ac4931/crates/cargo-util/src/paths.rs#L76-L116>
@@ -70,13 +124,7 @@ pub(crate) fn normalize_path(path: &Utf8Path) -> Utf8PathBuf {
     ret
 }
 
-pub fn normalize_prefixed(prefix: &str, path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
-    let path = path.as_ref().strip_prefix(prefix).unwrap_or(path.as_ref());
-
-    normalize(path)
-}
-
-pub(crate) fn normalize(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
+fn normalize_path_html(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     let mut buffer = path.as_ref().to_path_buf();
 
     if let Some(file_name) = buffer.file_name() {
@@ -91,21 +139,6 @@ pub(crate) fn normalize(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     }
 
     buffer
-}
-
-pub fn absolutize(prefix: &str, path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
-    let path = path.as_ref().strip_prefix(prefix).unwrap_or(path.as_ref());
-    let path = Utf8Path::new("/").join(path);
-
-    if let Some(file_name) = path.file_name() {
-        if file_name == "index" || file_name.starts_with("index.") {
-            path.parent().unwrap().to_path_buf()
-        } else {
-            path.with_extension("")
-        }
-    } else {
-        path
-    }
 }
 
 /// Represents a single output file to be written to the `dist` directory.
@@ -136,7 +169,7 @@ impl Output {
     /// - `foo/index.html` remains `foo/index.html`
     pub fn html(path: impl AsRef<Utf8Path>, content: impl Into<String>) -> Self {
         Self {
-            url: normalize(path),
+            url: normalize_path_html(path),
             content: content.into(),
         }
     }
@@ -182,7 +215,9 @@ impl OutputBuilder {
     /// Applies "Pretty URL" formatting (slugification).
     /// `posts/hello.md` -> `posts/hello/index.html`
     pub fn html(mut self) -> Self {
-        self.current = to_slug(&self.current).join("index").with_extension("html");
+        self.current = source_to_bundle(&self.current)
+            .join("index")
+            .with_extension("html");
         self
     }
 
@@ -198,7 +233,7 @@ impl OutputBuilder {
         let url = if (self.current.extension() == Some("html"))
             || self.current.file_name() == Some("index")
         {
-            normalize(&self.current)
+            normalize_path_html(&self.current)
         } else {
             // For non-html assets, normalize just cleans . and ..
             normalize_path(&self.current)
@@ -232,4 +267,87 @@ pub(crate) fn save_pages_to_dist(pages: &[Output]) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_source_to_href() {
+        // Simple file
+        assert_eq!(
+            source_to_href(Utf8Path::new("content/posts/hello.md"), Some("content")),
+            "/posts/hello/"
+        );
+
+        // Index file
+        assert_eq!(
+            source_to_href(Utf8Path::new("content/posts/index.md"), Some("content")),
+            "/posts/"
+        );
+
+        // No offset
+        assert_eq!(
+            source_to_href(Utf8Path::new("posts/hello.md"), None),
+            "/posts/hello/"
+        );
+
+        // Root index
+        assert_eq!(source_to_href(Utf8Path::new("index.md"), None), "/");
+
+        // Double slash edge case (e.g. parent is empty after offset strip, but it's not index)
+        assert_eq!(
+            source_to_href(Utf8Path::new("content/hello.md"), Some("content")),
+            "/hello/"
+        );
+
+        // Double slash edge case with index
+        assert_eq!(
+            source_to_href(Utf8Path::new("content/index.md"), Some("content")),
+            "/"
+        );
+
+        // Deeply nested
+        assert_eq!(
+            source_to_href(Utf8Path::new("content/a/b/c.md"), Some("content")),
+            "/a/b/c/"
+        );
+    }
+
+    #[test]
+    fn test_source_to_bundle() {
+        // Standard file
+        assert_eq!(
+            source_to_bundle("content/foo/bar.md"),
+            Utf8Path::new("content/foo/bar")
+        );
+
+        // Index file
+        assert_eq!(
+            source_to_bundle("content/foo/index.md"),
+            Utf8Path::new("content/foo")
+        );
+
+        // Root index
+        assert_eq!(source_to_bundle("index.md"), Utf8Path::new(""));
+    }
+
+    #[test]
+    fn test_href_to_dist() {
+        // Standard href
+        assert_eq!(
+            href_to_dist("/posts/hello/", "dist"),
+            Utf8Path::new("dist/posts/hello/index.html")
+        );
+
+        // Root href
+        assert_eq!(href_to_dist("/", "dist"), Utf8Path::new("dist/index.html"));
+
+        // Nested href
+        assert_eq!(
+            href_to_dist("/a/b/c/", "dist"),
+            Utf8Path::new("dist/a/b/c/index.html")
+        );
+    }
 }
