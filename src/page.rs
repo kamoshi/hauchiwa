@@ -195,7 +195,7 @@ impl OutputBuilder {
     /// Finalizes the path and attaches content to produce the Output.
     pub fn content(self, body: impl Into<String>) -> Output {
         // If it's HTML, we ensure it ends in index.html for the server
-        let url = if self.current.extension().map_or(false, |e| e == "html")
+        let url = if (self.current.extension() == Some("html"))
             || self.current.file_name() == Some("index")
         {
             normalize(&self.current)

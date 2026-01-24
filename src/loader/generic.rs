@@ -63,7 +63,7 @@ impl<T> Document<T> {
     pub fn href(&self, dir: impl AsRef<Utf8Path>) -> String {
         let path = self
             .path
-            .strip_prefix(&dir.as_ref().as_std_path())
+            .strip_prefix(dir.as_ref().as_std_path())
             .unwrap_or(&self.path);
         let mut url = String::from("/");
 
