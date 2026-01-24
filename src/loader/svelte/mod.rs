@@ -73,60 +73,57 @@ where
     pub runtime: Script,
 }
 
-impl<G> Blueprint<G>
+/// A builder for configuring the Svelte loader task.
+pub struct SvelteLoader<'a, G, P>
+where
+    G: Send + Sync,
+    P: Clone + DeserializeOwned + Serialize + 'static,
+{
+    blueprint: &'a mut Blueprint<G>,
+    entry_globs: Vec<&'static str>,
+    watch_globs: Vec<&'static str>,
+    _phantom: std::marker::PhantomData<P>,
+}
+
+impl<'a, G, P> SvelteLoader<'a, G, P>
 where
     G: Send + Sync + 'static,
+    P: Clone + DeserializeOwned + Serialize + 'static,
 {
-    /// Compiles Svelte components for Server-Side Rendering (SSR) and client-side hydration.
+    fn new(blueprint: &'a mut Blueprint<G>) -> Self {
+        Self {
+            blueprint,
+            entry_globs: Vec::new(),
+            watch_globs: Vec::new(),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Adds a glob pattern for the entry components (e.g., "components/Button.svelte").
+    pub fn entry(mut self, glob: &'static str) -> Self {
+        self.entry_globs.push(glob);
+        self
+    }
+
+    /// Adds a glob pattern for files to watch (e.g., "components/**/*.svelte").
     ///
-    /// This loader uses Deno to compile Svelte components found by the entry glob.
-    /// It produces an SSR-capable script and a client-side hydration script.
-    ///
-    /// The [`Svelte`] object returned in [`crate::loader::Assets`] provides an `prerender` function (for SSR)
-    /// and handles to the client-side JavaScript assets.
-    ///
-    /// **Note:** This loader requires the `deno` binary to be available in the system PATH.
-    ///
-    /// # Generics
-    ///
-    /// * `P`: The type of the properties (props) that the Svelte component accepts.
-    ///   This type must be serializable and deserializable.
-    ///
-    /// # Arguments
-    ///
-    /// * `glob_entry`: Glob pattern for the entry components (e.g., "components/Button.svelte").
-    /// * `glob_watch`: Glob pattern for files to watch (e.g., "components/**/*.svelte").
-    ///
-    /// # Returns
-    ///
-    /// A [`Handle`] to a [`crate::loader::Assets`] mapping original file paths to [`Svelte<P>`] objects.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # let mut config = hauchiwa::Blueprint::<()>::new();
-    ///
-    /// #[derive(serde::Serialize, serde::Deserialize, Clone)]
-    /// struct ButtonProps {
-    ///     label: String,
-    /// }
-    ///
-    /// let buttons = config.load_svelte::<ButtonProps>(
-    ///     "components/Button.svelte",
-    ///     "components/**/*.svelte"
-    /// );
-    /// ```
-    pub fn load_svelte<P>(
-        &mut self,
-        glob_entry: &'static str,
-        glob_watch: &'static str,
-    ) -> Result<Handle<super::Assets<Svelte<P>>>, HauchiwaError>
-    where
-        P: Clone + DeserializeOwned + Serialize + 'static,
-    {
-        Ok(self.add_task_opaque(GlobAssetsTask::new(
-            vec![glob_entry],
-            vec![glob_watch],
+    /// If never called, defaults to watching the entry globs.
+    pub fn watch(mut self, glob: &'static str) -> Self {
+        self.watch_globs.push(glob);
+        self
+    }
+
+    /// Registers the task with the Blueprint.
+    pub fn register(self) -> Result<Handle<super::Assets<Svelte<P>>>, HauchiwaError> {
+        let watch_globs = if self.watch_globs.is_empty() {
+            self.entry_globs.clone()
+        } else {
+            self.watch_globs
+        };
+
+        Ok(self.blueprint.add_task_opaque(GlobAssetsTask::new(
+            self.entry_globs,
+            watch_globs,
             move |_, store, input| {
                 let runtime = match RUNTIME.as_ref() {
                     Ok(runtime) => {
@@ -180,6 +177,43 @@ where
                 ))
             },
         )?))
+    }
+}
+
+impl<G> Blueprint<G>
+where
+    G: Send + Sync + 'static,
+{
+    /// Starts configuring a Svelte loader task.
+    ///
+    /// This loader uses Deno to compile Svelte components found by the entry glob.
+    /// It produces an SSR-capable script and a client-side hydration script.
+    ///
+    /// # Generics
+    ///
+    /// * `P`: The type of the properties (props) that the Svelte component accepts.
+    ///   This type must be serializable and deserializable.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # let mut config = hauchiwa::Blueprint::<()>::new();
+    /// #[derive(serde::Serialize, serde::Deserialize, Clone)]
+    /// struct ButtonProps {
+    ///     label: String,
+    /// }
+    ///
+    /// let buttons = config.load_svelte::<ButtonProps>()
+    ///     .entry("components/Button.svelte")
+    ///     .watch("components/**/*.svelte")
+    ///     .register()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn load_svelte<P>(&mut self) -> SvelteLoader<'_, G, P>
+    where
+        P: Clone + DeserializeOwned + Serialize + 'static,
+    {
+        SvelteLoader::new(self)
     }
 }
 

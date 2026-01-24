@@ -25,42 +25,74 @@ pub struct Stylesheet {
     pub path: camino::Utf8PathBuf,
 }
 
-impl<G> Blueprint<G>
+/// A builder for configuring the CSS loader task.
+pub struct CssLoader<'a, G>
+where
+    G: Send + Sync,
+{
+    blueprint: &'a mut Blueprint<G>,
+    entry_globs: Vec<&'static str>,
+    watch_globs: Vec<&'static str>,
+    minify: bool,
+}
+
+impl<'a, G> CssLoader<'a, G>
 where
     G: Send + Sync + 'static,
 {
-    /// Compiles Sass/SCSS files to CSS.
+    fn new(blueprint: &'a mut Blueprint<G>) -> Self {
+        Self {
+            blueprint,
+            entry_globs: Vec::new(),
+            watch_globs: Vec::new(),
+            minify: true,
+        }
+    }
+
+    /// Adds a glob pattern to find entry stylesheets (e.g., "styles/main.scss").
+    pub fn entry(mut self, glob: &'static str) -> Self {
+        self.entry_globs.push(glob);
+        self
+    }
+
+    /// Adds a glob pattern for files to watch (e.g., "styles/**/*.scss").
     ///
-    /// This loader uses the `grass` crate to compile Sass files matching the entry glob.
-    /// It returns a registry of compiled CSS files.
-    ///
-    /// # Arguments
-    ///
-    /// * `glob_entry`: Glob pattern for the entry stylesheets (e.g., "styles/main.scss").
-    /// * `glob_watch`: Glob pattern for files to watch (e.g., "styles/**/*.scss").
-    ///
-    /// # Returns
-    ///
-    /// A [`Handle`] to a [`crate::loader::Assets`] mapping original file paths to [`Stylesheet`] objects.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # let mut config = hauchiwa::Blueprint::<()>::new();
-    /// // Compile main.scss, watching all scss files in the styles directory for changes.
-    /// let styles = config.load_css("styles/main.scss", "styles/**/*.scss");
-    /// ```
-    pub fn load_css(
-        &mut self,
-        glob_entry: &'static str,
-        glob_watch: &'static str,
-    ) -> Result<Handle<super::Assets<Stylesheet>>, HauchiwaError> {
-        Ok(self.add_task_opaque(GlobAssetsTask::new(
-            vec![glob_entry],
-            vec![glob_watch],
+    /// If never called, defaults to watching the entry globs.
+    pub fn watch(mut self, glob: &'static str) -> Self {
+        self.watch_globs.push(glob);
+        self
+    }
+
+    /// Configures minification (compression). Defaults to `true`.
+    pub fn minify(mut self, minify: bool) -> Self {
+        self.minify = minify;
+        self
+    }
+
+    /// Registers the task with the Blueprint.
+    pub fn register(self) -> Result<Handle<super::Assets<Stylesheet>>, HauchiwaError> {
+        let watch_globs = if self.watch_globs.is_empty() {
+            self.entry_globs.clone()
+        } else {
+            self.watch_globs
+        };
+
+        let minify = self.minify;
+
+        Ok(self.blueprint.add_task_opaque(GlobAssetsTask::new(
+            self.entry_globs,
+            watch_globs,
             move |_, store, input| {
-                let data = grass::from_path(&input.path, &grass::Options::default())
-                    .map_err(StyleError::Sass)?;
+                let style = if minify {
+                    grass::OutputStyle::Compressed
+                } else {
+                    grass::OutputStyle::Expanded
+                };
+
+                let options = grass::Options::default().style(style);
+
+                let data =
+                    grass::from_path(&input.path, &options).map_err(StyleError::Sass)?;
 
                 let path = store
                     .save(data.as_bytes(), "css")
@@ -69,5 +101,27 @@ where
                 Ok((input.path, Stylesheet { path }))
             },
         )?))
+    }
+}
+
+impl<G> Blueprint<G>
+where
+    G: Send + Sync + 'static,
+{
+    /// Starts configuring a CSS loader task.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # let mut config = hauchiwa::Blueprint::<()>::new();
+    /// config.load_css()
+    ///     .entry("styles/main.scss")
+    ///     .watch("styles/**/*.scss")
+    ///     .minify(true)
+    ///     .register()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn load_css(&mut self) -> CssLoader<'_, G> {
+        CssLoader::new(self)
     }
 }

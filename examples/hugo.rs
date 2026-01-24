@@ -63,10 +63,11 @@ fn main() -> anyhow::Result<()> {
     // 2. Styles
     // -------------------------------------------------------------------------
     // We process SCSS files. This mimics `themes/mytheme/assets`.
-    let css = config.load_css(
-        "examples/assets/styles/main.scss",
-        "examples/assets/styles/**/*.scss",
-    )?;
+    let css = config
+        .load_css()
+        .entry("examples/assets/styles/main.scss")
+        .watch("examples/assets/styles/**/*.scss")
+        .register()?;
 
     // -------------------------------------------------------------------------
     // 3. Build task

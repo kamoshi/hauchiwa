@@ -158,7 +158,6 @@ where
     /// # let mut config = hauchiwa::Blueprint::<()>::new();
     /// config.load_images()
     ///     .source("assets/images/*.jpg")
-    ///     .watch("assets/images/**/*.jpg")
     ///     .format(hauchiwa::loader::image::ImageFormat::WebP)
     ///     .register()?;
     /// # Ok::<(), anyhow::Error>(())

@@ -49,18 +49,20 @@ fn main() -> anyhow::Result<()> {
     // We specify an "entry point" (main.scss) which imports other files,
     // and a "watch pattern" (**/*.scss) so the build triggers on any change.
     // Note: This uses the internal `grass` crate for compilation.
-    let styles = config.load_css(
-        "examples/assets/styles/main.scss", // Entry point
-        "examples/assets/styles/**/*.scss", // Watch all SCSS files
-    )?;
+    let styles = config
+        .load_css()
+        .entry("examples/assets/styles/main.scss")
+        .watch("examples/assets/styles/**/*.scss")
+        .register()?;
 
     // C. Scripts
     // This uses `esbuild` (which must be installed in your environment) to
     // bundle modules starting from `main.js`.
-    let scripts = config.load_js(
-        "examples/assets/scripts/main.ts",
-        "examples/assets/scripts/**/*.ts",
-    )?;
+    let scripts = config
+        .load_js()
+        .entry("examples/assets/scripts/main.ts")
+        .watch("examples/assets/scripts/**/*.ts")
+        .register()?;
 
     // D. Images
     // This loader finds images, optimizes them, and converts them to WebP.

@@ -32,43 +32,74 @@ pub struct Script {
     pub path: Utf8PathBuf,
 }
 
-impl<G> Blueprint<G>
+/// A builder for configuring the Script loader task.
+pub struct ScriptLoader<'a, G>
+where
+    G: Send + Sync,
+{
+    blueprint: &'a mut Blueprint<G>,
+    entry_globs: Vec<&'static str>,
+    watch_globs: Vec<&'static str>,
+    bundle: bool,
+    minify: bool,
+}
+
+impl<'a, G> ScriptLoader<'a, G>
 where
     G: Send + Sync + 'static,
 {
-    /// Compiles JavaScript files using Esbuild.
+    fn new(blueprint: &'a mut Blueprint<G>) -> Self {
+        Self {
+            blueprint,
+            entry_globs: Vec::new(),
+            watch_globs: Vec::new(),
+            bundle: true,
+            minify: true,
+        }
+    }
+
+    /// Adds a glob pattern for the entry points (e.g., "src/main.ts").
+    pub fn entry(mut self, glob: &'static str) -> Self {
+        self.entry_globs.push(glob);
+        self
+    }
+
+    /// Adds a glob pattern for files to watch for changes (often broader, e.g., "src/**/*.ts").
     ///
-    /// This loader finds files matching `glob_entry`, bundles and minifies them
-    /// using the `esbuild` command-line tool, and stores the resulting artifacts.
-    ///
-    /// **Note:** This loader requires the `esbuild` binary to be available in the system PATH.
-    ///
-    /// # Arguments
-    ///
-    /// * `glob_entry`: Glob pattern for the entry points (e.g., "src/main.ts").
-    /// * `glob_watch`: Glob pattern for files to watch for changes (often broader, e.g., "src/**/*.ts").
-    ///
-    /// # Returns
-    ///
-    /// A [`Handle`] to a [`crate::loader::Assets<Script>`], mapping original file paths to [`Script`] objects.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # let mut config = hauchiwa::Blueprint::<()>::new();
-    /// // Compile main.ts using esbuild, watching all ts files in the scripts directory.
-    /// let scripts = config.load_js("scripts/main.ts", "scripts/**/*.ts");
-    /// ```
-    pub fn load_js(
-        &mut self,
-        glob_entry: &'static str,
-        glob_watch: &'static str,
-    ) -> Result<Handle<super::Assets<Script>>, HauchiwaError> {
-        Ok(self.add_task_opaque(GlobAssetsTask::new(
-            vec![glob_entry],
-            vec![glob_watch],
+    /// If never called, defaults to watching the entry globs.
+    pub fn watch(mut self, glob: &'static str) -> Self {
+        self.watch_globs.push(glob);
+        self
+    }
+
+    /// Toggles bundling dependencies. Defaults to `true`.
+    pub fn bundle(mut self, bundle: bool) -> Self {
+        self.bundle = bundle;
+        self
+    }
+
+    /// Toggles minification. Defaults to `true`.
+    pub fn minify(mut self, minify: bool) -> Self {
+        self.minify = minify;
+        self
+    }
+
+    /// Registers the task with the Blueprint.
+    pub fn register(self) -> Result<Handle<super::Assets<Script>>, HauchiwaError> {
+        let watch_globs = if self.watch_globs.is_empty() {
+            self.entry_globs.clone()
+        } else {
+            self.watch_globs
+        };
+
+        let bundle = self.bundle;
+        let minify = self.minify;
+
+        Ok(self.blueprint.add_task_opaque(GlobAssetsTask::new(
+            self.entry_globs,
+            watch_globs,
             move |_, store, input| {
-                let data = compile_esbuild(&input.path)?;
+                let data = compile_esbuild(&input.path, bundle, minify)?;
                 let path = store.save(&data, "js").map_err(ScriptError::Build)?;
 
                 Ok((input.path, Script { path }))
@@ -77,12 +108,44 @@ where
     }
 }
 
-fn compile_esbuild(file: &Utf8Path) -> Result<Vec<u8>, ScriptError> {
-    let output = Command::new("esbuild")
-        .arg(file.as_str())
-        .arg("--format=esm")
-        .arg("--bundle")
-        .arg("--minify")
+impl<G> Blueprint<G>
+where
+    G: Send + Sync + 'static,
+{
+    /// Starts configuring a JavaScript loader task.
+    ///
+    /// This loader uses `esbuild` to compile, bundle, and minify JavaScript/TypeScript files.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # let mut config = hauchiwa::Blueprint::<()>::new();
+    /// config.load_js()
+    ///     .entry("scripts/main.ts")
+    ///     .watch("scripts/**/*.ts")
+    ///     .bundle(true)
+    ///     .minify(true)
+    ///     .register()?;
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn load_js(&mut self) -> ScriptLoader<'_, G> {
+        ScriptLoader::new(self)
+    }
+}
+
+fn compile_esbuild(file: &Utf8Path, bundle: bool, minify: bool) -> Result<Vec<u8>, ScriptError> {
+    let mut cmd = Command::new("esbuild");
+    cmd.arg(file.as_str()).arg("--format=esm");
+
+    if bundle {
+        cmd.arg("--bundle");
+    }
+
+    if minify {
+        cmd.arg("--minify");
+    }
+
+    let output = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .output()?;
