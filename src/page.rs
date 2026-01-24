@@ -122,6 +122,13 @@ pub struct Output {
 }
 
 impl Output {
+    /// Starts a builder to create an Output from a source path.
+    pub fn mapper(source: impl Into<Utf8PathBuf>) -> OutputBuilder {
+        OutputBuilder {
+            current: source.into(),
+        }
+    }
+
     /// Creates a new `Page` with a normalized URL, suitable for HTML files.
     ///
     /// The path is automatically adjusted to create "pretty URLs". For example:
@@ -142,6 +149,64 @@ impl Output {
         Self {
             url: path.into(),
             content: content.into(),
+        }
+    }
+}
+
+/// A helper builder to transform source paths into destination URLs.
+pub struct OutputBuilder {
+    current: Utf8PathBuf,
+}
+
+impl OutputBuilder {
+    /// Removes a prefix from the path (e.g., "content/").
+    pub fn strip_prefix(
+        mut self,
+        prefix: impl AsRef<Utf8Path>,
+    ) -> Result<Self, crate::error::HauchiwaError> {
+        self.current = self
+            .current
+            .strip_prefix(prefix.as_ref())
+            .map(|p| p.to_path_buf())
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "Path {} does not start with prefix {}",
+                    self.current,
+                    prefix.as_ref().as_str()
+                )
+            })
+            .map_err(|e| crate::error::HauchiwaError::Build(crate::error::BuildError::Other(e)))?;
+        Ok(self)
+    }
+
+    /// Applies "Pretty URL" formatting (slugification).
+    /// `posts/hello.md` -> `posts/hello/index.html`
+    pub fn html(mut self) -> Self {
+        self.current = to_slug(&self.current).join("index").with_extension("html");
+        self
+    }
+
+    /// Sets the file extension explicitly.
+    pub fn ext(mut self, extension: &str) -> Self {
+        self.current.set_extension(extension);
+        self
+    }
+
+    /// Finalizes the path and attaches content to produce the Output.
+    pub fn content(self, body: impl Into<String>) -> Output {
+        // If it's HTML, we ensure it ends in index.html for the server
+        let url = if self.current.extension().map_or(false, |e| e == "html")
+            || self.current.file_name() == Some("index")
+        {
+            normalize(&self.current)
+        } else {
+            // For non-html assets, normalize just cleans . and ..
+            normalize_path(&self.current)
+        };
+
+        Output {
+            url,
+            content: body.into(),
         }
     }
 }

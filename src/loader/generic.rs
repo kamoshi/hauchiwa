@@ -1,12 +1,13 @@
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 use crate::{
-    Blueprint, Environment,
+    Blueprint, Environment, Output,
     error::HauchiwaError,
     graph::Handle,
     loader::{GlobAssetsTask, Input, Store},
+    page::OutputBuilder,
 };
 
 /// Errors that can occur when loading files with frontmatter.
@@ -34,6 +35,78 @@ pub struct Document<T> {
     pub path: Utf8PathBuf,
     /// The body content of the file (excluding frontmatter).
     pub body: String,
+}
+
+impl<T> Document<T> {
+    /// Extracts the "slug" or distinct identifier for the document.
+    ///
+    /// * If the file is `.../some-file.md`, returns "some-file".
+    /// * If the file is `.../some-file/index.md`, returns "some-file".
+    pub fn slug(&self) -> &str {
+        let stem = self.path.file_stem().unwrap_or_default();
+
+        if stem == "index" {
+            // If it is an index file, the "identity" is the parent folder name
+            self.path
+                .parent()
+                .and_then(|p| p.file_name())
+                .unwrap_or(stem)
+        } else {
+            stem
+        }
+    }
+
+    /// Generates the web-accessible URL path (href).
+    ///
+    /// This strips the `dir` prefix, removes extensions, handles `index`
+    /// removal, and ensures a leading and trailing slash (directory style).
+    pub fn href(&self, dir: impl AsRef<Utf8Path>) -> String {
+        let path = self
+            .path
+            .strip_prefix(&dir.as_ref().as_std_path())
+            .unwrap_or(&self.path);
+        let mut url = String::from("/");
+
+        // If it's not index.md, we need to append the stem (e.g., 'some-file')
+        // If it IS index.md, we only want the parent directory structure.
+        if let Some(parent) = path.parent() {
+            url.push_str(parent.as_str());
+        }
+
+        let stem = path.file_stem().unwrap_or_default();
+        if stem != "index" {
+            if !url.ends_with('/') {
+                url.push('/');
+            }
+            url.push_str(stem);
+        }
+
+        // Ensure trailing slash for directory-style routing
+        if !url.ends_with('/') {
+            url.push('/');
+        }
+
+        // Handling edge case: double slash at start if parent was empty
+        if url.starts_with("//") {
+            url.replace("//", "/")
+        } else {
+            url
+        }
+    }
+
+    /// Calculates the final output file path for the built artifact.
+    ///
+    /// This converts both `foo.md` and `foo/index.md` into `dist/.../foo/index.html`.
+    pub fn dist_path(&self, src: impl AsRef<Utf8Path>, out: impl AsRef<Utf8Path>) -> Utf8PathBuf {
+        // Remove leading slash to join correctly with dist_dir
+        out.as_ref()
+            .join(self.href(src).trim_start_matches('/'))
+            .join("index.html")
+    }
+
+    pub fn output(&self) -> OutputBuilder {
+        Output::mapper(&self.path)
+    }
 }
 
 impl<G> Blueprint<G>

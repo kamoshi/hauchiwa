@@ -1,6 +1,6 @@
 [package]
 name        = "hauchiwa"
-version     = "0.9.4"
+version     = "0.10.0"
 edition     = "2024"
 authors     = ["Maciej Jur <maciej@kamoshi.org>"]
 keywords    = ["ssg"]
@@ -60,7 +60,7 @@ version = "8.0"
 optional = true
 
 [dependencies.notify-debouncer-full]
-version = "0.6"
+version = "0.7"
 optional = true
 default-features = false
 
