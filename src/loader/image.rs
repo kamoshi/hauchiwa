@@ -30,11 +30,28 @@ pub enum ImageError {
     Build(#[from] BuildError),
 }
 
-/// Supported output image formats.
+/// Configuration for image compression.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Quality {
+    /// Lossless compression.
+    Lossless,
+    /// Lossy compression with a quality factor (0-100).
+    Lossy(u8),
+}
+
+impl Default for Quality {
+    fn default() -> Self {
+        // A sensible default for most web images
+        Self::Lossy(80)
+    }
+}
+
+/// Supported output image formats with specific configuration.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImageFormat {
+    #[default]
     WebP,
-    Avif,
+    Avif(Quality),
     Png,
 }
 
@@ -42,7 +59,7 @@ impl ImageFormat {
     fn extension(&self) -> &'static str {
         match self {
             ImageFormat::WebP => "webp",
-            ImageFormat::Avif => "avif",
+            ImageFormat::Avif(_) => "avif",
             ImageFormat::Png => "png",
         }
     }
@@ -112,14 +129,14 @@ where
 
         // Default to WebP if no format is specified
         if formats.is_empty() {
-            formats.push(ImageFormat::WebP);
+            formats.push(ImageFormat::default());
         }
 
         let task = GlobAssetsTask::new(
             self.globs.clone(),
             // watch the source globs
             self.globs,
-            move |_ctx: &TaskContext<G>, _: &mut Store, input: Input| {
+            move |_: &TaskContext<G>, _: &mut Store, input: Input| {
                 let image = process_image(&input, &formats)?;
                 Ok((input.path, image))
             },
@@ -154,22 +171,30 @@ where
 fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<Image, ImageError> {
     let source_hash = file.hash.to_hex();
 
-    // Decode the image once
+    // Decode source once
     let reader = BufReader::new(File::open(&file.path)?);
     let img = ImageReader::new(reader).with_guessed_format()?.decode()?;
     let width = img.width();
     let height = img.height();
-    let rgba = img.to_rgba8(); // Use to_rgba8 for consistency
+    let rgba = img.to_rgba8();
 
     let mut sources = HashMap::new();
     let mut default_path = None;
 
-    // Ensure directories exist
     fs::create_dir_all(DIR_CACHE)?;
     fs::create_dir_all(DIR_DIST)?;
 
     for &format in formats {
-        let file_name = format!("{}.{}", source_hash, format.extension());
+        // Include configuration in the hash to ensure cache invalidation if quality changes
+        let config = match format {
+            ImageFormat::WebP => "webp".to_string(),
+            ImageFormat::Avif(Quality::Lossy(q)) => format!("avif-q{}", q),
+            ImageFormat::Avif(Quality::Lossless) => "avif-ll".to_string(),
+            ImageFormat::Png => "png".to_string(),
+        };
+
+        // Final filename: <hash>.<config>.<ext>
+        let file_name = format!("{}.{}.{}", source_hash, config, format.extension());
 
         let path_store = Utf8Path::new(DIR_STORE).join(&file_name);
         let path_cache = Utf8Path::new(DIR_CACHE).join(&file_name);
@@ -182,6 +207,7 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<Image, ImageEr
             match format {
                 ImageFormat::WebP => {
                     use image::codecs::webp::WebPEncoder;
+
                     WebPEncoder::new_lossless(&mut writer).encode(
                         &rgba,
                         width,
@@ -189,17 +215,34 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<Image, ImageEr
                         ExtendedColorType::Rgba8,
                     )?;
                 }
-                ImageFormat::Avif => {
-                    use image::{ImageEncoder, codecs::avif::AvifEncoder};
-                    AvifEncoder::new(&mut writer).write_image(
-                        &rgba,
-                        width,
-                        height,
-                        ExtendedColorType::Rgba8,
-                    )?;
-                }
+                ImageFormat::Avif(quality) => match quality {
+                    Quality::Lossless => {
+                        use image::ImageEncoder;
+                        use image::codecs::avif::AvifEncoder;
+
+                        AvifEncoder::new(&mut writer).write_image(
+                            &rgba,
+                            width,
+                            height,
+                            ExtendedColorType::Rgba8,
+                        )?;
+                    }
+                    Quality::Lossy(q) => {
+                        use image::ImageEncoder;
+                        use image::codecs::avif::AvifEncoder;
+
+                        AvifEncoder::new_with_speed_quality(&mut writer, 10, q).write_image(
+                            &rgba,
+                            width,
+                            height,
+                            ExtendedColorType::Rgba8,
+                        )?;
+                    }
+                },
                 ImageFormat::Png => {
-                    use image::{ImageEncoder, codecs::png::PngEncoder};
+                    use image::ImageEncoder;
+                    use image::codecs::png::PngEncoder;
+
                     PngEncoder::new(&mut writer).write_image(
                         &rgba,
                         width,
