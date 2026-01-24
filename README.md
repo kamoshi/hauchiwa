@@ -88,11 +88,11 @@ fn main() -> anyhow::Result<()> {
 
         // Iterate over loaded posts
         for post in posts.values() {
-            let html_content = format!("<h1>{}</h1>", post.metadata.title);
+            let html_content = format!("<h1>{}</h1>", post.matter.title);
             
             // Create a page structure
             // Output::html creates pretty URLs (e.g., /foo/index.html)
-            pages.push(Output::html(&post.path, html_content));
+            pages.push(Output::html(&post.meta.path, html_content));
         }
 
         Ok(pages)

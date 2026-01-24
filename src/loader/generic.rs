@@ -31,19 +31,25 @@ pub enum FrontmatterError {
 /// * `T`: The type of the metadata (frontmatter), typically a struct deriving `Deserialize`.
 #[derive(Clone)]
 pub struct Document<T> {
-    /// The parsed metadata (frontmatter).
-    pub metadata: Box<T>,
+    /// The parsed frontmatter.
+    pub matter: Box<T>,
+    /// The body content of the file (excluding frontmatter).
+    pub text: String,
+    /// Metadata related to the document.
+    pub meta: DocumentMeta,
+}
+
+#[derive(Debug, Clone)]
+pub struct DocumentMeta {
     /// The original path of content file.
     pub path: Utf8PathBuf,
-    /// The body content of the file (excluding frontmatter).
-    pub body: String,
     /// The shared offset path used to calculate the href.
     pub offset: Option<Arc<str>>,
     /// The web-accessible URL path.
     pub href: String,
 }
 
-impl<T> Document<T> {
+impl DocumentMeta {
     /// Extracts the "slug" or distinct identifier for the document.
     ///
     /// * If the file is `.../some-file.md`, returns "some-file".
@@ -72,8 +78,43 @@ impl<T> Document<T> {
             .join("index.html")
     }
 
+    /// Generates a glob pattern for assets relative to this document.
+    ///
+    /// This simplifies selecting co-located assets. For example:
+    /// - If the document is `posts/hello.md`, `.assets("*.bib")` returns `"posts/hello/*.bib"`.
+    /// - If the document is `posts/hello/index.md`, it also returns `"posts/hello/*.bib"`.
+    pub fn assets(&self, pattern: &str) -> String {
+        // Get the bundle scope (base directory) of the document
+        let base = crate::page::to_slug(&self.path);
+
+        // Join the pattern with the base directory
+        base.join(pattern).to_string()
+    }
+
+    /// Resolves a relative path against the document's source location.
+    ///
+    /// This is useful for processing links inside the content, such as
+    /// `[Link](../other.md)` or `![Image](./img.png)`.
+    ///
+    /// # Example
+    /// - Doc: `content/posts/hello/index.md`
+    /// - Input: `../world.md`
+    /// - Result: `content/posts/world.md`
+    pub fn resolve(&self, path: impl AsRef<str>) -> Utf8PathBuf {
+        // Get the bundle scope (base directory) of the document
+        let base = crate::page::to_slug(&self.path);
+
+        // Join the relative path (e.g. "../foo.png")
+        let joined = base.join(path.as_ref());
+
+        // Normalize to remove ".." and "." components
+        crate::page::normalize_path(&joined)
+    }
+}
+
+impl<T> Document<T> {
     pub fn output(&self) -> OutputBuilder {
-        Output::mapper(&self.path)
+        Output::mapper(&self.meta.path)
     }
 }
 
@@ -139,11 +180,13 @@ where
                 Ok((
                     input.path.clone(),
                     Document {
-                        metadata: Box::new(metadata),
-                        path: input.path,
-                        body: content,
-                        offset: offset.clone(),
-                        href,
+                        matter: Box::new(metadata),
+                        text: content,
+                        meta: DocumentMeta {
+                            path: input.path,
+                            offset: offset.clone(),
+                            href,
+                        },
                     },
                 ))
             },

@@ -63,7 +63,7 @@ use crate::{
 /// # task!(config, |ctx, posts| {
 /// // Assuming `posts` is a Assets<Document<Post>>
 /// for post in posts.values() {
-///     println!("Title: {}", post.metadata.title);
+///     println!("Title: {}", post.matter.title);
 /// }
 ///
 /// let specific_post = posts.get("content/posts/hello.md")?;

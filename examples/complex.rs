@@ -60,10 +60,10 @@ fn main() -> anyhow::Result<()> {
         let mut tags = HashMap::new();
 
         for post in posts.values() {
-            for tag in &post.metadata.tags {
+            for tag in &post.matter.tags {
                 tags.entry(tag.clone())
                     .or_insert_with(Vec::new)
-                    .push(post.metadata.title.clone());
+                    .push(post.matter.title.clone());
             }
         }
 
@@ -83,7 +83,7 @@ fn main() -> anyhow::Result<()> {
         for post in posts.values() {
             // Logic: For every tag on this post, look up the total count in the taxonomy.
             let tag_counts = post
-                .metadata
+                .matter
                 .tags
                 .iter()
                 .map(|t| {
@@ -94,13 +94,10 @@ fn main() -> anyhow::Result<()> {
                 .collect::<Vec<_>>()
                 .join(", ");
 
-            let content = format!(
-                "<h1>{}</h1><p>Tags: {}</p>",
-                post.metadata.title, tag_counts
-            );
+            let content = format!("<h1>{}</h1><p>Tags: {}</p>", post.matter.title, tag_counts);
 
             // Create a "Pretty URL" (e.g., page1.md -> dist/page1/index.html)
-            let stem = post.path.file_stem().unwrap_or("unknown");
+            let stem = post.meta.path.file_stem().unwrap_or("unknown");
 
             pages.push(Output {
                 url: format!("{}/index.html", stem).into(),
@@ -123,7 +120,7 @@ fn main() -> anyhow::Result<()> {
 
         // List all posts
         for post in posts.values() {
-            let stem = post.path.file_stem().unwrap_or("unknown");
+            let stem = post.meta.path.file_stem().unwrap_or("unknown");
             xml.push_str(&format!("<url><loc>/{}</loc></url>", stem));
         }
 

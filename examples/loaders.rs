@@ -109,7 +109,7 @@ fn main() -> anyhow::Result<()> {
 
         // Iterate over our markdown posts and create a list.
         for post in posts.values() {
-            html.push_str(&format!("<li>{}</li>", post.metadata.title));
+            html.push_str(&format!("<li>{}</li>", post.matter.title));
         }
         html.push_str("</ul>");
 

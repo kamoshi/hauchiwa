@@ -89,13 +89,13 @@ fn main() -> anyhow::Result<()> {
 
         for doc in content.values() {
             // Skip drafts in production builds
-            if doc.metadata.draft {
+            if doc.matter.draft {
                 continue;
             }
 
             // A. Determine Output Path
             //    Hugo Style: content/post.md -> public/post/index.html (Pretty URLs)
-            let stem = doc.path.file_stem().unwrap_or_default();
+            let stem = doc.meta.path.file_stem().unwrap_or_default();
             let out_path = format!("{}/index.html", stem);
 
             // B. Render the "Single" Layout
@@ -130,14 +130,14 @@ fn main() -> anyhow::Result<()> {
                 </body>
                 </html>
                 "#,
-                title = doc.metadata.title,
+                title = doc.matter.title,
                 site = SITE_NAME,
                 css = css_link,
-                date = doc.metadata.date,
+                date = doc.matter.date,
                 // Note: `doc.body` is the raw Markdown content.
                 // In a real app, you would pass this through `pulldown-cmark` here
                 // to convert Markdown -> HTML before embedding it.
-                body = doc.body
+                body = doc.text
             );
 
             outputs.push(Output {
@@ -154,13 +154,13 @@ fn main() -> anyhow::Result<()> {
 
         let mut list_items = String::new();
         for doc in content.values() {
-            if !doc.metadata.draft {
-                let stem = doc.path.file_stem().unwrap_or_default();
+            if !doc.matter.draft {
+                let stem = doc.meta.path.file_stem().unwrap_or_default();
                 list_items.push_str(&format!(
                     r#"<li><span class="date">[{date}]</span> <a href="/{slug}/">{title}</a></li>"#,
-                    date = doc.metadata.date,
+                    date = doc.matter.date,
                     slug = stem,
-                    title = doc.metadata.title
+                    title = doc.matter.title
                 ));
             }
         }
