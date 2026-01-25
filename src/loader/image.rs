@@ -4,6 +4,7 @@ use std::io::{BufReader, BufWriter};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use image::{ExtendedColorType, ImageReader};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::error::{BuildError, HauchiwaError};
@@ -83,6 +84,12 @@ impl Image {
     pub fn get(&self, format: ImageFormat) -> Option<&Utf8PathBuf> {
         self.sources.get(&format)
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ImageMetadata {
+    width: u32,
+    height: u32,
 }
 
 /// A builder for configuring the image loading task.
@@ -170,18 +177,25 @@ where
 fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<Image, ImageError> {
     let source_hash = file.hash.to_hex();
 
-    // Decode source once
-    let reader = BufReader::new(File::open(&file.path)?);
-    let img = ImageReader::new(reader).with_guessed_format()?.decode()?;
-    let width = img.width();
-    let height = img.height();
-    let rgba = img.to_rgba8();
-
-    let mut sources = HashMap::new();
-    let mut default_path = None;
+    let meta_file_name = format!("{}.meta.cbor", source_hash);
+    let meta_file_path = Utf8Path::new(DIR_CACHE).join(&meta_file_name);
 
     fs::create_dir_all(DIR_CACHE)?;
     fs::create_dir_all(DIR_DIST)?;
+
+    // Try to load serialized metadata
+    let metadata = if meta_file_path.exists() {
+        let file = File::open(&meta_file_path)?;
+        let file = BufReader::new(file);
+
+        ciborium::from_reader::<ImageMetadata, _>(file).ok()
+    } else {
+        None
+    };
+
+    // Calculate paths for all formats
+    let mut outputs = Vec::new();
+    let mut cached = true;
 
     for &format in formats {
         // Include configuration in the hash to ensure cache invalidation if quality changes
@@ -199,6 +213,59 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<Image, ImageEr
         let path_cache = Utf8Path::new(DIR_CACHE).join(&file_name);
         let path_dist = Utf8Path::new(DIR_DIST).join(&file_name);
 
+        if !path_cache.exists() {
+            // cache miss
+            cached = false;
+        }
+
+        outputs.push((format, path_store, path_cache, path_dist));
+    }
+
+    // FAST PATH: If metadata exists and all output formats are cached
+    if cached && let Some(meta) = metadata {
+        let mut sources = HashMap::new();
+        let mut default_path = None;
+
+        for (format, path_store, path_cache, path_dist) in outputs {
+            // Ensure artifact is in dist
+            if !path_dist.exists() {
+                // hard link with fallback to copy
+                if std::fs::hard_link(&path_cache, &path_dist).is_err() {
+                    std::fs::copy(&path_cache, &path_dist)?;
+                }
+            }
+
+            sources.insert(format, path_store.clone());
+
+            if default_path.is_none() {
+                default_path = Some(path_store);
+            }
+        }
+
+        return Ok(Image {
+            default: default_path.expect("At least one format must be produced"),
+            sources,
+            width: meta.width,
+            height: meta.height,
+        });
+    }
+
+    // SLOW PATH: Decode source image
+    let reader = BufReader::new(File::open(&file.path)?);
+    let img = ImageReader::new(reader).with_guessed_format()?.decode()?;
+    let width = img.width();
+    let height = img.height();
+    let rgba = img.to_rgba8();
+
+    // Save metadata
+    let meta_data = ImageMetadata { width, height };
+    let meta_file = File::create(&meta_file_path)?;
+    ciborium::into_writer(&meta_data, meta_file).map_err(std::io::Error::other)?;
+
+    let mut sources = HashMap::new();
+    let mut default_path = None;
+
+    for (format, path_store, path_cache, path_dist) in outputs {
         if !path_cache.exists() {
             let cache_file = File::create(&path_cache)?;
             let mut writer = BufWriter::new(cache_file);
@@ -252,8 +319,11 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<Image, ImageEr
             }
         }
 
-        if std::fs::hard_link(&path_cache, &path_dist).is_err() {
-            std::fs::copy(&path_cache, &path_dist)?;
+        if !path_dist.exists() {
+            // hard link with fallback to copy
+            if std::fs::hard_link(&path_cache, &path_dist).is_err() {
+                std::fs::copy(&path_cache, &path_dist)?;
+            }
         }
 
         sources.insert(format, path_store.clone());
