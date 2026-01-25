@@ -22,7 +22,6 @@ use petgraph::{Graph, graph::NodeIndex};
 
 pub use camino;
 pub use gitscan as git;
-use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 pub use crate::executor::Diagnostics;
 pub use crate::graph::Handle;
@@ -54,10 +53,7 @@ impl Hash32 {
     }
 
     fn hash_file(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
-        Ok(blake3::Hasher::new()
-            .update_mmap_rayon(path)?
-            .finalize()
-            .into())
+        Ok(blake3::Hasher::new().update_mmap(path)?.finalize().into())
     }
 
     fn to_hex(self) -> String {

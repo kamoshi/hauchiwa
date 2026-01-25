@@ -177,7 +177,14 @@ impl Store {
 
         let dir = path_dist.parent().unwrap_or(&path_dist);
         fs::create_dir_all(dir)?;
-        fs::copy(&path_temp, &path_dist)?;
+
+        if path_dist.exists() {
+            fs::remove_file(&path_dist)?;
+        }
+
+        if fs::hard_link(&path_temp, &path_dist).is_err() {
+            fs::copy(&path_temp, &path_dist)?;
+        }
 
         Ok(path_root)
     }
