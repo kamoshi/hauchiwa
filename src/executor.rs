@@ -10,9 +10,11 @@ use std::{
 
 use camino::Utf8Path;
 use crossbeam_channel::unbounded;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::ProgressStyle;
 use petgraph::graph::NodeIndex;
 use petgraph::{algo::toposort, visit::Dfs};
+use tracing::{Level, error, info, span};
+use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 pub use crate::executor::diagnostics::Diagnostics;
 use crate::graph::NodeData;
@@ -95,27 +97,25 @@ fn run_tasks_parallel<G: Send + Sync>(
         return Ok(Diagnostics::default());
     }
 
-    // Setup MultiProgress and the main overall progress bar
-    let mp = MultiProgress::new();
-    let main_pb = mp.add(ProgressBar::new(total_tasks));
-    main_pb.set_style(
-        ProgressStyle::default_bar()
+    let root_span = span!(Level::INFO, "building_tasks");
+    root_span.pb_set_length(total_tasks);
+    root_span.pb_set_style(
+        &ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
             .unwrap()
             .progress_chars("=>-"),
     );
-    main_pb.set_message("Building tasks...");
-
-    // Define the style for the per-task spinners
-    let spinner_style = ProgressStyle::default_spinner()
-        .template("{spinner:.blue} {msg}")
-        .unwrap();
+    root_span.pb_set_message("Building tasks...");
+    let _enter = root_span.enter();
 
     // We only need a channel for results and tasks are distributed by Rayon.
     let (result_sender, result_receiver) =
         unbounded::<(NodeIndex, anyhow::Result<NodeData>, Instant, Duration)>();
 
     let mut execution_times = HashMap::new();
+
+    // regular task style with no progress
+    let pb_style = crate::utils::get_style_task()?;
 
     rayon::scope(|s| -> anyhow::Result<()> {
         // A helper closure to spawn a task
@@ -134,19 +134,20 @@ fn run_tasks_parallel<G: Send + Sync>(
 
             // Clone variables for the thread
             let sender = result_sender.clone();
-            let mp_clone = mp.clone();
-            let style_clone = spinner_style.clone();
+            let pb_style = pb_style.clone();
 
             // Spawn on Rayon pool
             s.spawn(move |_| {
-                let task_pb = mp_clone.add(ProgressBar::new_spinner());
-                task_pb.set_style(style_clone);
-                task_pb.set_message(task.get_name());
-                task_pb.enable_steady_tick(Duration::from_millis(100));
+                // Tracing span
+                let span = span!(Level::INFO, "task", name = task.get_name());
+                span.pb_set_style(&pb_style);
+                span.pb_set_message(&format!("Running {}", task.get_name()));
+                let _enter = span.enter();
 
                 let context = TaskContext {
                     env: globals,
                     importmap: &importmap,
+                    span: span.clone(),
                 };
 
                 let start_time = Instant::now();
@@ -183,8 +184,6 @@ fn run_tasks_parallel<G: Send + Sync>(
 
                 let elapsed = start_time.elapsed();
 
-                task_pb.finish_and_clear();
-
                 // Send result back to main thread
                 sender.send((index, output, start_time, elapsed)).unwrap();
             });
@@ -207,7 +206,7 @@ fn run_tasks_parallel<G: Send + Sync>(
             cache.insert(completed_index, output?);
             execution_times.insert(completed_index, TaskExecution { start, duration });
             completed_tasks += 1;
-            main_pb.inc(1);
+            root_span.pb_inc(1);
 
             // Unlock dependents
             if let Some(dependents_of_completed) = dependents.get(&completed_index) {
@@ -226,7 +225,7 @@ fn run_tasks_parallel<G: Send + Sync>(
         Ok(())
     })?;
 
-    main_pb.finish_with_message("Build complete!");
+    info!("Build complete!");
     Ok(Diagnostics { execution_times })
 }
 
@@ -288,12 +287,12 @@ mod live {
             data,
         };
 
-        println!("[watch] performing initial build...");
+        info!("running initial build...");
         let (mut cache, pages, _diagnostics) = run_once_parallel(site, &globals)?;
-        println!("[watch] collected {} pages", pages.len());
+        info!("collected {} pages", pages.len());
         crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
 
-        println!("[watch] initial build completed, now watching for changes...");
+        info!("initial build completed, now watching for changes...");
         let clients = Arc::new(Mutex::new(vec![]));
 
         let _thread_i = new_thread_ws_incoming(tcp, clients.clone());
@@ -310,7 +309,7 @@ mod live {
                     watched.insert(path);
                     filters.insert(pattern);
                 } else {
-                    eprintln!("[watch] failed to resolve path: {}", &path);
+                    error!("failed to resolve path: {}", &path);
                 };
             }
         }
@@ -319,7 +318,7 @@ mod live {
         let watched = collapse_watch_paths(watched);
 
         for path in watched {
-            println!("[watch] watching {}", path);
+            info!("watching {}", path);
             debouncer.watch(path, RecursiveMode::Recursive)?;
         }
 
@@ -349,7 +348,7 @@ mod live {
                     }
 
                     if !dirty_nodes.is_empty() {
-                        println!("[watch] change detected, re-running tasks...");
+                        info!("change detected, re-running tasks...");
                         let mut to_rerun = HashSet::new();
                         for start_node in &dirty_nodes {
                             let mut dfs = Dfs::new(&site.graph, *start_node);
@@ -362,20 +361,20 @@ mod live {
                             match run_tasks_parallel(site, &globals, &mut cache, &to_rerun) {
                                 Ok(res) => res,
                                 Err(e) => {
-                                    eprintln!("Error running tasks: {}", e);
+                                    error!("Error running tasks: {}", e);
                                     continue;
                                 }
                             };
 
                         let pages = collect_pages(&cache);
-                        println!("[watch] collected {} pages", pages.len());
+                        info!("collected {} pages", pages.len());
                         crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
                         tx_reload.send(()).unwrap();
-                        println!("[watch] rebuild complete, watching for changes...");
+                        info!("rebuild complete, watching for changes...");
                     }
                 }
-                Ok(Err(e)) => println!("watch error: {:?}", e),
-                Err(e) => println!("watch error: {:?}", e),
+                Ok(Err(e)) => error!("watch error: {:?}", e),
+                Err(e) => error!("watch error: {:?}", e),
             }
         }
     }
@@ -422,7 +421,7 @@ mod live {
                             }
                         }
                         Err(e) => {
-                            eprintln!("Error: {e:?}");
+                            error!("Error: {e:?}");
                         }
                     }
                 }
@@ -616,11 +615,12 @@ mod server {
     use axum::Router;
     use console::style;
     use tower_http::services::ServeDir;
+    use tracing::info;
 
     pub fn start() -> thread::JoinHandle<Result<(), anyhow::Error>> {
         let port = 8080;
-        let url = style(format!("http://localhost:{port}/")).yellow();
-        eprintln!("[server] starting a HTTP server on {url}");
+
+        info!(url = %style(format!("http://localhost:{port}/")).yellow(), "starting a HTTP server");
 
         thread::spawn(move || {
             tokio::runtime::Builder::new_current_thread()

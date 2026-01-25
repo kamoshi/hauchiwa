@@ -27,6 +27,7 @@ pub use js::Script;
 
 pub mod svelte;
 pub use svelte::Svelte;
+use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 #[cfg(feature = "tokio")]
 pub mod tokio;
@@ -288,6 +289,11 @@ where
             }
         }
 
+        // we can override the style to have progress
+        let style = crate::utils::get_style_task_progress()?;
+        context.span.pb_set_style(&style);
+        context.span.pb_set_length(paths.len() as u64);
+
         let results: anyhow::Result<Vec<_>> = paths
             .into_par_iter()
             .map(|path| {
@@ -296,8 +302,11 @@ where
 
                 let mut rt = Store::new();
 
-                // Call the user callback
+                // call the user callback
                 let (out_path, res) = (self.callback)(context, &mut rt, file)?;
+
+                // next iteration
+                context.span.pb_inc(1);
 
                 Ok((out_path, res, rt.imports))
             })

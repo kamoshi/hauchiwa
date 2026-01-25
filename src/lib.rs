@@ -22,6 +22,7 @@ use petgraph::{Graph, graph::NodeIndex};
 
 pub use camino;
 pub use gitscan as git;
+use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 pub use crate::executor::Diagnostics;
 pub use crate::graph::Handle;
@@ -150,6 +151,8 @@ pub struct TaskContext<'a, G: Send + Sync = ()> {
     /// The current import map, containing JavaScript module mappings from all
     /// upstream dependencies.
     pub importmap: &'a ImportMap,
+    /// Tracing span assigned to this task.
+    span: tracing::Span,
 }
 
 #[derive(Debug)]
@@ -357,6 +360,8 @@ where
     ///
     /// * `data` - The global user data to pass to all tasks.
     pub fn build(&mut self, data: G) -> anyhow::Result<Diagnostics> {
+        utils::init_logging()?;
+
         let globals = Environment {
             generator: "hauchiwa",
             mode: Mode::Build,
@@ -364,12 +369,12 @@ where
             data,
         };
 
-        utils::clear_dist().expect("Failed to clear dist directory");
-        utils::clone_static().expect("Failed to copy static files");
+        utils::clear_dist()?;
+        utils::clone_static()?;
 
         let (_, pages, diagnostics) = crate::executor::run_once_parallel(self, &globals)?;
 
-        crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
+        crate::page::save_pages_to_dist(&pages)?;
 
         Ok(diagnostics)
     }
@@ -384,8 +389,10 @@ where
     /// * `data` - The global user data to pass to all tasks.
     #[cfg(feature = "live")]
     pub fn watch(&mut self, data: G) -> anyhow::Result<()> {
-        utils::clear_dist().expect("Failed to clear dist directory");
-        utils::clone_static().expect("Failed to copy static files");
+        utils::init_logging()?;
+
+        utils::clear_dist()?;
+        utils::clone_static()?;
 
         crate::executor::watch(self, data)?;
 

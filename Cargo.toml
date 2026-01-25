@@ -33,6 +33,9 @@ gitscan                 = "0.1.0"
 # CLI
 console                 = { version = "0.16", default-features = false }
 indicatif               = { version = "0.18", features = ["rayon"] }
+tracing                 = "0.1"
+tracing-subscriber      = { version = "0.3", features = ["env-filter", "fmt", "registry", "ansi"] }
+tracing-indicatif       = "0.3"
 
 # Error handling
 anyhow                  = "1.0"
