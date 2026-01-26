@@ -182,9 +182,7 @@ impl Store {
             fs::remove_file(&path_dist)?;
         }
 
-        if fs::hard_link(&path_temp, &path_dist).is_err() {
-            fs::copy(&path_temp, &path_dist)?;
-        }
+        fs::copy(&path_temp, &path_dist)?;
 
         Ok(path_root)
     }
