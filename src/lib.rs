@@ -22,6 +22,7 @@ use petgraph::{Graph, graph::NodeIndex};
 
 pub use camino;
 pub use gitscan as git;
+pub use tracing::{debug, error, info, trace, warn};
 
 pub use crate::executor::Diagnostics;
 pub use crate::graph::Handle;
