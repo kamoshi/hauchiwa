@@ -255,7 +255,7 @@ impl OutputBuilder {
         };
 
         Output {
-            path: path.into(),
+            path,
             data: OutputData::Utf8(body.into()),
         }
     }

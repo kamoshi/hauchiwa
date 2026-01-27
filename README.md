@@ -32,6 +32,8 @@ Then Hauchiwa is for you.
   * **Sass/SCSS**: Compilation via `grass`.
   * **JavaScript**: Bundling and minification via `esbuild`.
   * **Svelte**: SSR and hydration support via `deno` and `esbuild`.
+  * **Search**: Static search indexing via `pagefind`.
+  * **Sitemap**: Sitemap generation via `sitemap-rs`.
   
 ## Core Concepts
 
@@ -116,6 +118,8 @@ of them by disabling them in your `Cargo.toml` file, if you don't need them.
 - `tokio`: Enables the Tokio runtime for async tasks.
 - `live`: Enables live-reload during development.
 - `server`: Enables the built-in development server.
+- `pagefind`: Enables static search indexing.
+- `sitemap`: Enables `sitemap.xml` generation.
 
 ## Documentation
 

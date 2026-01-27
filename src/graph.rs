@@ -232,6 +232,29 @@ where
     }
 }
 
+impl<T> TaskDependencies for Vec<Handle<T>>
+where
+    T: Send + Sync + 'static,
+{
+    type Output<'a> = Vec<&'a T>;
+
+    fn dependencies(&self) -> Vec<NodeIndex> {
+        self.iter().map(|h| h.index).collect()
+    }
+
+    fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> Self::Output<'a> {
+        outputs
+            .iter()
+            .map(|out| {
+                out.downcast_ref::<T>()
+                    // This unwrap is safe because the graph construction guarantees
+                    // the types match the handles provided in dependencies().
+                    .expect("Failed to downcast dependency output to expected type in Vec resolve")
+            })
+            .collect()
+    }
+}
+
 macro_rules! impl_deps {
     ($($T:ident),*) => {
         #[allow(non_snake_case)]

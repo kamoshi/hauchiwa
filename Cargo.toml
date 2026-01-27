@@ -9,12 +9,14 @@ description = "Flexible static website generator library with incremental rebuil
 repository  = "https://github.com/kamoshi/hauchiwa"
 
 [features]
-default     = ["grass", "image", "tokio", "live", "server"]
+default     = ["grass", "image", "tokio", "live", "server", "pagefind", "sitemap"]
 grass       = ["dep:grass"]
 image       = ["dep:image"]
 tokio       = ["dep:tokio"]
 live        = ["dep:notify", "dep:notify-debouncer-full", "dep:tungstenite"]
 server      = ["tokio", "dep:axum", "dep:tower-http"]
+pagefind    = ["tokio", "dep:pagefind"]
+sitemap     = ["dep:sitemap-rs"]
 
 [dependencies]
 camino                  = "1.2"
@@ -52,6 +54,16 @@ features = ["random"]
 # Feature = "images"
 [dependencies.image]
 version = "0.25"
+optional = true
+
+# Feature = "sitemap"
+[dependencies.sitemap-rs]
+version = "0.4.0"
+optional = true
+
+# Feature = "pagefind"
+[dependencies.pagefind]
+version = "1.3"
 optional = true
 
 # Feature = "reload"
