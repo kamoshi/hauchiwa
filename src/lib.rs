@@ -11,7 +11,7 @@ mod executor;
 mod graph;
 pub mod importmap;
 pub mod loader;
-pub mod page;
+pub mod output;
 mod utils;
 
 use std::{any::type_name, fmt::Debug, sync::Arc};
@@ -28,7 +28,7 @@ pub use crate::executor::Diagnostics;
 pub use crate::graph::Handle;
 pub use crate::importmap::ImportMap;
 pub use crate::loader::Store;
-pub use crate::page::Output;
+pub use crate::output::Output;
 
 use crate::graph::{Dynamic, Task, TypedTask};
 
@@ -371,7 +371,7 @@ where
 
         let (_, pages, diagnostics) = crate::executor::run_once_parallel(self, &globals)?;
 
-        crate::page::save_pages_to_dist(&pages)?;
+        crate::output::save_pages_to_dist(&pages)?;
 
         Ok(diagnostics)
     }

@@ -1,4 +1,4 @@
-use hauchiwa::{Blueprint, Output, task};
+use hauchiwa::{Blueprint, Output, output::OutputData, task};
 use serde::Deserialize;
 
 // -----------------------------------------------------------------------------
@@ -141,8 +141,8 @@ fn main() -> anyhow::Result<()> {
             );
 
             outputs.push(Output {
-                url: out_path.into(),
-                content: html,
+                path: out_path.into(),
+                data: OutputData::Utf8(html),
             });
         }
 
@@ -191,8 +191,8 @@ fn main() -> anyhow::Result<()> {
         );
 
         outputs.push(Output {
-            url: "index.html".into(),
-            content: home_html,
+            path: "index.html".into(),
+            data: OutputData::Utf8(home_html),
         });
 
         Ok(outputs)

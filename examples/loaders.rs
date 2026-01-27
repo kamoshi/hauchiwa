@@ -1,4 +1,4 @@
-use hauchiwa::{Blueprint, Output, task};
+use hauchiwa::{Blueprint, Output, output::OutputData, task};
 use serde::Deserialize;
 
 /// This example demonstrates the "Loaders" pattern in Hauchiwa.
@@ -129,8 +129,8 @@ fn main() -> anyhow::Result<()> {
         // We return an `Output` struct which tells Hauchiwa to write a file
         // named "index.html" with the content we just generated.
         Ok(Output {
-            url: "index.html".into(),
-            content: html,
+            path: "index.html".into(),
+            data: OutputData::Utf8(html),
         })
     });
 

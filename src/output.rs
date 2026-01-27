@@ -1,4 +1,4 @@
-//! Utilities for working with pages and paths.
+//! Utilities for working with output data and paths.
 //!
 //! This module contains the [`Output`] struct, which represents a final output file,
 //! and helper functions for path normalization and slugification.
@@ -141,6 +141,21 @@ fn normalize_path_html(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     buffer
 }
 
+#[derive(Debug, Clone)]
+pub enum OutputData {
+    Utf8(String),
+    Binary(Vec<u8>),
+}
+
+impl AsRef<[u8]> for OutputData {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            OutputData::Utf8(s) => s.as_bytes(),
+            OutputData::Binary(b) => b.as_slice(),
+        }
+    }
+}
+
 /// Represents a single output file to be written to the `dist` directory.
 ///
 /// A `Output` is a common output type for tasks that generate HTML, TXT, or
@@ -149,9 +164,9 @@ fn normalize_path_html(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
 #[derive(Debug, Clone)]
 pub struct Output {
     /// The destination path of the file, relative to the `dist` directory.
-    pub url: Utf8PathBuf,
+    pub path: Utf8PathBuf,
     /// The content of the file to be written.
-    pub content: String,
+    pub data: OutputData,
 }
 
 impl Output {
@@ -162,26 +177,26 @@ impl Output {
         }
     }
 
-    /// Creates a new `Page` with a normalized URL, suitable for HTML files.
+    /// Creates a new output with a normalized URL, suitable for HTML files.
     ///
     /// The path is automatically adjusted to create "pretty URLs". For example:
     /// - `foo/bar.html` becomes `foo/bar/index.html`
     /// - `foo/index.html` remains `foo/index.html`
-    pub fn html(path: impl AsRef<Utf8Path>, content: impl Into<String>) -> Self {
+    pub fn html(path: impl AsRef<Utf8Path>, data: impl Into<String>) -> Self {
         Self {
-            url: normalize_path_html(path),
-            content: content.into(),
+            path: normalize_path_html(path),
+            data: OutputData::Utf8(data.into()),
         }
     }
 
-    /// Creates a new `Page` with a raw, unmodified path.
+    /// Creates a new output with a raw, unmodified path.
     ///
-    /// This constructor is suitable for assets like CSS, JavaScript, or images
-    /// where the output path should not be altered.
-    pub fn file(path: impl Into<Utf8PathBuf>, content: impl Into<String>) -> Self {
+    /// This constructor is suitable for binary assets where the output path
+    /// should not be altered, and the file content is provided as raw bytes.
+    pub fn binary(path: impl Into<Utf8PathBuf>, data: impl Into<Vec<u8>>) -> Self {
         Self {
-            url: path.into(),
-            content: content.into(),
+            path: path.into(),
+            data: OutputData::Binary(data.into()),
         }
     }
 }
@@ -230,7 +245,7 @@ impl OutputBuilder {
     /// Finalizes the path and attaches content to produce the Output.
     pub fn content(self, body: impl Into<String>) -> Output {
         // If it's HTML, we ensure it ends in index.html for the server
-        let url = if (self.current.extension() == Some("html"))
+        let path = if (self.current.extension() == Some("html"))
             || self.current.file_name() == Some("index")
         {
             normalize_path_html(&self.current)
@@ -240,8 +255,8 @@ impl OutputBuilder {
         };
 
         Output {
-            url,
-            content: body.into(),
+            path: path.into(),
+            data: OutputData::Utf8(body.into()),
         }
     }
 }
@@ -257,13 +272,13 @@ pub(crate) fn save_pages_to_dist(pages: &[Output]) -> io::Result<()> {
     fs::create_dir_all(output_dir)?;
 
     for page in pages {
-        let file_path = output_dir.join(&page.url);
+        let file_path = output_dir.join(&page.path);
 
         if let Some(parent_dir) = file_path.parent() {
             fs::create_dir_all(parent_dir)?;
         }
 
-        fs::write(&file_path, &page.content)?;
+        fs::write(&file_path, &page.data)?;
     }
 
     Ok(())

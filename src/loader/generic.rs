@@ -9,7 +9,7 @@ use crate::{
     error::HauchiwaError,
     graph::Handle,
     loader::{GlobAssetsTask, Input, Store},
-    page::OutputBuilder,
+    output::OutputBuilder,
 };
 
 /// Errors that can occur when loading files with frontmatter.
@@ -72,7 +72,7 @@ impl DocumentMeta {
     ///
     /// This converts both `foo.md` and `foo/index.md` into `dist/.../foo/index.html`.
     pub fn dist_path(&self, out: impl AsRef<Utf8Path>) -> Utf8PathBuf {
-        crate::page::href_to_dist(&self.href, out)
+        crate::output::href_to_dist(&self.href, out)
     }
 
     /// Generates a glob pattern for assets relative to this document.
@@ -82,7 +82,7 @@ impl DocumentMeta {
     /// - If the document is `posts/hello/index.md`, it also returns `"posts/hello/*.bib"`.
     pub fn assets(&self, pattern: &str) -> String {
         // Get the bundle scope (base directory) of the document
-        let base = crate::page::source_to_bundle(&self.path);
+        let base = crate::output::source_to_bundle(&self.path);
 
         // Join the pattern with the base directory
         base.join(pattern).to_string()
@@ -99,13 +99,13 @@ impl DocumentMeta {
     /// - Result: `content/posts/world.md`
     pub fn resolve(&self, path: impl AsRef<str>) -> Utf8PathBuf {
         // Get the bundle scope (base directory) of the document
-        let base = crate::page::source_to_bundle(&self.path);
+        let base = crate::output::source_to_bundle(&self.path);
 
         // Join the relative path (e.g. "../foo.png")
         let joined = base.join(path.as_ref());
 
         // Normalize to remove ".." and "." components
-        crate::page::normalize_path(&joined)
+        crate::output::normalize_path(&joined)
     }
 }
 
@@ -172,7 +172,7 @@ where
                 let (metadata, content) =
                     super::parse_yaml::<R>(data).map_err(FrontmatterError::Parse)?;
 
-                let href = crate::page::source_to_href(&input.path, offset.as_deref());
+                let href = crate::output::source_to_href(&input.path, offset.as_deref());
 
                 Ok((
                     input.path.clone(),

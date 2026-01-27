@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use hauchiwa::{Blueprint, Output, task};
+use hauchiwa::{Blueprint, Output, output::OutputData, task};
 use serde::Deserialize;
 
 /// This example demonstrates the "Diamond Dependency" pattern.
@@ -100,8 +100,8 @@ fn main() -> anyhow::Result<()> {
             let stem = post.meta.path.file_stem().unwrap_or("unknown");
 
             pages.push(Output {
-                url: format!("{}/index.html", stem).into(),
-                content,
+                path: format!("{}/index.html", stem).into(),
+                data: OutputData::Utf8(content),
             });
         }
 
@@ -132,8 +132,8 @@ fn main() -> anyhow::Result<()> {
         xml.push_str("</urlset>");
 
         Ok(Output {
-            url: "sitemap.xml".into(),
-            content: xml,
+            path: "sitemap.xml".into(),
+            data: OutputData::Binary(xml.into()),
         })
     });
 

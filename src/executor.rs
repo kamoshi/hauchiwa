@@ -290,7 +290,7 @@ mod live {
         info!("running initial build...");
         let (mut cache, pages, _diagnostics) = run_once_parallel(site, &globals)?;
         info!("collected {} pages", pages.len());
-        crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
+        crate::output::save_pages_to_dist(&pages).expect("Failed to save pages");
 
         info!("initial build completed, now watching for changes...");
         let clients = Arc::new(Mutex::new(vec![]));
@@ -368,7 +368,7 @@ mod live {
 
                         let pages = collect_pages(&cache);
                         info!("collected {} pages", pages.len());
-                        crate::page::save_pages_to_dist(&pages).expect("Failed to save pages");
+                        crate::output::save_pages_to_dist(&pages).expect("Failed to save pages");
                         tx_reload.send(()).unwrap();
                         info!("rebuild complete, watching for changes...");
                     }
@@ -647,24 +647,26 @@ mod server {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::Dynamic;
-    use petgraph::graph::NodeIndex;
     use std::sync::Arc;
+
+    use petgraph::graph::NodeIndex;
+
+    use crate::{graph::Dynamic, output::OutputData};
 
     #[test]
     fn test_collect_pages() {
         let mut cache: HashMap<NodeIndex, NodeData> = HashMap::new();
         let page1 = Output {
-            url: "/".into(),
-            content: "Home".to_string(),
+            path: "/".into(),
+            data: OutputData::Utf8("Home".into()),
         };
         let page2 = Output {
-            url: "/about".into(),
-            content: "About".to_string(),
+            path: "/about".into(),
+            data: OutputData::Utf8("About".into()),
         };
         let page3 = Output {
-            url: "/contact".into(),
-            content: "Contact".to_string(),
+            path: "/contact".into(),
+            data: OutputData::Utf8("Contact".into()),
         };
 
         cache.insert(
@@ -692,8 +694,8 @@ mod tests {
         let pages = collect_pages(&cache);
 
         assert_eq!(pages.len(), 3);
-        assert!(pages.iter().any(|p| p.url == "/"));
-        assert!(pages.iter().any(|p| p.url == "/about"));
-        assert!(pages.iter().any(|p| p.url == "/contact"));
+        assert!(pages.iter().any(|p| p.path == "/"));
+        assert!(pages.iter().any(|p| p.path == "/about"));
+        assert!(pages.iter().any(|p| p.path == "/contact"));
     }
 }
