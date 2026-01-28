@@ -5,10 +5,10 @@ use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 use crate::{
-    Blueprint, Environment, Output,
+    Blueprint, Output,
     error::HauchiwaError,
     graph::Handle,
-    loader::{GlobAssetsTask, Input, Store},
+    loader::{GlobAssetsTask, Input},
     output::OutputBuilder,
 };
 
@@ -122,7 +122,7 @@ where
     R: DeserializeOwned + Send + Sync + 'static,
 {
     blueprint: &'a mut Blueprint<G>,
-    sources: Vec<&'static str>,
+    sources: Vec<String>,
     offset: Option<String>,
     _phantom: std::marker::PhantomData<R>,
 }
@@ -142,8 +142,8 @@ where
     }
 
     /// Adds a glob pattern to find documents.
-    pub fn source(mut self, glob: &'static str) -> Self {
-        self.sources.push(glob);
+    pub fn source(mut self, glob: impl Into<String>) -> Self {
+        self.sources.push(glob.into());
         self
     }
 
@@ -195,62 +195,6 @@ impl<G> Blueprint<G>
 where
     G: Send + Sync + 'static,
 {
-    /// Registers a generic asset loader.
-    ///
-    /// This method allows you to process files matching a glob pattern using a
-    /// custom closure. It is useful for loading assets that don't fit into
-    /// standard categories (like simple text files, JSON data, or binary
-    /// assets).
-    ///
-    /// # Type Parameters
-    ///
-    /// * `R`: The return type of the callback, which will be stored in [`crate::loader::Assets`].
-    ///
-    /// # Arguments
-    ///
-    /// * `path_glob` - A glob pattern to find files (e.g., `"assets/**/*.json"`).
-    /// * `callback` - A function that takes the task context, a store handle,
-    ///   and the input. It should return the processed data.
-    ///
-    /// # Returns
-    ///
-    /// A [`Handle`] to a [`crate::loader::Assets<R>`], mapping file paths to your processed data.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # let mut config = hauchiwa::Blueprint::<()>::new();
-    /// // Load all .txt files and reverse their content.
-    /// let reversed_texts = config.load("content/**/*.txt", |_, _, input| {
-    ///     let content = String::from_utf8(input.read()?.to_vec())?;
-    ///     let reversed = content.chars().rev().collect::<String>();
-    ///     Ok(reversed)
-    /// });
-    /// ```
-    pub fn load<R>(
-        &mut self,
-        path_glob: &'static str,
-        callback: impl Fn(&Environment<G>, &mut Store, Input) -> anyhow::Result<R>
-        + Send
-        + Sync
-        + 'static,
-    ) -> Result<Handle<super::Assets<R>>, HauchiwaError>
-    where
-        G: Send + Sync + 'static,
-        R: Send + Sync + 'static,
-    {
-        Ok(self.add_task_opaque(GlobAssetsTask::new(
-            vec![path_glob],
-            vec![path_glob],
-            move |ctx, store, input| {
-                let path = input.path.clone();
-                let data = callback(ctx.env, store, input)?;
-
-                Ok((path, data))
-            },
-        )?))
-    }
-
     /// Starts configuring a document loader task.
     ///
     /// This is the primary way to load Markdown (or other text) files that contain

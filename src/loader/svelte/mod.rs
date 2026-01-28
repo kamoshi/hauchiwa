@@ -80,8 +80,8 @@ where
     P: Clone + DeserializeOwned + Serialize + 'static,
 {
     blueprint: &'a mut Blueprint<G>,
-    entry_globs: Vec<&'static str>,
-    watch_globs: Vec<&'static str>,
+    entry_globs: Vec<String>,
+    watch_globs: Vec<String>,
     _phantom: std::marker::PhantomData<P>,
 }
 
@@ -100,16 +100,16 @@ where
     }
 
     /// Adds a glob pattern for the entry components (e.g., "components/Button.svelte").
-    pub fn entry(mut self, glob: &'static str) -> Self {
-        self.entry_globs.push(glob);
+    pub fn entry(mut self, glob: impl Into<String>) -> Self {
+        self.entry_globs.push(glob.into());
         self
     }
 
     /// Adds a glob pattern for files to watch (e.g., "components/**/*.svelte").
     ///
     /// If never called, defaults to watching the entry globs.
-    pub fn watch(mut self, glob: &'static str) -> Self {
-        self.watch_globs.push(glob);
+    pub fn watch(mut self, glob: impl Into<String>) -> Self {
+        self.watch_globs.push(glob.into());
         self
     }
 

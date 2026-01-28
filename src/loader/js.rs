@@ -38,8 +38,8 @@ where
     G: Send + Sync,
 {
     blueprint: &'a mut Blueprint<G>,
-    entry_globs: Vec<&'static str>,
-    watch_globs: Vec<&'static str>,
+    entry_globs: Vec<String>,
+    watch_globs: Vec<String>,
     bundle: bool,
     minify: bool,
 }
@@ -59,16 +59,16 @@ where
     }
 
     /// Adds a glob pattern for the entry points (e.g., "src/main.ts").
-    pub fn entry(mut self, glob: &'static str) -> Self {
-        self.entry_globs.push(glob);
+    pub fn entry(mut self, glob: impl Into<String>) -> Self {
+        self.entry_globs.push(glob.into());
         self
     }
 
     /// Adds a glob pattern for files to watch for changes (often broader, e.g., "src/**/*.ts").
     ///
     /// If never called, defaults to watching the entry globs.
-    pub fn watch(mut self, glob: &'static str) -> Self {
-        self.watch_globs.push(glob);
+    pub fn watch(mut self, glob: impl Into<String>) -> Self {
+        self.watch_globs.push(glob.into());
         self
     }
 

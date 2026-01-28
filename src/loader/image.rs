@@ -98,7 +98,7 @@ where
     G: Send + Sync,
 {
     blueprint: &'a mut Blueprint<G>,
-    globs: Vec<&'static str>,
+    globs: Vec<String>,
     formats: Vec<ImageFormat>,
 }
 
@@ -115,8 +115,8 @@ where
     }
 
     /// Adds a glob pattern to find images.
-    pub fn source(mut self, glob: &'static str) -> Self {
-        self.globs.push(glob);
+    pub fn source(mut self, glob: impl Into<String>) -> Self {
+        self.globs.push(glob.into());
         self
     }
 

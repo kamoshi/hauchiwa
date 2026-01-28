@@ -122,6 +122,14 @@ impl<'a, G: Send + Sync + 'static> TaskDef<'a, G> {
         self
     }
 
+    pub fn source(self, glob: impl Into<String>) -> TaskSourceBinder<'a, G> {
+        TaskSourceBinder {
+            blueprint: self.blueprint,
+            name: self.name,
+            sources: vec![glob.into()],
+        }
+    }
+
     pub fn depends_on<D>(self, dependencies: D) -> TaskBinder<'a, G, D>
     where
         D: TaskDependencies,
@@ -144,6 +152,48 @@ impl<'a, G: Send + Sync + 'static> TaskDef<'a, G> {
             callback: move |ctx, _| callback(ctx),
             _phantom: PhantomData,
         })
+    }
+}
+
+pub struct TaskSourceBinder<'a, G: Send + Sync> {
+    blueprint: &'a mut Blueprint<G>,
+    name: Option<Cow<'static, str>>,
+    sources: Vec<String>,
+}
+
+impl<'a, G: Send + Sync + 'static> TaskSourceBinder<'a, G> {
+    pub fn name(mut self, name: impl Into<Cow<'static, str>>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn source(mut self, glob: impl Into<String>) -> Self {
+        self.sources.push(glob.into());
+        self
+    }
+
+    pub fn run<F, R>(
+        self,
+        callback: F,
+    ) -> Result<Handle<crate::loader::Assets<R>>, crate::error::HauchiwaError>
+    where
+        F: Fn(&TaskContext<G>, &mut Store, crate::loader::Input) -> anyhow::Result<R>
+            + Send
+            + Sync
+            + 'static,
+        R: Send + Sync + 'static,
+    {
+        let task = crate::loader::GlobAssetsTask::new(
+            self.sources.clone(),
+            self.sources,
+            move |ctx, store, input| {
+                let path = input.path.clone();
+                let res = callback(ctx, store, input)?;
+                Ok((path, res))
+            },
+        )?;
+
+        Ok(self.blueprint.add_task_opaque(task))
     }
 }
 

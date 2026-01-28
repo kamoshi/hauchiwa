@@ -225,7 +225,7 @@ where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
-    glob_entry: Vec<&'static str>,
+    glob_entry: Vec<String>,
     glob_watch: Vec<Pattern>,
     callback: GlobCallback<G, R>,
 }
@@ -243,8 +243,8 @@ where
     /// * `glob_watch` - Patterns to watch for changes (retriggering the task).
     /// * `callback` - A function that processes each found file.
     pub fn new<F>(
-        glob_entry: Vec<&'static str>,
-        glob_watch: Vec<&'static str>,
+        glob_entry: Vec<String>,
+        glob_watch: Vec<String>,
         callback: F,
     ) -> Result<Self, HauchiwaError>
     where
@@ -254,10 +254,10 @@ where
             + 'static,
     {
         Ok(Self {
-            glob_entry: glob_entry.to_vec(),
+            glob_entry,
             glob_watch: glob_watch
-                .into_iter()
-                .map(Pattern::new)
+                .iter()
+                .map(|p| Pattern::new(p))
                 .collect::<Result<_, _>>()?,
             callback: Box::new(callback),
         })
