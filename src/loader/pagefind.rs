@@ -50,18 +50,21 @@ where
     ) -> Handle<Vec<Output>> {
         let dependencies = handles.into_iter().collect::<Vec<_>>();
 
-        self.add_task(dependencies, |_, handles| {
-            let pages = handles
-                .into_iter()
-                .flat_map(|source| source.iter())
-                .collect::<Vec<_>>();
+        self.task()
+            .name("pagefind")
+            .depends_on(dependencies)
+            .run(|_, handles| {
+                let pages = handles
+                    .into_iter()
+                    .flat_map(|source| source.iter())
+                    .collect::<Vec<_>>();
 
-            let output = Builder::new_multi_thread()
-                .enable_all()
-                .build()?
-                .block_on(build_closure(&pages))?;
+                let output = Builder::new_multi_thread()
+                    .enable_all()
+                    .build()?
+                    .block_on(build_closure(&pages))?;
 
-            Ok(output)
-        })
+                Ok(output)
+            })
     }
 }

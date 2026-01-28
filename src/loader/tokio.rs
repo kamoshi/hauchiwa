@@ -51,6 +51,8 @@ where
                 .build()?,
         );
 
-        Ok(self.add_task((), move |ctx, ()| executor.block_on(callback(ctx))))
+        let handle = self.task().run(move |ctx| executor.block_on(callback(ctx)));
+
+        Ok(handle)
     }
 }

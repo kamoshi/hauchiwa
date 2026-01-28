@@ -17,8 +17,8 @@ use tracing::{Level, error, info, span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 pub use crate::executor::diagnostics::Diagnostics;
-use crate::graph::NodeData;
-use crate::{Environment, ImportMap, Mode, Output, Store, TaskContext, Website};
+use crate::{Environment, ImportMap, Mode, Output, Store, TaskContext};
+use crate::{blueprint::Website, graph::NodeData};
 
 #[cfg(feature = "live")]
 pub use live::watch;

@@ -1,4 +1,4 @@
-use hauchiwa::{Blueprint, Output, output::OutputData, task};
+use hauchiwa::{Blueprint, Output, output::OutputData};
 use serde::Deserialize;
 
 // -----------------------------------------------------------------------------
@@ -77,31 +77,34 @@ fn main() -> anyhow::Result<()> {
     // -------------------------------------------------------------------------
     // This task acts as the controller. It fetches the data, selects the
     // correct layout, and generates the final output.
-    task!(config, |_ctx, content, css| {
-        let mut outputs = Vec::new();
+    config
+        .task()
+        .depends_on((content, css))
+        .run(|_, (content, css)| {
+            let mut outputs = Vec::new();
 
-        // Resolve the hashed filename of the CSS (e.g., "main.a1b2c3.css")
-        let css_link = css
-            .values()
-            .next()
-            .map(|s| s.path.as_str())
-            .unwrap_or("style.css");
+            // Resolve the hashed filename of the CSS (e.g., "main.a1b2c3.css")
+            let css_link = css
+                .values()
+                .next()
+                .map(|s| s.path.as_str())
+                .unwrap_or("style.css");
 
-        for doc in content.values() {
-            // Skip drafts in production builds
-            if doc.matter.draft {
-                continue;
-            }
+            for doc in content.values() {
+                // Skip drafts in production builds
+                if doc.matter.draft {
+                    continue;
+                }
 
-            // A. Determine Output Path
-            //    Hugo Style: content/post.md -> public/post/index.html (Pretty URLs)
-            let stem = doc.meta.path.file_stem().unwrap_or_default();
-            let out_path = format!("{}/index.html", stem);
+                // A. Determine Output Path
+                //    Hugo Style: content/post.md -> public/post/index.html (Pretty URLs)
+                let stem = doc.meta.path.file_stem().unwrap_or_default();
+                let out_path = format!("{}/index.html", stem);
 
-            // B. Render the "Single" Layout
-            //    If using Askama, you would initialize `SinglePostTemplate` here.
-            let html = format!(
-                r#"
+                // B. Render the "Single" Layout
+                //    If using Askama, you would initialize `SinglePostTemplate` here.
+                let html = format!(
+                    r#"
                 <!DOCTYPE html>
                 <html lang="en">
                 <head>
@@ -130,43 +133,43 @@ fn main() -> anyhow::Result<()> {
                 </body>
                 </html>
                 "#,
-                title = doc.matter.title,
-                site = SITE_NAME,
-                css = css_link,
-                date = doc.matter.date,
-                // Note: `doc.body` is the raw Markdown content.
-                // In a real app, you would pass this through `pulldown-cmark` here
-                // to convert Markdown -> HTML before embedding it.
-                body = doc.text
-            );
+                    title = doc.matter.title,
+                    site = SITE_NAME,
+                    css = css_link,
+                    date = doc.matter.date,
+                    // Note: `doc.body` is the raw Markdown content.
+                    // In a real app, you would pass this through `pulldown-cmark` here
+                    // to convert Markdown -> HTML before embedding it.
+                    body = doc.text
+                );
 
-            outputs.push(Output {
-                path: out_path.into(),
-                data: OutputData::Utf8(html),
-            });
-        }
+                outputs.push(Output {
+                    path: out_path.into(),
+                    data: OutputData::Utf8(html),
+                });
+            }
 
-        // ---------------------------------------------------------------------
-        // 4. The homepage
-        // ---------------------------------------------------------------------
-        //    If using Askama, this would be a `ListTemplate` struct taking
-        //    `posts: Vec<&Frontmatter>` as a field.
+            // ---------------------------------------------------------------------
+            // 4. The homepage
+            // ---------------------------------------------------------------------
+            //    If using Askama, this would be a `ListTemplate` struct taking
+            //    `posts: Vec<&Frontmatter>` as a field.
 
-        let mut list_items = String::new();
-        for doc in content.values() {
-            if !doc.matter.draft {
-                let stem = doc.meta.path.file_stem().unwrap_or_default();
-                list_items.push_str(&format!(
+            let mut list_items = String::new();
+            for doc in content.values() {
+                if !doc.matter.draft {
+                    let stem = doc.meta.path.file_stem().unwrap_or_default();
+                    list_items.push_str(&format!(
                     r#"<li><span class="date">[{date}]</span> <a href="/{slug}/">{title}</a></li>"#,
                     date = doc.matter.date,
                     slug = stem,
                     title = doc.matter.title
                 ));
+                }
             }
-        }
 
-        let home_html = format!(
-            r#"
+            let home_html = format!(
+                r#"
             <!DOCTYPE html>
             <html lang="en">
             <head>
@@ -185,18 +188,18 @@ fn main() -> anyhow::Result<()> {
             </body>
             </html>
             "#,
-            site = SITE_NAME,
-            css = css_link,
-            list = list_items
-        );
+                site = SITE_NAME,
+                css = css_link,
+                list = list_items
+            );
 
-        outputs.push(Output {
-            path: "index.html".into(),
-            data: OutputData::Utf8(home_html),
+            outputs.push(Output {
+                path: "index.html".into(),
+                data: OutputData::Utf8(home_html),
+            });
+
+            Ok(outputs)
         });
-
-        Ok(outputs)
-    });
 
     config.finish().build(())?;
     println!("Hugo-ish build complete. 'Hinagata' applied successfully.");

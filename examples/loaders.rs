@@ -1,4 +1,4 @@
-use hauchiwa::{Blueprint, Output, output::OutputData, task};
+use hauchiwa::{Blueprint, Output, output::OutputData};
 use serde::Deserialize;
 
 /// This example demonstrates the "Loaders" pattern in Hauchiwa.
@@ -85,54 +85,57 @@ fn main() -> anyhow::Result<()> {
     //
     // Inside the closure, these variables are "resolved". They are no longer
     // handles, but the actual data (Maps of file paths to content).
-    task!(config, |_ctx, posts, styles, scripts, images| {
-        // Start building the HTML string.
-        let mut html = String::from("<html><head>");
+    config
+        .task()
+        .depends_on((posts, styles, scripts, images))
+        .run(|_, (posts, styles, scripts, images)| {
+            // Start building the HTML string.
+            let mut html = String::from("<html><head>");
 
-        // Inject the link tag for our compiled CSS.
-        // `styles.values()` gives us access to the processed CSS metadata.
-        for css in styles.values() {
-            html.push_str(&format!(r#"<link rel="stylesheet" href="{}">"#, css.path));
-        }
+            // Inject the link tag for our compiled CSS.
+            // `styles.values()` gives us access to the processed CSS metadata.
+            for css in styles.values() {
+                html.push_str(&format!(r#"<link rel="stylesheet" href="{}">"#, css.path));
+            }
 
-        html.push_str("</head><body>");
-        html.push_str("<h1>My Blog</h1>");
+            html.push_str("</head><body>");
+            html.push_str("<h1>My Blog</h1>");
 
-        // Example: Find and display a specific logo image.
-        // `images` is a Map, but we can search it using a glob pattern.
-        if let Some(logo) = images.glob("**/logo.ppm")?.first() {
-            // logo.1 contains the Image metadata (like its final path in `dist`).
-            html.push_str(&format!(r#"<img src="{}" alt="Logo">"#, logo.1.default));
-        }
+            // Example: Find and display a specific logo image.
+            // `images` is a Map, but we can search it using a glob pattern.
+            if let Some(logo) = images.glob("**/logo.ppm")?.first() {
+                // logo.1 contains the Image metadata (like its final path in `dist`).
+                html.push_str(&format!(r#"<img src="{}" alt="Logo">"#, logo.1.default));
+            }
 
-        html.push_str("<ul>");
+            html.push_str("<ul>");
 
-        // Iterate over our markdown posts and create a list.
-        for post in posts.values() {
-            html.push_str(&format!("<li>{}</li>", post.matter.title));
-        }
-        html.push_str("</ul>");
+            // Iterate over our markdown posts and create a list.
+            for post in posts.values() {
+                html.push_str(&format!("<li>{}</li>", post.matter.title));
+            }
+            html.push_str("</ul>");
 
-        // Inject the script tag for our compiled JS.
-        for js in scripts.values() {
-            html.push_str(&format!(
-                r#"<script type="module" src="{}"></script>"#,
-                js.path
-            ));
-        }
+            // Inject the script tag for our compiled JS.
+            for js in scripts.values() {
+                html.push_str(&format!(
+                    r#"<script type="module" src="{}"></script>"#,
+                    js.path
+                ));
+            }
 
-        html.push_str("</body></html>");
+            html.push_str("</body></html>");
 
-        // -------------------------------------------------------------------
-        // 4. Return Output
-        // -------------------------------------------------------------------
-        // We return an `Output` struct which tells Hauchiwa to write a file
-        // named "index.html" with the content we just generated.
-        Ok(Output {
-            path: "index.html".into(),
-            data: OutputData::Utf8(html),
-        })
-    });
+            // -------------------------------------------------------------------
+            // 4. Return Output
+            // -------------------------------------------------------------------
+            // We return an `Output` struct which tells Hauchiwa to write a file
+            // named "index.html" with the content we just generated.
+            Ok(Output {
+                path: "index.html".into(),
+                data: OutputData::Utf8(html),
+            })
+        });
 
     // -----------------------------------------------------------------------
     // 5. Execute the build
