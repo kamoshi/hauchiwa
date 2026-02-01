@@ -8,7 +8,7 @@ use crate::{
     Blueprint, Output,
     engine::HandleF,
     error::HauchiwaError,
-    loader::{GlobAssetsTask, Input},
+    loader::{GlobFiles, Input},
     output::OutputBuilder,
 };
 
@@ -159,7 +159,7 @@ where
     pub fn register(self) -> Result<HandleF<Document<R>>, HauchiwaError> {
         let offset = self.offset.map(Arc::from);
 
-        let task = GlobAssetsTask::new(
+        let task = GlobFiles::new(
             self.sources.clone(),
             self.sources,
             move |_, _, input: Input| {

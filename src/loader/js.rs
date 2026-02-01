@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 use camino::{Utf8Path, Utf8PathBuf};
 use thiserror::Error;
 
-use crate::{Blueprint, engine::HandleF, error::HauchiwaError, loader::GlobAssetsTask};
+use crate::{Blueprint, Hash32, engine::HandleF, error::HauchiwaError, loader::GlobBundle};
 
 /// Errors that can occur when compiling JavaScript files.
 #[derive(Debug, Error)]
@@ -95,11 +95,12 @@ where
         let bundle = self.bundle;
         let minify = self.minify;
 
-        let task = GlobAssetsTask::new(self.entry_globs, watch_globs, move |_, store, input| {
+        let task = GlobBundle::new(self.entry_globs, watch_globs, move |_, store, input| {
             let data = compile_esbuild(&input.path, bundle, minify)?;
+            let hash = Hash32::hash(&data);
             let path = store.save(&data, "js").map_err(ScriptError::Build)?;
 
-            Ok((input.path, Script { path }))
+            Ok((hash, input.path, Script { path }))
         })?;
 
         Ok(self.blueprint.add_task_fine(task))

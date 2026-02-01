@@ -12,7 +12,7 @@ use crate::{
     Blueprint, Hash32,
     engine::HandleF,
     error::HauchiwaError,
-    loader::{GlobAssetsTask, Script},
+    loader::{GlobBundle, GlobFiles, Script},
 };
 
 #[derive(Debug, Error)]
@@ -121,7 +121,7 @@ where
             self.watch_globs
         };
 
-        let task = GlobAssetsTask::new(self.entry_globs, watch_globs, move |_, store, input| {
+        let task = GlobBundle::new(self.entry_globs, watch_globs, move |_, store, input| {
             let runtime = match RUNTIME.as_ref() {
                 Ok(runtime) => {
                     let srcmap = store.save(&runtime.map, "js.map")?;
@@ -165,6 +165,7 @@ where
             });
 
             Ok((
+                anchor,
                 input.path,
                 Svelte::<P> {
                     prerender,

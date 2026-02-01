@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::engine::HandleF;
 use crate::error::{BuildError, HauchiwaError};
-use crate::loader::{GlobAssetsTask, Input, Store};
+use crate::loader::{GlobFiles, Input, Store};
 use crate::{Blueprint, TaskContext};
 
 const DIR_STORE: &str = "/hash/img/";
@@ -140,7 +140,7 @@ where
             formats.push(ImageFormat::default());
         }
 
-        let task = GlobAssetsTask::new(
+        let task = GlobFiles::new(
             self.globs.clone(),
             // watch the source globs
             self.globs,

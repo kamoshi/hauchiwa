@@ -146,7 +146,7 @@ impl Default for Store {
     }
 }
 
-type GlobCallback<G, R> = Box<
+type GlobFilesCallback<G, R> = Box<
     dyn Fn(&TaskContext<G>, &mut Store, Input) -> anyhow::Result<(Utf8PathBuf, R)> + Send + Sync,
 >;
 
@@ -154,17 +154,17 @@ type GlobCallback<G, R> = Box<
 ///
 /// This is the implementation behind helper methods like `load_frontmatter` and `load_images`.
 /// It is generic over the global context `G` and the result type `R`.
-pub struct GlobAssetsTask<G, R>
+pub(crate) struct GlobFiles<G, R>
 where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
     glob_entry: Vec<String>,
     glob_watch: Vec<Pattern>,
-    callback: GlobCallback<G, R>,
+    callback: GlobFilesCallback<G, R>,
 }
 
-impl<G, R> GlobAssetsTask<G, R>
+impl<G, R> GlobFiles<G, R>
 where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
@@ -198,7 +198,7 @@ where
     }
 }
 
-impl<G, R> TypedTaskF<G> for GlobAssetsTask<G, R>
+impl<G, R> TypedTaskF<G> for GlobFiles<G, R>
 where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
@@ -249,6 +249,133 @@ where
 
                 // call the user callback
                 let (path, res) = (self.callback)(context, &mut rt, file)?;
+
+                // next iteration
+                context.span.pb_inc(1);
+
+                Ok((Provenance(hash), path, res, rt.imports))
+            })
+            .collect();
+
+        let mut registry = HashMap::new();
+        for (provenance, path, res, imports) in results? {
+            registry.insert(path.into_string(), (res, provenance));
+            runtime.imports.merge(imports);
+        }
+
+        Ok(Map { map: registry })
+    }
+
+    fn is_dirty(&self, path: &Utf8Path) -> bool {
+        self.glob_watch.iter().any(|p| p.matches(path.as_str()))
+    }
+}
+
+type GlobBundleCallback<G, R> = Box<
+    dyn Fn(&TaskContext<G>, &mut Store, Input) -> anyhow::Result<(Hash32, Utf8PathBuf, R)>
+        + Send
+        + Sync,
+>;
+
+/// A task that finds files matching a glob pattern and processes them in parallel.
+///
+/// This is the implementation behind helper methods like `load_frontmatter` and `load_images`.
+/// It is generic over the global context `G` and the result type `R`.
+pub(crate) struct GlobBundle<G, R>
+where
+    G: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+{
+    glob_entry: Vec<String>,
+    glob_watch: Vec<Pattern>,
+    callback: GlobBundleCallback<G, R>,
+}
+
+impl<G, R> GlobBundle<G, R>
+where
+    G: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+{
+    /// Creates a new `GlobAssetsTask`.
+    ///
+    /// # Arguments
+    ///
+    /// * `glob_entry` - Patterns to search for files to process.
+    /// * `glob_watch` - Patterns to watch for changes (retriggering the task).
+    /// * `callback` - A function that processes each found file.
+    pub(crate) fn new<F>(
+        glob_entry: Vec<String>,
+        glob_watch: Vec<String>,
+        callback: F,
+    ) -> Result<Self, HauchiwaError>
+    where
+        F: Fn(&TaskContext<G>, &mut Store, Input) -> anyhow::Result<(Hash32, Utf8PathBuf, R)>
+            + Send
+            + Sync
+            + 'static,
+    {
+        Ok(Self {
+            glob_entry,
+            glob_watch: glob_watch
+                .iter()
+                .map(|p| Pattern::new(p))
+                .collect::<Result<_, _>>()?,
+            callback: Box::new(callback),
+        })
+    }
+}
+
+impl<G, R> TypedTaskF<G> for GlobBundle<G, R>
+where
+    G: Send + Sync + 'static,
+    R: Send + Sync + 'static,
+{
+    type Output = R;
+
+    fn get_name(&self) -> String {
+        self.glob_entry.join(", ")
+    }
+
+    fn dependencies(&self) -> Vec<NodeIndex> {
+        vec![]
+    }
+
+    fn get_watched(&self) -> Vec<camino::Utf8PathBuf> {
+        self.glob_watch
+            .iter()
+            .map(|pat| Utf8PathBuf::from(pat.as_str()))
+            .collect()
+    }
+
+    fn execute(
+        &self,
+        context: &TaskContext<G>,
+        runtime: &mut Store,
+        _: &[Dynamic],
+    ) -> anyhow::Result<Map<Self::Output>> {
+        let mut paths = Vec::new();
+        for glob_entry in &self.glob_entry {
+            for path in glob(glob_entry)? {
+                // Handle glob errors immediately here
+                paths.push(Utf8PathBuf::try_from(path?)?);
+            }
+        }
+
+        // we can override the style to have progress
+        let style = crate::utils::get_style_task_progress()?;
+        context.span.pb_set_style(&style);
+        context.span.pb_set_length(paths.len() as u64);
+
+        let results: anyhow::Result<Vec<_>> = paths
+            .into_par_iter()
+            .map(|path| {
+                let hash = Hash32::hash_file(&path)?;
+                let file = Input { path, hash };
+
+                let mut rt = Store::new();
+
+                // call the user callback
+                let (hash, path, res) = (self.callback)(context, &mut rt, file)?;
 
                 // next iteration
                 context.span.pb_inc(1);

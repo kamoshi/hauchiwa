@@ -1,7 +1,9 @@
 use thiserror::Error;
 
+use crate::Hash32;
 use crate::engine::HandleF;
-use crate::{Blueprint, error::HauchiwaError, loader::GlobAssetsTask};
+use crate::loader::GlobBundle;
+use crate::{Blueprint, error::HauchiwaError};
 
 /// Errors that can occur when compiling Stylesheets.
 #[derive(Debug, Error)]
@@ -80,7 +82,7 @@ where
 
         let minify = self.minify;
 
-        let task = GlobAssetsTask::new(self.entry_globs, watch_globs, move |_, store, input| {
+        let task = GlobBundle::new(self.entry_globs, watch_globs, move |_, store, input| {
             let style = if minify {
                 grass::OutputStyle::Compressed
             } else {
@@ -90,12 +92,13 @@ where
             let options = grass::Options::default().style(style);
 
             let data = grass::from_path(&input.path, &options).map_err(StyleError::Sass)?;
+            let hash = Hash32::hash(&data);
 
             let path = store
                 .save(data.as_bytes(), "css")
                 .map_err(StyleError::Build)?;
 
-            Ok((input.path, Stylesheet { path }))
+            Ok((hash, input.path, Stylesheet { path }))
         })?;
 
         Ok(self.blueprint.add_task_fine(task))

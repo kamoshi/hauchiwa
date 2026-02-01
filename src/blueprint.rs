@@ -198,7 +198,7 @@ impl<'a, G: Send + Sync + 'static> TaskSourceBinder<'a, G> {
             + 'static,
         R: Send + Sync + 'static,
     {
-        let task = crate::loader::GlobAssetsTask::new(
+        let task = crate::loader::GlobFiles::new(
             self.sources.clone(),
             self.sources,
             move |ctx, store, input| {
