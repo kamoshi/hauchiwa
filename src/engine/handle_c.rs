@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use petgraph::graph::NodeIndex;
 
-use crate::engine::{Dynamic, Provenance, TrackerPtr};
+use crate::engine::{Dynamic, TrackerPtr, TrackerState};
 
 /// A type-safe reference to a task in the build graph.
 ///
@@ -65,7 +65,7 @@ where
 
     fn is_valid(
         &self,
-        _: &Option<HashMap<String, Provenance>>,
+        _: &Option<TrackerState>,
         _: &Dynamic,
         updated: &HashSet<NodeIndex>,
     ) -> bool {

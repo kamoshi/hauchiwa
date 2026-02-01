@@ -38,7 +38,7 @@ pub mod pagefind;
 #[cfg(feature = "sitemap")]
 pub mod sitemap;
 
-use std::{collections::HashMap, fs};
+use std::{collections::BTreeMap, fs};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::{Pattern, glob};
@@ -257,7 +257,7 @@ where
             })
             .collect();
 
-        let mut registry = HashMap::new();
+        let mut registry = BTreeMap::new();
         for (provenance, path, res, imports) in results? {
             registry.insert(path.into_string(), (res, provenance));
             runtime.imports.merge(imports);
@@ -384,7 +384,7 @@ where
             })
             .collect();
 
-        let mut registry = HashMap::new();
+        let mut registry = BTreeMap::new();
         for (provenance, path, res, imports) in results? {
             registry.insert(path.into_string(), (res, provenance));
             runtime.imports.merge(imports);

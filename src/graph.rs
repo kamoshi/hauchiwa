@@ -25,10 +25,8 @@
 //!   logic. It acts as the safe bridge, panicking only if the strictly-typed
 //!   blueprint construction was somehow bypassed (which the compiler prevents).
 
-use std::collections::HashMap;
-
 use crate::{
-    engine::{Dynamic, Provenance},
+    engine::{Dynamic, TrackerState},
     importmap::ImportMap,
 };
 
@@ -37,6 +35,6 @@ use crate::{
 #[derive(Clone, Debug)]
 pub(crate) struct NodeData {
     pub output: Dynamic,
-    pub tracking: Vec<Option<HashMap<String, Provenance>>>,
+    pub tracking: Vec<Option<TrackerState>>,
     pub importmap: ImportMap,
 }

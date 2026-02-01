@@ -3,7 +3,6 @@ mod handle_f;
 mod task_c;
 mod task_f;
 
-use std::collections::HashMap;
 use std::{any::Any, collections::HashSet, sync::Arc};
 
 use petgraph::graph::NodeIndex;
@@ -12,7 +11,7 @@ pub use crate::engine::handle_c::HandleC;
 pub use crate::engine::handle_f::HandleF;
 
 pub(crate) use crate::engine::task_c::TypedTaskC;
-pub(crate) use crate::engine::task_f::{Map, TrackerPtr, TypedTaskF};
+pub(crate) use crate::engine::task_f::{Map, TrackerPtr, TypedTaskF, TrackerState};
 pub use crate::engine::task_f::{Provenance, Tracker};
 
 pub(crate) type Dynamic = Arc<dyn Any + Send + Sync>;
@@ -23,7 +22,7 @@ pub struct Tracking {
 }
 
 impl Tracking {
-    pub(crate) fn unwrap(self) -> Vec<Option<HashMap<String, Provenance>>> {
+    pub(crate) fn unwrap(self) -> Vec<Option<TrackerState>> {
         self.edges
             .into_iter()
             .map(|edge| edge.map(|item| Arc::try_unwrap(item.ptr).unwrap().into_inner().unwrap()))
@@ -39,7 +38,7 @@ pub trait Handle: Copy + Send + Sync {
     fn downcast<'a>(&self, output: &'a Dynamic) -> (Option<TrackerPtr>, Self::Output<'a>);
     fn is_valid(
         &self,
-        old_tracking: &Option<HashMap<String, Provenance>>,
+        old_tracking: &Option<TrackerState>,
         new_output: &Dynamic,
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool;
@@ -98,7 +97,7 @@ where
 
     pub(crate) fn is_valid(
         &self,
-        old_tracking: &[Option<HashMap<String, Provenance>>],
+        old_tracking: &[Option<TrackerState>],
         new_outputs: &[Dynamic],
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool {
@@ -144,7 +143,7 @@ pub trait Dependencies {
 
     fn is_valid(
         &self,
-        old_tracking: &[Option<HashMap<String, Provenance>>],
+        old_tracking: &[Option<TrackerState>],
         new_outputs: &[Dynamic],
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool;
@@ -163,7 +162,7 @@ impl Dependencies for () {
 
     fn is_valid(
         &self,
-        _: &[Option<HashMap<String, Provenance>>],
+        _: &[Option<TrackerState>],
         _: &[Dynamic],
         _: &HashSet<NodeIndex>,
     ) -> bool {
@@ -193,7 +192,7 @@ where
 
     fn is_valid(
         &self,
-        old_tracking: &[Option<HashMap<String, Provenance>>],
+        old_tracking: &[Option<TrackerState>],
         new_outputs: &[Dynamic],
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool {
@@ -226,7 +225,7 @@ where
 
     fn is_valid(
         &self,
-        old_tracking: &[Option<HashMap<String, Provenance>>],
+        old_tracking: &[Option<TrackerState>],
         new_outputs: &[Dynamic],
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool {
@@ -270,7 +269,7 @@ macro_rules! impl_deps {
 
             fn is_valid(
                 &self,
-                old_tracking: &[Option<HashMap<String, Provenance>>],
+                old_tracking: &[Option<TrackerState>],
                 new_outputs: &[Dynamic],
                 updated_nodes: &HashSet<NodeIndex>,
             ) -> bool {

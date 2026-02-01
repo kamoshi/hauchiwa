@@ -141,13 +141,11 @@ fn run_tasks_parallel<G: Send + Sync>(
             let mut should_run = true;
             let mut old_data = None;
 
-            if !is_explicitly_dirty {
-                if let Some(data) = cache.get(&index) {
-                    old_data = Some(data.clone());
-                    let task = &site.graph[index];
-                    if task.is_valid(&data.tracking, &dependencies, updated_nodes) {
-                        should_run = false;
-                    }
+            if !is_explicitly_dirty && let Some(data) = cache.get(&index) {
+                old_data = Some(data.clone());
+                let task = &site.graph[index];
+                if task.is_valid(&data.tracking, &dependencies, updated_nodes) {
+                    should_run = false;
                 }
             }
 

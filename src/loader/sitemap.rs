@@ -8,7 +8,7 @@ use std::collections::HashSet;
 
 use crate::{
     Blueprint, HandleC, Output, Store, TaskContext,
-    engine::{Dynamic, Provenance, Tracking, TypedTaskC},
+    engine::{Dynamic, Tracking, TypedTaskC},
 };
 
 const MAX_URLS: usize = 50_000;
@@ -187,7 +187,7 @@ impl<G: Send + Sync> TypedTaskC<G> for SitemapTask {
 
     fn is_valid(
         &self,
-        _: &[Option<std::collections::HashMap<String, Provenance>>],
+        _: &[Option<crate::engine::TrackerState>],
         _: &[Dynamic],
         updated: &HashSet<NodeIndex>,
     ) -> bool {

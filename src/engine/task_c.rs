@@ -1,9 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use petgraph::graph::NodeIndex;
 
-use crate::engine::{Dynamic, Provenance, Tracking};
+use crate::engine::{Dynamic, TrackerState, Tracking};
 
 pub(crate) trait TypedTaskC<G: Send + Sync = ()>: Send + Sync {
     /// The concrete output type of this task.
@@ -28,7 +28,7 @@ pub(crate) trait TypedTaskC<G: Send + Sync = ()>: Send + Sync {
 
     fn is_valid(
         &self,
-        old_tracking: &[Option<HashMap<String, Provenance>>],
+        old_tracking: &[Option<TrackerState>],
         new_outputs: &[Dynamic],
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool;
@@ -64,7 +64,7 @@ pub(crate) trait TaskC<G: Send + Sync = ()>: Send + Sync {
 
     fn is_valid(
         &self,
-        old_tracking: &[Option<HashMap<String, Provenance>>],
+        old_tracking: &[Option<TrackerState>],
         new_outputs: &[Dynamic],
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool;
@@ -117,7 +117,7 @@ where
 
     fn is_valid(
         &self,
-        old_tracking: &[Option<HashMap<String, Provenance>>],
+        old_tracking: &[Option<TrackerState>],
         new_outputs: &[Dynamic],
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool {

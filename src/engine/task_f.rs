@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 
@@ -17,28 +17,9 @@ pub struct Provenance(pub(crate) Hash32);
 /// `Assets<T>` is the standard return type for most loaders. It allows you to
 /// access processed items (like posts or images) using their original file
 /// path.
-///
-/// # Example
-///
-/// ```rust,no_run
-/// # use hauchiwa::{Blueprint, task, loader::{Assets, Document}};
-/// # #[derive(Clone, serde::Deserialize)]
-/// # struct Post { title: String }
-/// # let mut config = Blueprint::<()>::default();
-/// # let posts = config.load_documents::<Post>().source("content/posts/*.md").register().unwrap();
-/// # task!(config, |ctx, posts| {
-/// // Assuming `posts` is a Assets<Document<Post>>
-/// for post in posts.values() {
-///     println!("Title: {}", post.matter.title);
-/// }
-///
-/// let specific_post = posts.get("content/posts/hello.md")?;
-/// # Ok(())
-/// # });
-/// ```
 #[derive(Debug)]
 pub(crate) struct Map<T> {
-    pub(crate) map: HashMap<String, (T, Provenance)>,
+    pub(crate) map: BTreeMap<String, (T, Provenance)>,
 }
 
 pub struct Tracker<'a, T> {
@@ -46,9 +27,22 @@ pub struct Tracker<'a, T> {
     pub(crate) tracker: TrackerPtr,
 }
 
+#[derive(Clone, Default, Debug)]
+pub struct IterationState {
+    pub count: usize,
+    pub exhausted: bool,
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct TrackerState {
+    pub accessed: HashMap<String, Provenance>,
+    pub globs: HashMap<String, IterationState>,
+    pub iterated: IterationState,
+}
+
 #[derive(Clone, Default)]
 pub struct TrackerPtr {
-    pub(crate) ptr: Arc<Mutex<HashMap<String, Provenance>>>,
+    pub(crate) ptr: Arc<Mutex<TrackerState>>,
 }
 
 impl<'a, T> Tracker<'a, T> {
@@ -60,7 +54,9 @@ impl<'a, T> Tracker<'a, T> {
         match self.map.map.get(key.as_ref()) {
             Some((item, provenance)) => {
                 let mut tracker = self.tracker.ptr.lock().unwrap();
-                tracker.insert(key.as_ref().to_string(), provenance.clone());
+                tracker
+                    .accessed
+                    .insert(key.as_ref().to_string(), *provenance);
 
                 Ok(item)
             }
@@ -75,45 +71,102 @@ impl<'a, T> Tracker<'a, T> {
     where
         P: AsRef<str>,
     {
-        let matcher = Pattern::new(pattern.as_ref())?;
+        let pattern_str = pattern.as_ref().to_string();
+        let matcher = Pattern::new(&pattern_str)?;
+        let tracker = self.tracker.ptr.clone();
 
-        let iter = self.map.map.iter().filter_map(move |(key, val)| {
-            let key = key.as_str();
-            let (item, provenance) = val;
+        // We box the iterator to simplify the type signature
+        let iter = Box::new(
+            self.map
+                .map
+                .iter()
+                .filter(move |(key, _)| matcher.matches(key)),
+        );
 
-            if matcher.matches(key) {
-                let mut tracker = self.tracker.ptr.lock().unwrap();
-                tracker.insert(key.to_string(), provenance.clone());
-
-                Some((key, item))
-            } else {
-                None
-            }
-        });
-
-        Ok(iter)
+        Ok(TrackerGlobIter {
+            iter,
+            tracker,
+            pattern: pattern_str,
+            count: 0,
+        })
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&String, &T)> {
-        self.map
-            .map
-            .iter()
-            .inspect(move |(key, (_, provenance))| {
-                let mut tracker = self.tracker.ptr.lock().unwrap();
-                tracker.insert(key.to_string(), provenance.clone());
-            })
-            .map(|(key, val)| (key, &val.0))
+        TrackerIter {
+            iter: self.map.map.iter(),
+            tracker: self.tracker.ptr.clone(),
+            count: 0,
+        }
     }
 
     pub fn values(&self) -> Box<dyn Iterator<Item = &T> + '_> {
-        let tracker = self.tracker.ptr.clone();
+        Box::new(
+            TrackerIter {
+                iter: self.map.map.iter(),
+                tracker: self.tracker.ptr.clone(),
+                count: 0,
+            }
+            .map(|(_, item)| item),
+        )
+    }
+}
 
-        Box::new(self.map.map.iter().map(move |(key, (item, provenance))| {
-            let mut tracker = tracker.lock().unwrap();
-            tracker.insert(key.to_string(), provenance.clone());
+pub struct TrackerIter<'a, T> {
+    iter: std::collections::btree_map::Iter<'a, String, (T, Provenance)>,
+    tracker: Arc<Mutex<TrackerState>>,
+    count: usize,
+}
 
-            item
-        }))
+impl<'a, T> Iterator for TrackerIter<'a, T> {
+    type Item = (&'a String, &'a T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self.iter.next();
+        let mut tracker = self.tracker.lock().unwrap();
+
+        match next {
+            Some((key, (item, provenance))) => {
+                self.count += 1;
+                tracker.iterated.count = tracker.iterated.count.max(self.count);
+                tracker.accessed.insert(key.clone(), *provenance);
+                Some((key, item))
+            }
+            None => {
+                tracker.iterated.exhausted = true;
+                None
+            }
+        }
+    }
+}
+
+pub struct TrackerGlobIter<'a, T> {
+    iter: Box<dyn Iterator<Item = (&'a String, &'a (T, Provenance))> + 'a>,
+    tracker: Arc<Mutex<TrackerState>>,
+    pattern: String,
+    count: usize,
+}
+
+impl<'a, T> Iterator for TrackerGlobIter<'a, T> {
+    type Item = (&'a str, &'a T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self.iter.next();
+        let mut tracker = self.tracker.lock().unwrap();
+
+        match next {
+            Some((key, (item, provenance))) => {
+                self.count += 1;
+                let state = tracker.globs.entry(self.pattern.clone()).or_default();
+                state.count = state.count.max(self.count);
+                tracker.accessed.insert(key.clone(), *provenance);
+                Some((key.as_str(), item))
+            }
+            None => {
+                let state = tracker.globs.entry(self.pattern.clone()).or_default();
+                state.exhausted = true;
+                None
+            }
+        }
     }
 }
 
@@ -122,14 +175,14 @@ impl<'a, T> IntoIterator for Tracker<'a, T> {
     type IntoIter = Box<dyn Iterator<Item = &'a T> + 'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let tracker = self.tracker.ptr.clone();
-
-        Box::new(self.map.map.iter().map(move |(key, (item, provenance))| {
-            let mut tracker = tracker.lock().unwrap();
-            tracker.insert(key.to_string(), provenance.clone());
-
-            item
-        }))
+        Box::new(
+            TrackerIter {
+                iter: self.map.map.iter(),
+                tracker: self.tracker.ptr.clone(),
+                count: 0,
+            }
+            .map(|(_, item)| item),
+        )
     }
 }
 
@@ -138,16 +191,14 @@ impl<'a, 'b, T> IntoIterator for &'b Tracker<'a, T> {
     type IntoIter = Box<dyn Iterator<Item = &'a T> + 'b>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let tracker = self.tracker.ptr.clone();
-
-        let iter = self.map.map.iter().map(move |(key, (item, provenance))| {
-            let mut tracker = tracker.lock().unwrap();
-            tracker.insert(key.to_string(), provenance.clone());
-
-            item
-        });
-
-        Box::new(iter)
+        Box::new(
+            TrackerIter {
+                iter: self.map.map.iter(),
+                tracker: self.tracker.ptr.clone(),
+                count: 0,
+            }
+            .map(|(_, item)| item),
+        )
     }
 }
 
@@ -172,12 +223,7 @@ pub(crate) trait TypedTaskF<G: Send + Sync = ()>: Send + Sync {
         false
     }
 
-    fn is_valid(
-        &self,
-        _: &[Option<HashMap<String, Provenance>>],
-        _: &[Dynamic],
-        _: &HashSet<NodeIndex>,
-    ) -> bool {
+    fn is_valid(&self, _: &[Option<TrackerState>], _: &[Dynamic], _: &HashSet<NodeIndex>) -> bool {
         true
     }
 }
@@ -212,7 +258,7 @@ pub(crate) trait TaskF<G: Send + Sync = ()>: Send + Sync {
 
     fn is_valid(
         &self,
-        old_tracking: &[Option<HashMap<String, Provenance>>],
+        old_tracking: &[Option<TrackerState>],
         new_outputs: &[Dynamic],
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool;
@@ -264,7 +310,7 @@ where
 
     fn is_valid(
         &self,
-        old_tracking: &[Option<HashMap<String, Provenance>>],
+        old_tracking: &[Option<TrackerState>],
         new_outputs: &[Dynamic],
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool {

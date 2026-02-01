@@ -12,7 +12,7 @@ use crate::{
     Blueprint, Hash32,
     engine::HandleF,
     error::HauchiwaError,
-    loader::{GlobBundle, GlobFiles, Script},
+    loader::{GlobBundle, Script},
 };
 
 #[derive(Debug, Error)]
