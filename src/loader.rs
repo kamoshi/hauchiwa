@@ -46,13 +46,9 @@ use gray_matter::engine::YAML;
 use petgraph::graph::NodeIndex;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-use crate::core::{Dynamic, Hash32};
+use crate::core::{Dynamic, Hash32, Store, TaskContext};
 use crate::engine::{Map, Provenance, TypedFine};
-use crate::{
-    TaskContext,
-    error::{BuildError, HauchiwaError},
-    importmap::ImportMap,
-};
+use crate::error::HauchiwaError;
 
 /// A raw file read from the filesystem.
 ///
@@ -68,82 +64,6 @@ impl Input {
     /// Reads the file content from the filesystem.
     pub fn read(&self) -> std::io::Result<Box<[u8]>> {
         fs::read(&self.path).map(Into::into)
-    }
-}
-
-/// A helper for managing side effects and imports within a task.
-///
-/// `Store` is passed to task callbacks to allow them to:
-/// 1. Store generated artifacts (like optimized images or compiled CSS) to the `dist` directory.
-/// 2. Register module imports (for the Import Map) that this task introduces.
-///
-/// It handles content-addressable storage (hashing) automatically to ensure caching works correctly.
-#[derive(Clone)]
-pub struct Store {
-    pub(crate) imports: ImportMap,
-}
-
-impl Store {
-    /// Creates a new, empty Store.
-    pub fn new() -> Self {
-        Self {
-            imports: ImportMap::new(),
-        }
-    }
-
-    /// Saves raw data as a content-addressed artifact.
-    ///
-    /// The data is hashed, and the file is stored at `/hash/<hash>.<ext>`.
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - The raw bytes to store.
-    /// * `ext` - The file extension for the stored file (e.g., "png", "css").
-    ///
-    /// # Returns
-    ///
-    /// The logical path to the file (e.g., `/hash/abcdef123.png`), suitable for use in HTML `src` attributes.
-    pub fn save(&self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuildError> {
-        let hash = Hash32::hash(data);
-        let hash = hash.to_hex();
-
-        let path_temp = Utf8Path::new(".cache/hash").join(&hash);
-        let path_dist = Utf8Path::new("dist/hash").join(&hash).with_extension(ext);
-        let path_root = Utf8Path::new("/hash/").join(&hash).with_extension(ext);
-
-        if !path_temp.exists() {
-            fs::create_dir_all(".cache/hash")?;
-            fs::write(&path_temp, data)?;
-        }
-
-        let dir = path_dist.parent().unwrap_or(&path_dist);
-        fs::create_dir_all(dir)?;
-
-        if path_dist.exists() {
-            fs::remove_file(&path_dist)?;
-        }
-
-        fs::copy(&path_temp, &path_dist)?;
-
-        Ok(path_root)
-    }
-
-    /// Registers a new entry in the global Import Map.
-    ///
-    /// This tells the browser how to resolve a specific module specifier.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The module specifier (e.g., "react", "my-lib").
-    /// * `value` - The URL to the module (e.g., "/hash/1234.js", "`https://cdn.example.com/lib.js`").
-    pub fn register(&mut self, key: impl Into<String>, value: impl Into<String>) {
-        self.imports.register(key, value);
-    }
-}
-
-impl Default for Store {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

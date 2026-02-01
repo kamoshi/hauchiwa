@@ -1,5 +1,7 @@
 mod coarse;
 mod fine;
+mod node;
+mod runner;
 mod tracking;
 
 use std::collections::{BTreeMap, HashSet};
@@ -12,10 +14,15 @@ use crate::engine::tracking::TrackerPtr;
 
 pub(crate) use coarse::TypedCoarse;
 pub(crate) use fine::TypedFine;
+pub(crate) use node::TaskNode;
+#[cfg(feature = "live")]
+pub(crate) use runner::watch;
+pub(crate) use runner::{TaskExecution, run_once_parallel, run_tasks_parallel};
 pub(crate) use tracking::{TrackerState, Tracking};
 
 pub use coarse::HandleC;
 pub use fine::HandleF;
+pub use runner::Diagnostics;
 pub use tracking::Tracker;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

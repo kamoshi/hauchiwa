@@ -1,5 +1,11 @@
-use std::any::Any;
+use std::fs;
 use std::sync::Arc;
+use std::{any::Any, collections::BTreeMap};
+
+use camino::{Utf8Path, Utf8PathBuf};
+use serde::{Deserialize, Serialize};
+
+use crate::error::BuildError;
 
 /// A type-erased, thread-safe container.
 pub(crate) type Dynamic = Arc<dyn Any + Send + Sync>;
@@ -113,5 +119,179 @@ socket.addEventListener("message", event => {{
 "#
             )
         })
+    }
+}
+
+/// This matches the browser's Import Map specification.
+/// <https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script/type/importmap>
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ImportMap {
+    imports: BTreeMap<String, String>,
+}
+
+impl ImportMap {
+    /// Creates a new, empty ImportMap
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a new module key and its path.
+    ///
+    /// # Arguments
+    /// * `key` - The module specifier (e.g., "svelte")
+    /// * `value` - The URL or path (e.g., "/_app/svelte.js")
+    pub fn register(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
+        self.imports.insert(key.into(), value.into());
+        self
+    }
+
+    /// Merges another import map into this one.
+    /// Entries from `other` will overwrite entries in `self` if keys conflict.
+    pub fn merge(&mut self, other: ImportMap) {
+        for (key, value) in other.imports {
+            self.imports.insert(key, value);
+        }
+    }
+
+    /// Serialize the map to a JSON string.
+    pub fn to_json(&self) -> serde_json::Result<String> {
+        // "pretty" is optional; strictly minified is fine too.
+        serde_json::to_string(self)
+    }
+
+    /// Serialize the importmap to a proper HTML script tag importmap.
+    pub fn to_html(&self) -> serde_json::Result<String> {
+        self.to_json()
+            .map(|json| format!(r#"<script type="importmap">{json}</script>"#))
+    }
+}
+
+/// The context passed to every task execution.
+///
+/// `TaskContext` provides access to global settings and the aggregated import
+/// map from all dependencies. It is immutable during task execution.
+pub struct TaskContext<'a, G: Send + Sync = ()> {
+    /// Access to global configuration and data.
+    pub env: &'a Environment<G>,
+    /// The current import map, containing JavaScript module mappings from all
+    /// upstream dependencies.
+    pub importmap: &'a ImportMap,
+    /// Tracing span assigned to this task.
+    pub(crate) span: tracing::Span,
+}
+
+/// A helper for managing side effects and imports within a task.
+///
+/// `Store` is passed to task callbacks to allow them to:
+/// 1. Store generated artifacts (like optimized images or compiled CSS) to the `dist` directory.
+/// 2. Register module imports (for the Import Map) that this task introduces.
+///
+/// It handles content-addressable storage (hashing) automatically to ensure caching works correctly.
+#[derive(Clone)]
+pub struct Store {
+    pub(crate) imports: ImportMap,
+}
+
+impl Store {
+    /// Creates a new, empty Store.
+    pub fn new() -> Self {
+        Self {
+            imports: ImportMap::new(),
+        }
+    }
+
+    /// Saves raw data as a content-addressed artifact.
+    ///
+    /// The data is hashed, and the file is stored at `/hash/<hash>.<ext>`.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The raw bytes to store.
+    /// * `ext` - The file extension for the stored file (e.g., "png", "css").
+    ///
+    /// # Returns
+    ///
+    /// The logical path to the file (e.g., `/hash/abcdef123.png`), suitable for use in HTML `src` attributes.
+    pub fn save(&self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuildError> {
+        let hash = Hash32::hash(data);
+        let hash = hash.to_hex();
+
+        let path_temp = Utf8Path::new(".cache/hash").join(&hash);
+        let path_dist = Utf8Path::new("dist/hash").join(&hash).with_extension(ext);
+        let path_root = Utf8Path::new("/hash/").join(&hash).with_extension(ext);
+
+        if !path_temp.exists() {
+            fs::create_dir_all(".cache/hash")?;
+            fs::write(&path_temp, data)?;
+        }
+
+        let dir = path_dist.parent().unwrap_or(&path_dist);
+        fs::create_dir_all(dir)?;
+
+        if path_dist.exists() {
+            fs::remove_file(&path_dist)?;
+        }
+
+        fs::copy(&path_temp, &path_dist)?;
+
+        Ok(path_root)
+    }
+
+    /// Registers a new entry in the global Import Map.
+    ///
+    /// This tells the browser how to resolve a specific module specifier.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The module specifier (e.g., "react", "my-lib").
+    /// * `value` - The URL to the module (e.g., "/hash/1234.js", "`https://cdn.example.com/lib.js`").
+    pub fn register(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.imports.register(key, value);
+    }
+}
+
+impl Default for Store {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_importmap() {
+        let mut map = ImportMap::new();
+        map.register("svelte", "/_app/svelte.js");
+        assert_eq!(
+            map.to_html().unwrap(),
+            r#"<script type="importmap">{"imports":{"svelte":"/_app/svelte.js"}}</script>"#
+        );
+    }
+
+    #[test]
+    fn test_default_importmap() {
+        let map = ImportMap::default();
+        assert!(map.imports.is_empty());
+    }
+
+    #[test]
+    fn test_merge() {
+        let mut map1 = ImportMap::new();
+        map1.register("a", "path/a");
+        map1.register("b", "path/b");
+
+        let mut map2 = ImportMap::new();
+        map2.register("b", "path/b2");
+        map2.register("c", "path/c");
+
+        map1.merge(map2);
+
+        // Access inner imports is not possible directly as it's private, but we can check json output
+        let json = map1.to_json().unwrap();
+        assert!(json.contains(r#""a":"path/a""#));
+        assert!(json.contains(r#""b":"path/b2""#));
+        assert!(json.contains(r#""c":"path/c""#));
     }
 }

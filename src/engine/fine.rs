@@ -4,7 +4,7 @@ use std::sync::Arc;
 use glob::Pattern;
 use petgraph::graph::NodeIndex;
 
-use crate::core::Dynamic;
+use crate::core::{Dynamic, Store, TaskContext};
 use crate::engine::Map;
 use crate::engine::tracking::{Tracker, TrackerPtr, TrackerState};
 
@@ -189,9 +189,9 @@ pub(crate) trait TypedFine<G: Send + Sync = ()>: Send + Sync {
 
     fn execute(
         &self,
-        context: &crate::TaskContext<G>,
-        runtime: &mut crate::Store,
-        dependencies: &[super::Dynamic],
+        context: &TaskContext<G>,
+        runtime: &mut Store,
+        dependencies: &[Dynamic],
     ) -> anyhow::Result<Map<Self::Output>>;
 
     fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
@@ -221,10 +221,10 @@ pub(crate) trait Fine<G: Send + Sync = ()>: Send + Sync {
 
     fn execute(
         &self,
-        context: &crate::TaskContext<G>,
-        runtime: &mut crate::Store,
-        dependencies: &[super::Dynamic],
-    ) -> anyhow::Result<super::Dynamic>;
+        context: &TaskContext<G>,
+        runtime: &mut Store,
+        dependencies: &[Dynamic],
+    ) -> anyhow::Result<Dynamic>;
 
     #[inline]
     fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
@@ -271,10 +271,10 @@ where
 
     fn execute(
         &self,
-        context: &crate::TaskContext<G>,
-        runtime: &mut crate::Store,
-        dependencies: &[super::Dynamic],
-    ) -> anyhow::Result<super::Dynamic> {
+        context: &TaskContext<G>,
+        runtime: &mut Store,
+        dependencies: &[Dynamic],
+    ) -> anyhow::Result<Dynamic> {
         // Call the typed method, then erase the result.
         Ok(Arc::new(T::execute(self, context, runtime, dependencies)?))
     }

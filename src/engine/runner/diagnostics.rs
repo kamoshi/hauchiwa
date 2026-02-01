@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter, Write};
 use petgraph::graph::NodeIndex;
 
 use crate::Website;
-use crate::executor::TaskExecution;
+use crate::engine::TaskExecution;
 
 #[derive(Debug, Default)]
 pub struct Diagnostics {

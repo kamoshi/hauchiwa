@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use petgraph::graph::NodeIndex;
 
-use crate::core::Dynamic;
+use crate::core::{Dynamic, Store, TaskContext};
 use crate::engine::Handle;
 use crate::engine::tracking::{TrackerPtr, TrackerState, Tracking};
 
@@ -94,8 +94,8 @@ pub(crate) trait TypedCoarse<G: Send + Sync = ()>: Send + Sync {
     fn execute(
         &self,
         context: &crate::TaskContext<G>,
-        runtime: &mut crate::Store,
-        dependencies: &[super::Dynamic],
+        runtime: &mut Store,
+        dependencies: &[Dynamic],
     ) -> anyhow::Result<(Tracking, Self::Output)>;
 
     fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
@@ -123,8 +123,8 @@ pub(crate) trait Coarse<G: Send + Sync = ()>: Send + Sync {
 
     fn execute(
         &self,
-        context: &crate::TaskContext<G>,
-        runtime: &mut crate::Store,
+        context: &TaskContext<G>,
+        runtime: &mut Store,
         dependencies: &[Dynamic],
     ) -> anyhow::Result<(Tracking, Dynamic)>;
 
@@ -171,9 +171,9 @@ where
 
     fn execute(
         &self,
-        context: &crate::TaskContext<G>,
-        runtime: &mut crate::Store,
-        dependencies: &[super::Dynamic],
+        context: &TaskContext<G>,
+        runtime: &mut Store,
+        dependencies: &[Dynamic],
     ) -> anyhow::Result<(Tracking, Dynamic)> {
         // Call the typed method, then erase the result.
         let (tracking, output) = T::execute(self, context, runtime, dependencies)?;
