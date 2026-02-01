@@ -64,13 +64,12 @@ ancestor is run exactly once.
 
 ```mermaid
 graph TD
-    RawFiles[Loader: Read Raw Files (Many)] --> Meta[Task: Extract Metadata (Many)]
-    RawFiles --> Content[Task: Parse Content (Many)]
+    RawFiles["Loader: Read Raw Files (Many)"] --> Meta["Task: Extract Metadata (One)"]
+    RawFiles --> Content["Task: Parse Content (One)"]
     
-    Meta --> Index[Task: Build Index Page (One)]
+    Meta --> Index["Task: Build Index Page (One)"]
     Content --> Index
-    Content --> Post[Task: Build Individual Posts (Many)]
-
+    Content --> Post["Task: Build Individual Posts (One)"]
 ```
 
 In this example:
@@ -89,15 +88,12 @@ from the filesystem.
 ```mermaid
 graph LR
     subgraph Sources
-        L1[Glob Markdown (Many)]
-        L2[Glob Images (Many)]
-        L3[Read Config (One)]
+        L1["Glob Markdown (Many)"]
+        L2["Glob Images (Many)"]
     end
     
-    L1 --> T1[Process Pages]
+    L1 --> T1["Process Pages"]
     L2 --> T1
-    L3 --> T2[Generate Styles]
-
 ```
 
 ## `ImportMap` Propagation
