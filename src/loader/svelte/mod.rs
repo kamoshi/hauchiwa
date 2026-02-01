@@ -11,7 +11,7 @@ use thiserror::Error;
 use crate::core::Hash32;
 use crate::{
     Blueprint,
-    engine::HandleF,
+    engine::Many,
     error::HauchiwaError,
     loader::{GlobBundle, Script},
 };
@@ -115,7 +115,7 @@ where
     }
 
     /// Registers the task with the Blueprint.
-    pub fn register(self) -> Result<HandleF<Svelte<P>>, HauchiwaError> {
+    pub fn register(self) -> Result<Many<Svelte<P>>, HauchiwaError> {
         let watch_globs = if self.watch_globs.is_empty() {
             self.entry_globs.clone()
         } else {

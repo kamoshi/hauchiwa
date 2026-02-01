@@ -8,12 +8,12 @@ use crate::core::{Dynamic, Store, TaskContext};
 use crate::engine::Map;
 use crate::engine::tracking::{Tracker, TrackerPtr, TrackerState};
 
-pub struct HandleF<T> {
+pub struct Many<T> {
     pub(crate) index: NodeIndex,
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T> HandleF<T> {
+impl<T> Many<T> {
     pub(crate) fn new(index: NodeIndex) -> Self {
         Self {
             index,
@@ -27,15 +27,15 @@ impl<T> HandleF<T> {
     }
 }
 
-impl<T> Clone for HandleF<T> {
+impl<T> Clone for Many<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T> Copy for HandleF<T> {}
+impl<T> Copy for Many<T> {}
 
-impl<T> super::Handle for HandleF<T>
+impl<T> super::Handle for Many<T>
 where
     T: Send + Sync + 'static,
 {
@@ -302,8 +302,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    fn make_handle() -> HandleF<i32> {
-        HandleF::new(NodeIndex::new(0))
+    fn make_handle() -> Many<i32> {
+        Many::new(NodeIndex::new(0))
     }
 
     fn make_map(items: Vec<(&str, i32)>) -> Dynamic {

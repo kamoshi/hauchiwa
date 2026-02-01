@@ -256,6 +256,13 @@ impl Default for Store {
     }
 }
 
+#[derive(Debug)]
+pub struct FileMetadata {
+    pub file: Utf8PathBuf,
+    pub area: Utf8PathBuf,
+    pub info: Option<crate::git::GitInfo>,
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

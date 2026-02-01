@@ -8,7 +8,7 @@ use std::collections::HashSet;
 
 use crate::core::{Dynamic, Store};
 use crate::engine::TypedCoarse;
-use crate::{Blueprint, HandleC, Output, TaskContext, engine::Tracking};
+use crate::{Blueprint, One, Output, TaskContext, engine::Tracking};
 
 const MAX_URLS: usize = 50_000;
 
@@ -65,7 +65,7 @@ impl<'a, G: Send + Sync + 'static> SitemapBuilder<'a, G> {
     /// their URLs from their output file paths.
     pub fn add(
         mut self,
-        handle: HandleC<Vec<Output>>,
+        handle: One<Vec<Output>>,
         frequency: ChangeFrequency,
         priority: f32,
     ) -> Self {
@@ -94,7 +94,7 @@ impl<'a, G: Send + Sync + 'static> SitemapBuilder<'a, G> {
     //     self
     // }
 
-    pub fn register(self) -> HandleC<Vec<Output>> {
+    pub fn register(self) -> One<Vec<Output>> {
         self.blueprint.add_task_coarse(SitemapTask {
             base_url: self.base,
             sources: self.deps,

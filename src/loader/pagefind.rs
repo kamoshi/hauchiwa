@@ -3,7 +3,7 @@ use pagefind::api::PagefindIndex;
 use pagefind::options::PagefindServiceConfig;
 use tokio::runtime::Builder;
 
-use crate::{Blueprint, HandleC, Output, output::OutputData};
+use crate::{Blueprint, One, Output, output::OutputData};
 
 async fn build_closure(pages: &[&Output]) -> Result<Vec<Output>, anyhow::Error> {
     let config = PagefindServiceConfig::builder().build();
@@ -37,7 +37,7 @@ where
     G: Send + Sync,
 {
     blueprint: &'a mut Blueprint<G>,
-    handles: Vec<HandleC<Vec<Output>>>,
+    handles: Vec<One<Vec<Output>>>,
 }
 
 impl<'a, G> PagefindBuilder<'a, G>
@@ -45,13 +45,13 @@ where
     G: Send + Sync + 'static,
 {
     /// Adds a handle (source of HTML outputs) to the index.
-    pub fn index(mut self, handle: HandleC<Vec<Output>>) -> Self {
+    pub fn index(mut self, handle: One<Vec<Output>>) -> Self {
         self.handles.push(handle);
         self
     }
 
     /// Consumes the builder and registers the task with the Blueprint.
-    pub fn register(self) -> HandleC<Vec<Output>> {
+    pub fn register(self) -> One<Vec<Output>> {
         let dependencies = self.handles.clone();
 
         self.blueprint

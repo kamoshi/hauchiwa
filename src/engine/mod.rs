@@ -20,8 +20,8 @@ pub(crate) use runner::watch;
 pub(crate) use runner::{TaskExecution, run_once_parallel, run_tasks_parallel};
 pub(crate) use tracking::{TrackerState, Tracking};
 
-pub use coarse::HandleC;
-pub use fine::HandleF;
+pub use coarse::One;
+pub use fine::Many;
 pub use runner::Diagnostics;
 pub use tracking::Tracker;
 

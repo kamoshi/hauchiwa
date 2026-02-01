@@ -27,12 +27,12 @@ use crate::engine::tracking::{TrackerPtr, TrackerState, Tracking};
 /// Task B both depend on Task A, and Task D depends on both B and C, Task A
 /// will only be executed *once*, and its result will be shared.
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct HandleC<T> {
+pub struct One<T> {
     pub(crate) index: NodeIndex,
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T> HandleC<T> {
+impl<T> One<T> {
     pub(crate) fn new(index: NodeIndex) -> Self {
         Self {
             index,
@@ -46,15 +46,15 @@ impl<T> HandleC<T> {
     }
 }
 
-impl<T> Clone for HandleC<T> {
+impl<T> Clone for One<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T> Copy for HandleC<T> {}
+impl<T> Copy for One<T> {}
 
-impl<T> Handle for HandleC<T>
+impl<T> Handle for One<T>
 where
     T: Send + Sync + 'static,
 {

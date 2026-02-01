@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::{
     Blueprint, Output,
-    engine::HandleF,
+    engine::Many,
     error::HauchiwaError,
     loader::{GlobFiles, Input},
     output::OutputBuilder,
@@ -156,7 +156,7 @@ where
     }
 
     /// Registers the task with the Blueprint.
-    pub fn register(self) -> Result<HandleF<Document<R>>, HauchiwaError> {
+    pub fn register(self) -> Result<Many<Document<R>>, HauchiwaError> {
         let offset = self.offset.map(Arc::from);
 
         let task = GlobFiles::new(

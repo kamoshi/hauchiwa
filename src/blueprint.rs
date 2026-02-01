@@ -7,7 +7,7 @@ use petgraph::Graph;
 
 use crate::core::{Environment, Mode, Store};
 use crate::engine::{
-    Dependencies, HandleC, HandleF, Task, TaskNode, TypedCoarse, TypedFine, run_once_parallel,
+    Dependencies, Many, One, Task, TaskNode, TypedCoarse, TypedFine, run_once_parallel,
 };
 use crate::{Diagnostics, TaskContext};
 
@@ -51,7 +51,7 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
         }
     }
 
-    pub(crate) fn add_task_fine<O, T>(&mut self, task: T) -> HandleF<O>
+    pub(crate) fn add_task_fine<O, T>(&mut self, task: T) -> Many<O>
     where
         O: 'static,
         T: TypedFine<G, Output = O> + 'static,
@@ -63,10 +63,10 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
             self.graph.add_edge(dependency, index, ());
         }
 
-        HandleF::new(index)
+        Many::new(index)
     }
 
-    pub(crate) fn add_task_coarse<O, T>(&mut self, task: T) -> HandleC<O>
+    pub(crate) fn add_task_coarse<O, T>(&mut self, task: T) -> One<O>
     where
         O: 'static,
         T: TypedCoarse<G, Output = O> + 'static,
@@ -78,7 +78,7 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
             self.graph.add_edge(dependency, index, ());
         }
 
-        HandleC::new(index)
+        One::new(index)
     }
 }
 
@@ -157,7 +157,7 @@ impl<'a, G: Send + Sync + 'static> TaskDef<'a, G> {
         }
     }
 
-    pub fn run<F, R>(self, callback: F) -> HandleC<R>
+    pub fn run<F, R>(self, callback: F) -> One<R>
     where
         F: Fn(&TaskContext<'_, G>) -> anyhow::Result<R> + Send + Sync + 'static,
         R: Send + Sync + 'static,
@@ -188,7 +188,7 @@ impl<'a, G: Send + Sync + 'static> TaskSourceBinder<'a, G> {
         self
     }
 
-    pub fn run<F, R>(self, callback: F) -> Result<HandleF<R>, crate::error::HauchiwaError>
+    pub fn run<F, R>(self, callback: F) -> Result<Many<R>, crate::error::HauchiwaError>
     where
         F: Fn(&TaskContext<G>, &mut Store, crate::loader::Input) -> anyhow::Result<R>
             + Send
@@ -226,7 +226,7 @@ where
         self
     }
 
-    pub fn run<F, R>(self, callback: F) -> HandleC<R>
+    pub fn run<F, R>(self, callback: F) -> One<R>
     where
         F: for<'b> Fn(&TaskContext<'b, G>, D::Output<'b>) -> anyhow::Result<R>
             + Send
