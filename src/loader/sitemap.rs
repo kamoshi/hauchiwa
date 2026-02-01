@@ -46,6 +46,7 @@ impl SitemapSource {
     }
 }
 
+/// A builder for configuring the Sitemap generation task.
 pub struct SitemapBuilder<'a, G: Send + Sync> {
     blueprint: &'a mut Blueprint<G>,
     base: String,

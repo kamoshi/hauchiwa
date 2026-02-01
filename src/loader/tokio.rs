@@ -28,7 +28,7 @@ where
     ///
     /// # Returns
     ///
-    /// A [`Handle`] to the result `R` in the build graph.
+    /// [`One`] result `R` in the build graph.
     ///
     /// # Example
     ///

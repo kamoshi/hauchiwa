@@ -8,6 +8,19 @@ use crate::core::{Dynamic, Store, TaskContext};
 use crate::engine::Map;
 use crate::engine::tracking::{Tracker, TrackerPtr, TrackerState};
 
+/// A "fine" type-safe reference to a task in the build graph.
+///
+/// A `Many<T>` represents a dependency on a task that produces a collection of items,
+/// tracked with fine-grained granularity.
+///
+/// # Granularity
+///
+/// Unlike [`One`](crate::One), which invalidates the dependent task if *any* part
+/// of the output changes, `Many` allows the dependent task to only re-run if the
+/// *specific* items it accesses have changed.
+///
+/// This is achieved by tracking which keys are accessed from the underlying
+/// [`Tracker`](crate::Tracker) during execution.
 pub struct Many<T> {
     pub(crate) index: NodeIndex,
     _phantom: std::marker::PhantomData<T>,

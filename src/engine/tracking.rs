@@ -38,6 +38,20 @@ impl Tracking {
     }
 }
 
+/// A collection of assets tracked with fine-grained granularity.
+///
+/// `Tracker` is the primary way to access the output of tasks that produce
+/// multiple items.
+///
+/// # Granularity
+///
+/// When you access items through `Tracker` (e.g., via [`get`](Self::get) or
+/// [`glob`](Self::glob)), the build system records exactly which items your
+/// task depends on.
+///
+/// * If you read file "A", and file "B" changes, your task will **not** re-run.
+/// * If you iterate over all files, your task **will** re-run if any file
+///   changes or is added/removed.
 pub struct Tracker<'a, T> {
     pub(crate) map: &'a Map<T>,
     pub(crate) tracker: TrackerPtr,
@@ -89,6 +103,11 @@ impl<'a, T> Tracker<'a, T> {
         })
     }
 
+    /// Iterates over all tracked items (key and value).
+    ///
+    /// **Warning:** Iterating over the entire collection marks your task as dependent
+    /// on the *entire set*. This means your task will re-run if *any* item is added,
+    /// removed, or modified.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &T)> {
         TrackerIter {
             iter: self.map.map.iter(),
@@ -97,6 +116,9 @@ impl<'a, T> Tracker<'a, T> {
         }
     }
 
+    /// Iterates over all tracked values.
+    ///
+    /// **Warning:** Like [`iter`](Self::iter), this creates a dependency on the entire collection.
     pub fn values(&self) -> Box<dyn Iterator<Item = &T> + '_> {
         Box::new(
             TrackerIter {

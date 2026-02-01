@@ -15,7 +15,7 @@ use crate::{Diagnostics, TaskContext};
 ///
 /// `Blueprint` is used to define the Task graph of your website. You add tasks
 /// (including loaders) to the config, and wire them together using their
-/// [`Handle`]s.
+/// references like [`One`](crate::One) or [`Many`](crate::Many).
 ///
 /// Once configured, you convert this into a [`Website`] to execute the build.
 ///
@@ -266,7 +266,7 @@ where
     /// 1. Clean the `dist` directory.
     /// 2. Copy static files.
     /// 3. Execute the task graph in parallel.
-    /// 4. Save the generated [`Output`]s to `dist`.
+    /// 4. Save the generated [`Output`](crate::Output)s to `dist`.
     ///
     /// # Arguments
     ///

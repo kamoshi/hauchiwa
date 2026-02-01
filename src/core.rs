@@ -89,6 +89,20 @@ pub struct Environment<D: Send + Sync = ()> {
     pub data: D,
 }
 
+impl<G: Send + Sync> std::fmt::Debug for Environment<G>
+where
+    G: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Environment")
+            .field("generator", &self.generator)
+            .field("mode", &self.mode)
+            .field("port", &self.port)
+            .field("data", &self.data)
+            .finish()
+    }
+}
+
 impl<G: Send + Sync> Environment<G> {
     /// Returns a JavaScript snippet to enable live-reloading.
     ///
@@ -98,15 +112,15 @@ impl<G: Send + Sync> Environment<G> {
     /// # Example
     ///
     /// ```rust,no_run
-    /// # use hauchiwa::{Blueprint, task};
+    /// # use hauchiwa::Blueprint;
     /// # let mut config = Blueprint::<()>::default();
-    /// # task!(config, |ctx| {
-    /// let script = ctx.env.get_refresh_script();
-    /// if let Some(s) = script {
-    ///     // Inject `s` into your HTML <head> or <body>
-    /// }
-    /// # Ok(())
-    /// # });
+    /// config.task().run(|ctx| {
+    ///     let script = ctx.env.get_refresh_script();
+    ///     if let Some(s) = script {
+    ///         // Inject `s` into your HTML <head> or <body>
+    ///     }
+    ///     Ok(())
+    /// });
     /// ```
     pub fn get_refresh_script(&self) -> Option<String> {
         self.port.map(|port| {
@@ -256,10 +270,17 @@ impl Default for Store {
     }
 }
 
+/// Metadata about a file in the project structure.
+///
+/// This struct is typically used to provide context about where a file is located
+/// relative to the project root or specific content areas.
 #[derive(Debug)]
 pub struct FileMetadata {
+    /// The full path to the file.
     pub file: Utf8PathBuf,
+    /// The "area" or base directory this file belongs to (e.g., "content", "static").
     pub area: Utf8PathBuf,
+    /// Git information about the file (if available).
     pub info: Option<crate::git::GitInfo>,
 }
 

@@ -32,6 +32,7 @@ async fn build_closure(pages: &[&Output]) -> Result<Vec<Output>, anyhow::Error> 
     Ok(output)
 }
 
+/// A builder for configuring the Pagefind search index task.
 pub struct PagefindBuilder<'a, G>
 where
     G: Send + Sync,

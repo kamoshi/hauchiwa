@@ -2,7 +2,7 @@
 //!
 //! A "Loader" is typically a task with **zero dependencies** that reads files
 //! matching a glob pattern, processes them (e.g., parsing frontmatter, resizing
-//! images), and stores them in the [`Assets`] collection.
+//! images), and stores them in [`Tracker`](crate::Tracker) accessible at runtime.
 //!
 //! Loaders that require JavaScript execution (like Svelte) do not embed V8.
 //! Instead, they act as orchestrators, spawning `deno` subprocesses to handle

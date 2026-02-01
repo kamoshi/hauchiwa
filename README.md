@@ -21,19 +21,35 @@ Then Hauchiwa is for you.
 
 ## Key Features
 
-* **Task Graph Architecture**: Define your build as a dependency graph. If Task
-  B needs Task A, Hauchiwa ensures they run in order.
-* **Incremental**: Because it knows the graph, Hauchiwa only rebuilds what has
-  really changed.
-* **Parallel**: Tasks run in parallel automatically.
-* **Type-safe**: Leveraging Rust's type system to ensure dependencies are sound.
+* **Graph-based**: Define your build as a graph where tasks are wired together
+  using strictly typed handles rather than rigid file paths. This structure
+  automatically resolves complex dependencies, ensuring shared ancestor tasks
+  execute exactly once before efficiently distributing their results.
+* **Incremental**: The engine identifies the specific task responsible for a
+  changed file and marks only its dependent subgraph as "dirty". By re-executing
+  only this precise chain of tasks, the system avoids wasteful full rebuilds and
+  delivers near-instant updates.
+* **Parallel**: A threaded execution engine schedules tasks to run on a thread
+  pool the moment their dependencies are resolved. This saturates your CPU cores
+  automatically, processing heavy assets and content concurrently without manual
+  async orchestration.
+* **Type-safe**: Dependencies are passed as generic tokens, allowing the Rust
+  compiler to enforce that a producer's output type perfectly matches a
+  consumer's input. Advanced static verification prevents broken builds by
+  catching data flow errors at compile time rather than runtime.
 * **Asset pipeline**: Built-in support for:
-  * **Images**: Automatic optimization via `image` and caching.
-  * **Sass/SCSS**: Compilation via `grass`.
-  * **JavaScript**: Bundling and minification via `esbuild`.
-  * **Svelte**: SSR and hydration support via `deno` and `esbuild`.
-  * **Search**: Static search indexing via `pagefind`.
-  * **Sitemap**: Sitemap generation via `sitemap-rs`.
+  * **[Images](crate::loader::image)**: Automatically generates multi-format
+    sources (WebP, AVIF) with content-addressed hashing for immutable caching
+    via the `image` crate.
+  * **[Sass/SCSS](crate::loader::css)**: Integrates `grass` to compile and
+    minify stylesheets, outputting hashed CSS bundles that are ready for
+    aggressive browser caching.
+  * **[JavaScript](crate::loader::js)**: Bundling and minification via `esbuild`.
+  * **[Svelte](crate::loader::svelte)**: Orchestrates Deno to compile components
+    into separate SSR and hydration scripts, automatically propagating import
+    maps for seamless client-side interactivity.
+  * **[Search](crate::loader::pagefind)**: Static search indexing via `pagefind`.
+  * **[Sitemap](crate::loader::sitemap)**: Sitemap generation via `sitemap-rs`.
   
 ## Core Concepts
 
@@ -41,8 +57,12 @@ Then Hauchiwa is for you.
   register tasks and loaders.
 - **Task**: A single unit of work. Tasks can depend on other
   tasks.
-- **[Handle](crate::Handle)**: A reference to the future result of a task. You
-  pass these to other tasks to define dependencies.
+  - **Coarse-grained**: Tasks that produce a single output.
+  - **Fine-grained**: Tasks that produce multiple outputs.
+- **Handle**: A reference to the future result of a task. You pass these to
+  other tasks to define dependencies.
+  - **[One](crate::One)**: A handle to a single (coarse-grained) output.
+  - **[Many](crate::Many)**: A handle to multiple (fine-grained) outputs.
 - **[Loader](crate::loader)**: A kind of a task that reads data from the
   filesystem (e.g., markdown files, images).
 - **[Website](crate::Website)**: The engine that converts the graph defined in
@@ -85,7 +105,9 @@ fn main() -> anyhow::Result<()> {
 
     // 4. Define a task to render pages
     // We declare that this task depends on `posts`.
-    hauchiwa::task!(config, |ctx, posts| {
+    config.task()
+        .depends_on(posts)
+        .run(|_, posts| {
         let mut pages = Vec::new();
 
         // Iterate over loaded posts

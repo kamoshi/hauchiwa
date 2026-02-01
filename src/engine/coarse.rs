@@ -9,7 +9,7 @@ use crate::engine::tracking::{TrackerPtr, TrackerState, Tracking};
 
 /// A "coarse" type-safe reference to a task in the build graph.
 ///
-/// A `HandleC<T>` represents a dependency on the **entire** result of an
+/// A `One<T>` represents a dependency on the **entire** result of an
 /// upstream task. Unlike granular dependencies (which track specific reads),
 /// this operates on an "all-or-nothing" basis.
 ///
@@ -18,7 +18,7 @@ use crate::engine::tracking::{TrackerPtr, TrackerState, Tracking};
 /// This handle provides direct access to the output as `&T`. Because it does
 /// not record which specific parts of `T` were used, the build system takes a
 /// conservative approach: if the upstream task is re-executed (is "dirty"), any
-/// task holding a `HandleC` to it is automatically invalidated and forced to
+/// task holding a `One` to it is automatically invalidated and forced to
 /// re-run.
 ///
 /// # Diamond dependencies

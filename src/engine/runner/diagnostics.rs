@@ -6,12 +6,23 @@ use petgraph::graph::NodeIndex;
 use crate::Website;
 use crate::engine::TaskExecution;
 
+/// Build diagnostics and performance metrics.
+///
+/// This struct is returned by [`Website::build`] and contains information about
+/// the execution of tasks, such as duration and start times.
 #[derive(Debug, Default)]
 pub struct Diagnostics {
+    /// A map of task node indices to their execution metrics.
     pub execution_times: HashMap<NodeIndex, TaskExecution>,
 }
 
 impl Diagnostics {
+    /// Renders the task graph as a Mermaid diagram, color-coded by execution duration.
+    ///
+    /// * **Green**: Fast
+    /// * **Yellow**: Moderate
+    /// * **Red**: Slow
+    /// * **Blue**: Cached (skipped)
     pub fn render_mermaid<G>(&self, site: &Website<G>) -> String
     where
         G: Send + Sync,
@@ -202,6 +213,7 @@ impl TimelineStats {
 }
 
 impl Diagnostics {
+    /// Renders a waterfall chart of task execution as an SVG file.
     pub fn render_waterfall_to_file<G>(
         &self,
         site: &Website<G>,
@@ -213,6 +225,7 @@ impl Diagnostics {
         std::fs::write(path, self.render_waterfall(site))
     }
 
+    /// Renders a waterfall chart of task execution as an SVG string.
     pub fn render_waterfall<G>(&self, site: &Website<G>) -> String
     where
         G: Send + Sync,
