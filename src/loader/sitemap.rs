@@ -4,9 +4,11 @@ use sitemap_rs::{sitemap::Sitemap, sitemap_index::SitemapIndex, url_set::UrlSet}
 
 pub use sitemap_rs::url::{ChangeFrequency, Link, Url};
 
+use std::collections::HashSet;
+
 use crate::{
     Blueprint, HandleC, Output, Store, TaskContext,
-    engine::{Dynamic, Tracking, TypedTaskC},
+    engine::{Dynamic, Provenance, Tracking, TypedTaskC},
 };
 
 const MAX_URLS: usize = 50_000;
@@ -181,6 +183,15 @@ impl<G: Send + Sync> TypedTaskC<G> for SitemapTask {
         outputs.push(Output::binary("sitemap.xml", buffer));
 
         Ok((Tracking::default(), outputs))
+    }
+
+    fn is_valid(
+        &self,
+        _: &[Option<std::collections::HashMap<String, Provenance>>],
+        _: &[Dynamic],
+        updated: &HashSet<NodeIndex>,
+    ) -> bool {
+        !self.sources.iter().any(|s| updated.contains(&s.index))
     }
 }
 

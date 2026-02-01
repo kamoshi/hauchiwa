@@ -37,6 +37,12 @@ pub trait Handle: Copy + Send + Sync {
 
     fn index(&self) -> NodeIndex;
     fn downcast<'a>(&self, output: &'a Dynamic) -> (Option<TrackerPtr>, Self::Output<'a>);
+    fn is_valid(
+        &self,
+        old_tracking: &Option<HashMap<String, Provenance>>,
+        new_output: &Dynamic,
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool;
 }
 
 pub enum Task<G> {
@@ -89,6 +95,18 @@ where
             Task::F(task) => task.is_dirty(path),
         }
     }
+
+    pub(crate) fn is_valid(
+        &self,
+        old_tracking: &[Option<HashMap<String, Provenance>>],
+        new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool {
+        match self {
+            Task::C(task) => task.is_valid(old_tracking, new_outputs, updated_nodes),
+            Task::F(task) => task.is_valid(old_tracking, new_outputs, updated_nodes),
+        }
+    }
 }
 
 impl<G> Clone for Task<G> {
@@ -123,6 +141,13 @@ pub trait Dependencies {
     /// their expected concrete types, indicating a severe logic error in the
     /// build system.
     fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> (Tracking, Self::Output<'a>);
+
+    fn is_valid(
+        &self,
+        old_tracking: &[Option<HashMap<String, Provenance>>],
+        new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool;
 }
 
 impl Dependencies for () {
@@ -134,6 +159,15 @@ impl Dependencies for () {
 
     fn resolve<'a>(&self, _: &'a [Dynamic]) -> (Tracking, Self::Output<'a>) {
         (Tracking::default(), ())
+    }
+
+    fn is_valid(
+        &self,
+        _: &[Option<HashMap<String, Provenance>>],
+        _: &[Dynamic],
+        _: &HashSet<NodeIndex>,
+    ) -> bool {
+        true
     }
 }
 
@@ -155,6 +189,15 @@ where
         tracking.edges.push(tracker_ptr);
 
         (tracking, output)
+    }
+
+    fn is_valid(
+        &self,
+        old_tracking: &[Option<HashMap<String, Provenance>>],
+        new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool {
+        self.is_valid(&old_tracking[0], &new_outputs[0], updated_nodes)
     }
 }
 
@@ -179,6 +222,20 @@ where
         }
 
         (tracking, result)
+    }
+
+    fn is_valid(
+        &self,
+        old_tracking: &[Option<HashMap<String, Provenance>>],
+        new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool {
+        self.iter()
+            .zip(old_tracking.iter())
+            .zip(new_outputs.iter())
+            .all(|((handle, tracking), output)| {
+                handle.is_valid(tracking, output, updated_nodes)
+            })
     }
 }
 
@@ -209,6 +266,25 @@ macro_rules! impl_deps {
                 },)*);
 
                 (tracking, result)
+            }
+
+            fn is_valid(
+                &self,
+                old_tracking: &[Option<HashMap<String, Provenance>>],
+                new_outputs: &[Dynamic],
+                updated_nodes: &HashSet<NodeIndex>,
+            ) -> bool {
+                let ($($D,)*) = self;
+                let mut tracking_iter = old_tracking.iter();
+                let mut output_iter = new_outputs.iter();
+
+                $(
+                    if !$D.is_valid(tracking_iter.next().unwrap(), output_iter.next().unwrap(), updated_nodes) {
+                        return false;
+                    }
+                )*
+
+                true
             }
         }
     };

@@ -1,5 +1,6 @@
 use std::any::type_name;
 use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -7,7 +8,7 @@ use petgraph::Graph;
 use petgraph::graph::NodeIndex;
 
 use crate::engine::{
-    Dependencies, Dynamic, HandleC, HandleF, Task, Tracking, TypedTaskC, TypedTaskF,
+    Dependencies, Dynamic, HandleC, HandleF, Provenance, Task, Tracking, TypedTaskC, TypedTaskF,
 };
 use crate::loader::Store;
 use crate::{Environment, Mode, TaskContext};
@@ -356,5 +357,15 @@ where
         let (tracking, dependencies) = self.dependencies.resolve(dependencies);
         let output = (self.callback)(context, dependencies)?;
         Ok((tracking, output))
+    }
+
+    fn is_valid(
+        &self,
+        old_tracking: &[Option<HashMap<String, Provenance>>],
+        new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool {
+        self.dependencies
+            .is_valid(old_tracking, new_outputs, updated_nodes)
     }
 }

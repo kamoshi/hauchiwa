@@ -1,8 +1,9 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use petgraph::graph::NodeIndex;
 
-use crate::engine::{Dynamic, Tracking};
+use crate::engine::{Dynamic, Provenance, Tracking};
 
 pub(crate) trait TypedTaskC<G: Send + Sync = ()>: Send + Sync {
     /// The concrete output type of this task.
@@ -24,6 +25,13 @@ pub(crate) trait TypedTaskC<G: Send + Sync = ()>: Send + Sync {
     fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
         false
     }
+
+    fn is_valid(
+        &self,
+        old_tracking: &[Option<HashMap<String, Provenance>>],
+        new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool;
 }
 
 /// The core trait for all tasks in the graph.
@@ -53,6 +61,13 @@ pub(crate) trait TaskC<G: Send + Sync = ()>: Send + Sync {
     fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
         false
     }
+
+    fn is_valid(
+        &self,
+        old_tracking: &[Option<HashMap<String, Provenance>>],
+        new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool;
 }
 
 // A blanket implementation to automatically bridge the two. This is where the
@@ -98,5 +113,14 @@ where
 
     fn is_dirty(&self, path: &camino::Utf8Path) -> bool {
         T::is_dirty(self, path)
+    }
+
+    fn is_valid(
+        &self,
+        old_tracking: &[Option<HashMap<String, Provenance>>],
+        new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool {
+        T::is_valid(self, old_tracking, new_outputs, updated_nodes)
     }
 }

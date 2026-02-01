@@ -253,17 +253,12 @@ where
                 // next iteration
                 context.span.pb_inc(1);
 
-                let provenance = Provenance {
-                    id: path.to_string(),
-                    hash,
-                };
-
-                Ok((path, provenance, res, rt.imports))
+                Ok((Provenance(hash), path, res, rt.imports))
             })
             .collect();
 
         let mut registry = HashMap::new();
-        for (path, provenance, res, imports) in results? {
+        for (provenance, path, res, imports) in results? {
             registry.insert(path.into_string(), (res, provenance));
             runtime.imports.merge(imports);
         }

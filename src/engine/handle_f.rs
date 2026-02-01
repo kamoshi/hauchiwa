@@ -1,7 +1,9 @@
+use std::collections::{HashMap, HashSet};
+
 use petgraph::graph::NodeIndex;
 
 use crate::engine::{
-    Dynamic,
+    Dynamic, Provenance,
     task_f::{Map, Tracker, TrackerPtr},
 };
 
@@ -50,5 +52,54 @@ where
             .expect("Type mismatch in dependency resolution");
 
         (Some(ptr.clone()), Tracker { map, tracker: ptr })
+    }
+
+    fn is_valid(
+        &self,
+        tracking: &Option<HashMap<String, Provenance>>,
+        current: &Dynamic,
+        updated: &HashSet<NodeIndex>,
+    ) -> bool {
+        // If the dependency has not been updated, it's valid.
+        if !updated.contains(&self.index) {
+            return true;
+        }
+
+        let tracking = match tracking {
+            Some(tracking) => tracking,
+            None => {
+                // No tracking info but dependency changed -> assume invalid
+                return false;
+            }
+        };
+
+        // If we have previous tracking information
+        let current = current
+            .downcast_ref::<Map<T>>()
+            .expect("Type mismatch in validation");
+
+        for (key, old_prov) in tracking {
+            match current.map.get(key) {
+                Some((_, new_prov)) => {
+                    if old_prov != new_prov {
+                        tracing::info!(
+                            "Hash changed for key {} from {:?} to {:?}",
+                            key,
+                            old_prov,
+                            new_prov,
+                        );
+
+                        return false;
+                    }
+                }
+                None => {
+                    tracing::info!("Key {} no longer exists", key);
+                    return false;
+                }
+            }
+        }
+
+        // All tracked items are unchanged
+        true
     }
 }

@@ -38,8 +38,9 @@ pub fn run_once_parallel<G: Send + Sync>(
 
     let mut cache = HashMap::new();
     let pending = website.graph.node_indices().collect();
+    let dirty = HashSet::new();
 
-    let diagnostics = run_tasks_parallel(website, globals, &mut cache, &pending)?;
+    let diagnostics = run_tasks_parallel(website, globals, &mut cache, &pending, &dirty)?;
 
     let pages = collect_pages(&cache);
     Ok((cache, pages, diagnostics))
@@ -65,6 +66,7 @@ fn run_tasks_parallel<G: Send + Sync>(
     globals: &Environment<G>,
     cache: &mut HashMap<NodeIndex, NodeData>,
     nodes_to_run: &HashSet<NodeIndex>,
+    explicitly_dirty: &HashSet<NodeIndex>,
 ) -> anyhow::Result<Diagnostics> {
     // Build a map from a dependency to the nodes that depend on it for the entire graph.
     let mut dependents: HashMap<NodeIndex, Vec<NodeIndex>> = HashMap::new();
@@ -109,17 +111,21 @@ fn run_tasks_parallel<G: Send + Sync>(
     let _enter = root_span.enter();
 
     // We only need a channel for results and tasks are distributed by Rayon.
+    // (index, result, start, duration, ran_was_executed)
     let (result_sender, result_receiver) =
-        unbounded::<(NodeIndex, anyhow::Result<NodeData>, Instant, Duration)>();
+        unbounded::<(NodeIndex, anyhow::Result<NodeData>, Instant, Duration, bool)>();
 
     let mut execution_times = HashMap::new();
+    let mut updated_nodes = HashSet::new();
 
     // regular task style with no progress
     let pb_style = crate::utils::get_style_task()?;
 
     rayon::scope(|s| -> anyhow::Result<()> {
         // A helper closure to spawn a task
-        let spawn_task = |cache: &HashMap<NodeIndex, NodeData>, index: NodeIndex| {
+        let spawn_task = |cache: &HashMap<NodeIndex, NodeData>,
+                          index: NodeIndex,
+                          updated_nodes: &HashSet<NodeIndex>| {
             // Prepare dependencies
             let mut dependencies = Vec::new();
             let mut importmap = ImportMap::new();
@@ -128,6 +134,31 @@ fn run_tasks_parallel<G: Send + Sync>(
                 let node_data = cache.get(&dep_index).unwrap();
                 dependencies.push(node_data.output.clone());
                 importmap.merge(node_data.importmap.clone());
+            }
+
+            // Check if we can skip this task
+            let is_explicitly_dirty = explicitly_dirty.contains(&index);
+            let mut should_run = true;
+            let mut old_data = None;
+
+            if !is_explicitly_dirty {
+                if let Some(data) = cache.get(&index) {
+                    old_data = Some(data.clone());
+                    let task = &site.graph[index];
+                    if task.is_valid(&data.tracking, &dependencies, updated_nodes) {
+                        should_run = false;
+                    }
+                }
+            }
+
+            if !should_run {
+                // Task is skipped
+                let sender = result_sender.clone();
+                let output = old_data.unwrap();
+                sender
+                    .send((index, Ok(output), Instant::now(), Duration::ZERO, false))
+                    .unwrap();
+                return;
             }
 
             let task = site.graph[index].clone();
@@ -165,7 +196,6 @@ fn run_tasks_parallel<G: Send + Sync>(
                                 let tracking = tracking.unwrap();
                                 let mut imports = importmap.clone();
                                 imports.merge(rt.imports);
-                                tracing::info!("{:?}", tracking);
                                 NodeData {
                                     output,
                                     tracking,
@@ -204,14 +234,16 @@ fn run_tasks_parallel<G: Send + Sync>(
                 let elapsed = start_time.elapsed();
 
                 // Send result back to main thread
-                sender.send((index, output, start_time, elapsed)).unwrap();
+                sender
+                    .send((index, output, start_time, elapsed, true))
+                    .unwrap();
             });
         };
 
         // Seed initial tasks
         for &node_index in nodes_to_run {
             if dependency_counts.get(&node_index).cloned().unwrap_or(0) == 0 {
-                spawn_task(cache, node_index);
+                spawn_task(cache, node_index, &updated_nodes);
             }
         }
 
@@ -219,13 +251,18 @@ fn run_tasks_parallel<G: Send + Sync>(
         // The main thread sits here while Rayon workers execute tasks.
         while completed_tasks < total_tasks {
             // Wait for any task to finish
-            let (completed_index, output, start, duration) = result_receiver.recv().unwrap();
+            let (completed_index, output, start, duration, executed) =
+                result_receiver.recv().unwrap();
 
             // Update state
             cache.insert(completed_index, output?);
             execution_times.insert(completed_index, TaskExecution { start, duration });
             completed_tasks += 1;
             root_span.pb_inc(1);
+
+            if executed {
+                updated_nodes.insert(completed_index);
+            }
 
             // Unlock dependents
             if let Some(dependents_of_completed) = dependents.get(&completed_index) {
@@ -234,7 +271,7 @@ fn run_tasks_parallel<G: Send + Sync>(
                         *count -= 1;
                         if *count == 0 {
                             // Dependency satisfied, spawn immediately
-                            spawn_task(cache, index);
+                            spawn_task(cache, index, &updated_nodes);
                         }
                     }
                 }
@@ -376,14 +413,19 @@ mod live {
                             }
                         }
 
-                        let _diagnostics =
-                            match run_tasks_parallel(site, &globals, &mut cache, &to_rerun) {
-                                Ok(res) => res,
-                                Err(e) => {
-                                    error!("Error running tasks: {}", e);
-                                    continue;
-                                }
-                            };
+                        let _diagnostics = match run_tasks_parallel(
+                            site,
+                            &globals,
+                            &mut cache,
+                            &to_rerun,
+                            &dirty_nodes,
+                        ) {
+                            Ok(res) => res,
+                            Err(e) => {
+                                error!("Error running tasks: {}", e);
+                                continue;
+                            }
+                        };
 
                         let pages = collect_pages(&cache);
                         info!("collected {} pages", pages.len());

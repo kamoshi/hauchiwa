@@ -1,6 +1,8 @@
+use std::collections::{HashMap, HashSet};
+
 use petgraph::graph::NodeIndex;
 
-use crate::engine::TrackerPtr;
+use crate::engine::{Dynamic, Provenance, TrackerPtr};
 
 /// A type-safe reference to a task in the build graph.
 ///
@@ -53,11 +55,21 @@ where
         self.index
     }
 
-    fn downcast<'a>(&self, output: &'a super::Dynamic) -> (Option<TrackerPtr>, Self::Output<'a>) {
+    fn downcast<'a>(&self, output: &'a Dynamic) -> (Option<TrackerPtr>, Self::Output<'a>) {
         let output = output
             .downcast_ref::<T>()
             .expect("Type mismatch in dependency resolution");
 
         (None, output)
+    }
+
+    fn is_valid(
+        &self,
+        _: &Option<HashMap<String, Provenance>>,
+        _: &Dynamic,
+        updated: &HashSet<NodeIndex>,
+    ) -> bool {
+        // Coarse dependency: if it was updated, we are invalid.
+        !updated.contains(&self.index)
     }
 }

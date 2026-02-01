@@ -6,13 +6,11 @@ use std::{
 use glob::Pattern;
 use petgraph::graph::NodeIndex;
 
+use crate::engine::Dynamic;
 use crate::{Hash32, error::HauchiwaError};
 
-#[derive(Debug, Clone)]
-pub struct Provenance {
-    pub(crate) id: String,
-    pub(crate) hash: Hash32,
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Provenance(pub(crate) Hash32);
 
 /// A collection of processed assets, indexed by their source file path.
 ///
@@ -173,6 +171,15 @@ pub(crate) trait TypedTaskF<G: Send + Sync = ()>: Send + Sync {
     fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
         false
     }
+
+    fn is_valid(
+        &self,
+        _: &[Option<HashMap<String, Provenance>>],
+        _: &[Dynamic],
+        _: &HashSet<NodeIndex>,
+    ) -> bool {
+        true
+    }
 }
 
 /// The core trait for all tasks in the graph.
@@ -202,6 +209,13 @@ pub(crate) trait TaskF<G: Send + Sync = ()>: Send + Sync {
     fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
         false
     }
+
+    fn is_valid(
+        &self,
+        old_tracking: &[Option<HashMap<String, Provenance>>],
+        new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool;
 }
 
 // A blanket implementation to automatically bridge the two. This is where the
@@ -246,5 +260,14 @@ where
 
     fn is_dirty(&self, path: &camino::Utf8Path) -> bool {
         T::is_dirty(self, path)
+    }
+
+    fn is_valid(
+        &self,
+        old_tracking: &[Option<HashMap<String, Provenance>>],
+        new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool {
+        T::is_valid(self, old_tracking, new_outputs, updated_nodes)
     }
 }

@@ -25,7 +25,7 @@
 //!   logic. It acts as the safe bridge, panicking only if the strictly-typed
 //!   blueprint construction was somehow bypassed (which the compiler prevents).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::{
     engine::{Dynamic, Provenance},
