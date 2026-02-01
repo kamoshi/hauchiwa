@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+};
 
 use glob::Pattern;
 use petgraph::graph::NodeIndex;
@@ -36,6 +39,12 @@ pub(crate) struct Map<T> {
 
 pub struct Tracker<'a, T> {
     pub(crate) map: &'a Map<T>,
+    pub(crate) tracker: TrackerPtr,
+}
+
+#[derive(Clone, Default)]
+pub struct TrackerPtr {
+    pub(crate) ptr: Arc<Mutex<HashSet<String>>>,
 }
 
 impl<'a, T> Tracker<'a, T> {
@@ -44,12 +53,20 @@ impl<'a, T> Tracker<'a, T> {
     where
         K: AsRef<str>,
     {
-        self.map
-            .map
-            .get(key.as_ref())
-            .ok_or(HauchiwaError::AssetNotFound(
+        match self.map.map.get(key.as_ref()) {
+            Some(val) => {
+                self.tracker
+                    .ptr
+                    .lock()
+                    .unwrap()
+                    .insert(key.as_ref().to_string());
+
+                Ok(val)
+            }
+            None => Err(HauchiwaError::AssetNotFound(
                 key.as_ref().to_string().into(),
-            ))
+            )),
+        }
     }
 
     /// Finds all items whose source paths match the given glob pattern.
@@ -57,13 +74,15 @@ impl<'a, T> Tracker<'a, T> {
     where
         P: AsRef<str>,
     {
+        let tracker = self.tracker.clone();
         let matcher = Pattern::new(pattern.as_ref())?;
 
         let iter = self.map.map.iter().filter_map(move |(key, val)| {
-            let path = key.as_str();
+            let key = key.as_str();
 
-            if matcher.matches(path) {
-                Some((path, val))
+            if matcher.matches(key) {
+                tracker.ptr.lock().unwrap().insert(key.to_string());
+                Some((key, val))
             } else {
                 None
             }
@@ -73,8 +92,12 @@ impl<'a, T> Tracker<'a, T> {
     }
 
     // This method borrows self immutable (&) and returns an iterator over &T
-    pub fn iter(&self) -> std::collections::hash_map::Iter<'_, String, T> {
-        self.map.map.iter()
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &T)> {
+        let tracker = self.tracker.clone();
+
+        self.map.map.iter().inspect(move |row| {
+            tracker.ptr.lock().unwrap().insert(row.0.to_string());
+        })
     }
 
     pub fn values(&self) -> std::collections::hash_map::Values<'_, String, T> {

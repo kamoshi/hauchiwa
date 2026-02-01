@@ -3,7 +3,7 @@ mod handle_f;
 mod task_c;
 mod task_f;
 
-use std::{any::Any, sync::Arc};
+use std::{any::Any, collections::HashSet, sync::Arc};
 
 use petgraph::graph::NodeIndex;
 
@@ -12,16 +12,30 @@ pub use crate::engine::handle_f::HandleF;
 
 pub(crate) use crate::engine::task_c::TypedTaskC;
 pub use crate::engine::task_f::Tracker;
-pub(crate) use crate::engine::task_f::{Map, TypedTaskF};
+pub(crate) use crate::engine::task_f::{Map, TrackerPtr, TypedTaskF};
 
 pub(crate) type Dynamic = Arc<dyn Any + Send + Sync>;
+
+#[derive(Default)]
+pub struct Tracking {
+    pub edges: Vec<Option<TrackerPtr>>,
+}
+
+impl Tracking {
+    pub(crate) fn unwrap(self) -> Vec<Option<HashSet<String>>> {
+        self.edges
+            .into_iter()
+            .map(|edge| edge.map(|item| Arc::try_unwrap(item.ptr).unwrap().into_inner().unwrap()))
+            .collect()
+    }
+}
 
 // Things that can be used as dependency Handle
 pub trait Handle: Copy + Send + Sync {
     type Output<'a>;
 
     fn index(&self) -> NodeIndex;
-    fn downcast<'a>(&self, output: &'a Dynamic) -> Self::Output<'a>;
+    fn downcast<'a>(&self, output: &'a Dynamic) -> (Option<TrackerPtr>, Self::Output<'a>);
 }
 
 pub enum Task<G> {
@@ -44,18 +58,6 @@ where
         match self {
             Task::C(task) => task.dependencies(),
             Task::F(task) => task.dependencies(),
-        }
-    }
-
-    pub(crate) fn execute(
-        &self,
-        context: &crate::TaskContext<G>,
-        runtime: &mut crate::Store,
-        dependencies: &[Dynamic],
-    ) -> anyhow::Result<Arc<dyn Any + Send + Sync>> {
-        match self {
-            Task::C(task) => task.execute(context, runtime, dependencies),
-            Task::F(task) => task.execute(context, runtime, dependencies),
         }
     }
 
@@ -119,7 +121,7 @@ pub trait Dependencies {
     /// This method will panic if the type-erased outputs cannot be downcast to
     /// their expected concrete types, indicating a severe logic error in the
     /// build system.
-    fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> Self::Output<'a>;
+    fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> (Tracking, Self::Output<'a>);
 }
 
 impl Dependencies for () {
@@ -129,7 +131,9 @@ impl Dependencies for () {
         vec![]
     }
 
-    fn resolve<'a>(&self, _: &'a [Dynamic]) -> Self::Output<'a> {}
+    fn resolve<'a>(&self, _: &'a [Dynamic]) -> (Tracking, Self::Output<'a>) {
+        (Tracking::default(), ())
+    }
 }
 
 impl<H> Dependencies for H
@@ -142,9 +146,14 @@ where
         vec![Handle::index(self)]
     }
 
-    fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> Self::Output<'a> {
+    fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> (Tracking, Self::Output<'a>) {
+        let mut tracking = Tracking::default();
+
         // self is the handle
-        self.downcast(&outputs[0])
+        let (tracker_ptr, output) = self.downcast(&outputs[0]);
+        tracking.edges.push(tracker_ptr);
+
+        (tracking, output)
     }
 }
 
@@ -158,15 +167,17 @@ where
         self.iter().map(|h| h.index()).collect()
     }
 
-    fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> Self::Output<'a> {
+    fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> (Tracking, Self::Output<'a>) {
+        let mut tracking = Tracking::default();
         let mut result = Vec::with_capacity(self.len());
 
         for (handle, output) in self.iter().zip(outputs) {
-            let item = handle.downcast(output);
+            let (tracker_ptr, item) = handle.downcast(output);
+            tracking.edges.push(tracker_ptr);
             result.push(item);
         }
 
-        result
+        (tracking, result)
     }
 }
 
@@ -183,15 +194,20 @@ macro_rules! impl_deps {
                 vec![$(Handle::index($D),)*]
             }
 
-            fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> Self::Output<'a> {
+            fn resolve<'a>(&self, outputs: &'a [Dynamic]) -> (Tracking, Self::Output<'a>) {
+                let mut tracking = Tracking::default();
                 let ($($D,)*) = self;
 
                 let mut iter = outputs.iter();
 
-                ($({
+                let result = ($({
                     let out = iter.next().unwrap();
-                    $D.downcast(out)
-                },)*)
+                    let (tracker_ptr, item) = $D.downcast(out);
+                    tracking.edges.push(tracker_ptr);
+                    item
+                },)*);
+
+                (tracking, result)
             }
         }
     };

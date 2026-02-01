@@ -6,7 +6,7 @@ pub use sitemap_rs::url::{ChangeFrequency, Link, Url};
 
 use crate::{
     Blueprint, HandleC, Output, Store, TaskContext,
-    engine::{Dynamic, TypedTaskC},
+    engine::{Dynamic, Tracking, TypedTaskC},
 };
 
 const MAX_URLS: usize = 50_000;
@@ -126,7 +126,7 @@ impl<G: Send + Sync> TypedTaskC<G> for SitemapTask {
         _: &TaskContext<G>,
         _: &mut Store,
         dependencies: &[Dynamic],
-    ) -> anyhow::Result<Self::Output> {
+    ) -> anyhow::Result<(Tracking, Self::Output)> {
         let mut entries = Vec::new();
 
         for (source, input) in self.sources.iter().zip(dependencies.iter()) {
@@ -150,7 +150,10 @@ impl<G: Send + Sync> TypedTaskC<G> for SitemapTask {
             let mut buffer = Vec::new();
             set.write(&mut buffer)?;
 
-            return Ok(vec![Output::binary("sitemap.xml", buffer)]);
+            return Ok((
+                Tracking::default(),
+                vec![Output::binary("sitemap.xml", buffer)],
+            ));
         }
 
         // complex case where we need to create a sitemap index
@@ -177,7 +180,7 @@ impl<G: Send + Sync> TypedTaskC<G> for SitemapTask {
 
         outputs.push(Output::binary("sitemap.xml", buffer));
 
-        Ok(outputs)
+        Ok((Tracking::default(), outputs))
     }
 }
 

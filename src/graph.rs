@@ -25,12 +25,15 @@
 //!   logic. It acts as the safe bridge, panicking only if the strictly-typed
 //!   blueprint construction was somehow bypassed (which the compiler prevents).
 
-use crate::{engine::Dynamic, importmap::ImportMap};
+use std::collections::{HashMap, HashSet};
+
+use crate::{Hash32, engine::Dynamic, importmap::ImportMap};
 
 /// Represents the data stored in the graph for each node.
 /// Includes the user's output and the concatenated import map.
 #[derive(Clone, Debug)]
 pub(crate) struct NodeData {
     pub output: Dynamic,
+    pub tracking: Vec<Option<HashSet<String>>>,
     pub importmap: ImportMap,
 }

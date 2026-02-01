@@ -1,6 +1,9 @@
 use petgraph::graph::NodeIndex;
 
-use crate::engine::task_f::{Map, Tracker};
+use crate::engine::{
+    Dynamic,
+    task_f::{Map, Tracker, TrackerPtr},
+};
 
 pub struct HandleF<T> {
     pub(crate) index: NodeIndex,
@@ -39,11 +42,13 @@ where
         self.index
     }
 
-    fn downcast<'a>(&self, output: &'a super::Dynamic) -> Self::Output<'a> {
+    fn downcast<'a>(&self, output: &'a Dynamic) -> (Option<TrackerPtr>, Self::Output<'a>) {
+        let ptr = TrackerPtr::default();
+
         let map = output
             .downcast_ref::<Map<T>>()
             .expect("Type mismatch in dependency resolution");
 
-        Tracker { map }
+        (Some(ptr.clone()), Tracker { map, tracker: ptr })
     }
 }

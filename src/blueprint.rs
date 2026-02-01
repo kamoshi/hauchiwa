@@ -6,7 +6,9 @@ use std::sync::Arc;
 use petgraph::Graph;
 use petgraph::graph::NodeIndex;
 
-use crate::engine::{Dependencies, Dynamic, HandleC, HandleF, Task, TypedTaskC, TypedTaskF};
+use crate::engine::{
+    Dependencies, Dynamic, HandleC, HandleF, Task, Tracking, TypedTaskC, TypedTaskF,
+};
 use crate::loader::Store;
 use crate::{Environment, Mode, TaskContext};
 
@@ -350,8 +352,9 @@ where
         context: &TaskContext<G>,
         _: &mut Store,
         dependencies: &[Dynamic],
-    ) -> anyhow::Result<Self::Output> {
-        let dependencies = self.dependencies.resolve(dependencies);
-        (self.callback)(context, dependencies)
+    ) -> anyhow::Result<(Tracking, Self::Output)> {
+        let (tracking, dependencies) = self.dependencies.resolve(dependencies);
+        let output = (self.callback)(context, dependencies)?;
+        Ok((tracking, output))
     }
 }

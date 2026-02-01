@@ -1,5 +1,7 @@
 use petgraph::graph::NodeIndex;
 
+use crate::engine::TrackerPtr;
+
 /// A type-safe reference to a task in the build graph.
 ///
 /// A `Handle<T>` is a lightweight, copyable token that represents a future
@@ -51,9 +53,11 @@ where
         self.index
     }
 
-    fn downcast<'a>(&self, output: &'a super::Dynamic) -> Self::Output<'a> {
-        output
+    fn downcast<'a>(&self, output: &'a super::Dynamic) -> (Option<TrackerPtr>, Self::Output<'a>) {
+        let output = output
             .downcast_ref::<T>()
-            .expect("Type mismatch in dependency resolution")
+            .expect("Type mismatch in dependency resolution");
+
+        (None, output)
     }
 }

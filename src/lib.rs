@@ -25,7 +25,7 @@ pub use gitscan as git;
 pub use tracing::{debug, error, info, trace, warn};
 
 pub use crate::blueprint::{Blueprint, Website};
-pub use crate::engine::{Handle, HandleC, HandleF, Tracker};
+pub use crate::engine::{HandleC, HandleF, Tracker};
 pub use crate::executor::Diagnostics;
 pub use crate::importmap::ImportMap;
 pub use crate::loader::Store;

@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use petgraph::graph::NodeIndex;
 
+use crate::engine::{Dynamic, Tracking};
+
 pub(crate) trait TypedTaskC<G: Send + Sync = ()>: Send + Sync {
     /// The concrete output type of this task.
     type Output: Send + Sync + 'static;
@@ -17,7 +19,7 @@ pub(crate) trait TypedTaskC<G: Send + Sync = ()>: Send + Sync {
         context: &crate::TaskContext<G>,
         runtime: &mut crate::Store,
         dependencies: &[super::Dynamic],
-    ) -> anyhow::Result<Self::Output>;
+    ) -> anyhow::Result<(Tracking, Self::Output)>;
 
     fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
         false
@@ -44,8 +46,8 @@ pub(crate) trait TaskC<G: Send + Sync = ()>: Send + Sync {
         &self,
         context: &crate::TaskContext<G>,
         runtime: &mut crate::Store,
-        dependencies: &[super::Dynamic],
-    ) -> anyhow::Result<super::Dynamic>;
+        dependencies: &[Dynamic],
+    ) -> anyhow::Result<(Tracking, Dynamic)>;
 
     #[inline]
     fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
@@ -88,9 +90,10 @@ where
         context: &crate::TaskContext<G>,
         runtime: &mut crate::Store,
         dependencies: &[super::Dynamic],
-    ) -> anyhow::Result<super::Dynamic> {
+    ) -> anyhow::Result<(Tracking, Dynamic)> {
         // Call the typed method, then erase the result.
-        Ok(Arc::new(T::execute(self, context, runtime, dependencies)?))
+        let (tracking, output) = T::execute(self, context, runtime, dependencies)?;
+        Ok((tracking, Arc::new(output)))
     }
 
     fn is_dirty(&self, path: &camino::Utf8Path) -> bool {
