@@ -1,3 +1,42 @@
+//! # Image optimization pipeline
+//!
+//! Automated image processing, format conversion, and optimization.
+//!
+//! This module processes source images into multiple modern web formats (AVIF,
+//! WebP) with configurable compression. It handles the heavy lifting of
+//! encoding and content-hashing, ensuring your site serves the smallest
+//! possible assets with perfect caching headers.
+//!
+//! ## Capabilities
+//!
+//! * **Format Conversion**: Automatically generate AVIF, WebP, and PNG variants from a single source.
+//! * **Smart Caching**: Uses content-addressable storage; images are only re-processed if pixels change.
+//! * **Metadata Extraction**: Calculates dimensions (width/height) upfront to prevent layout shifts (CLS).
+//! * **Configurable Quality**: Fine-tune lossy compression or opt for lossless.
+//!
+//! ## Usage
+//!
+//! Register the loader to generate a handle containing paths to all generated
+//! formats. This data is structured to easily generate HTML `<picture>`
+//! elements.
+//!
+//! ```rust,no_run
+//! use hauchiwa::{Blueprint, Many};
+//! use hauchiwa::loader::image::{Image, ImageFormat, Quality};
+//!
+//! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<Many<Image>> {
+//!     // Process images
+//!     let images = config.load_images()
+//!         .source("assets/photos/**/*.jpg")
+//!         // Generate AVIF for modern browsers (smaller, better quality)
+//!         .format(ImageFormat::Avif(Quality::Lossy(75)))
+//!         // Generate WebP as a solid fallback
+//!         .format(ImageFormat::WebP)
+//!         .register()?;
+//!
+//!     Ok(images)
+//! }
+//! ```
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter};
@@ -7,9 +46,10 @@ use image::{ExtendedColorType, ImageReader};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::engine::Many;
 use crate::error::{BuildError, HauchiwaError};
-use crate::loader::{Assets, GlobAssetsTask, Input, Store};
-use crate::{Blueprint, Handle, TaskContext};
+use crate::loader::{GlobFiles, Input, Store};
+use crate::{Blueprint, TaskContext};
 
 const DIR_STORE: &str = "/hash/img/";
 const DIR_CACHE: &str = ".cache/hash/img/";
@@ -131,7 +171,7 @@ where
     }
 
     /// Registers the task with the Blueprint.
-    pub fn register(self) -> Result<Handle<Assets<Image>>, HauchiwaError> {
+    pub fn register(self) -> Result<Many<Image>, HauchiwaError> {
         let mut formats = self.formats;
 
         // Default to WebP if no format is specified
@@ -139,7 +179,7 @@ where
             formats.push(ImageFormat::default());
         }
 
-        let task = GlobAssetsTask::new(
+        let task = GlobFiles::new(
             self.globs.clone(),
             // watch the source globs
             self.globs,
@@ -149,7 +189,7 @@ where
             },
         )?;
 
-        Ok(self.blueprint.add_task_opaque(task))
+        Ok(self.blueprint.add_task_fine(task))
     }
 }
 

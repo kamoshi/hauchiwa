@@ -85,12 +85,12 @@ fn main() -> anyhow::Result<()> {
 
             // Resolve the hashed filename of the CSS (e.g., "main.a1b2c3.css")
             let css_link = css
-                .values()
+                .into_iter()
                 .next()
                 .map(|s| s.path.as_str())
                 .unwrap_or("style.css");
 
-            for doc in content.values() {
+            for doc in &content {
                 // Skip drafts in production builds
                 if doc.matter.draft {
                     continue;
@@ -156,7 +156,7 @@ fn main() -> anyhow::Result<()> {
             //    `posts: Vec<&Frontmatter>` as a field.
 
             let mut list_items = String::new();
-            for doc in content.values() {
+            for doc in &content {
                 if !doc.matter.draft {
                     let stem = doc.meta.path.file_stem().unwrap_or_default();
                     list_items.push_str(&format!(

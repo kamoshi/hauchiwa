@@ -1,6 +1,49 @@
+//! # CSS/Sass asset pipeline
+//!
+//! Compiles, optimizes, and hashes stylesheets using
+//! [grass](https://github.com/connorskees/grass).
+//!
+//! This module handles the transformation of raw SCSS/CSS files into
+//! production-ready assets. It automatically handles content-addressing
+//! (hashing) for aggressive browser caching and integrates with the build graph
+//! to only recompile when necessary.
+//!
+//! ## Capabilities
+//!
+//! * **CSS/Sass**: Full compatibility with Sass syntax.
+//! * **Minification**: Output is compressed by default (can be toggled).
+//! * **Cache Busting**: Generates unique filenames based on content hash.
+//! * **Watch Mode**: Smartly tracks dependencies to trigger re-builds during development.
+//!
+//! ## Usage
+//!
+//! Register the loader in your `Blueprint`. The resulting handle contains the
+//! public paths to your compiled stylesheets, which you can pass to your HTML
+//! rendering tasks.
+//!
+//! ```rust,no_run
+//! use hauchiwa::{Blueprint, Many};
+//! use hauchiwa::loader::css::Stylesheet;
+//!
+//! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<Many<Stylesheet>> {
+//!     // Compile main.scss
+//!     let css = config.load_css()
+//!         .entry("./styles/main.scss")
+//!         .watch("./styles/**/*.scss") // Watch partials/_*.scss too
+//!         .minify(true)
+//!         .register()?;
+//!
+//!     // Pass `css` handle to your page renderer...
+//!     Ok(css)
+//! }
+//! ```
+
 use thiserror::Error;
 
-use crate::{Blueprint, error::HauchiwaError, graph::Handle, loader::GlobAssetsTask};
+use crate::core::Hash32;
+use crate::engine::Many;
+use crate::loader::GlobBundle;
+use crate::{Blueprint, error::HauchiwaError};
 
 /// Errors that can occur when compiling Stylesheets.
 #[derive(Debug, Error)]
@@ -70,7 +113,7 @@ where
     }
 
     /// Registers the task with the Blueprint.
-    pub fn register(self) -> Result<Handle<super::Assets<Stylesheet>>, HauchiwaError> {
+    pub fn register(self) -> Result<Many<Stylesheet>, HauchiwaError> {
         let watch_globs = if self.watch_globs.is_empty() {
             self.entry_globs.clone()
         } else {
@@ -79,28 +122,26 @@ where
 
         let minify = self.minify;
 
-        Ok(self.blueprint.add_task_opaque(GlobAssetsTask::new(
-            self.entry_globs,
-            watch_globs,
-            move |_, store, input| {
-                let style = if minify {
-                    grass::OutputStyle::Compressed
-                } else {
-                    grass::OutputStyle::Expanded
-                };
+        let task = GlobBundle::new(self.entry_globs, watch_globs, move |_, store, input| {
+            let style = if minify {
+                grass::OutputStyle::Compressed
+            } else {
+                grass::OutputStyle::Expanded
+            };
 
-                let options = grass::Options::default().style(style);
+            let options = grass::Options::default().style(style);
 
-                let data =
-                    grass::from_path(&input.path, &options).map_err(StyleError::Sass)?;
+            let data = grass::from_path(&input.path, &options).map_err(StyleError::Sass)?;
+            let hash = Hash32::hash(&data);
 
-                let path = store
-                    .save(data.as_bytes(), "css")
-                    .map_err(StyleError::Build)?;
+            let path = store
+                .save(data.as_bytes(), "css")
+                .map_err(StyleError::Build)?;
 
-                Ok((input.path, Stylesheet { path }))
-            },
-        )?))
+            Ok((hash, input.path, Stylesheet { path }))
+        })?;
+
+        Ok(self.blueprint.add_task_fine(task))
     }
 }
 

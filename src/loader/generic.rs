@@ -6,9 +6,9 @@ use thiserror::Error;
 
 use crate::{
     Blueprint, Output,
+    engine::Many,
     error::HauchiwaError,
-    graph::Handle,
-    loader::{GlobAssetsTask, Input},
+    loader::{GlobFiles, Input},
     output::OutputBuilder,
 };
 
@@ -156,10 +156,10 @@ where
     }
 
     /// Registers the task with the Blueprint.
-    pub fn register(self) -> Result<Handle<super::Assets<Document<R>>>, HauchiwaError> {
+    pub fn register(self) -> Result<Many<Document<R>>, HauchiwaError> {
         let offset = self.offset.map(Arc::from);
 
-        Ok(self.blueprint.add_task_opaque(GlobAssetsTask::new(
+        let task = GlobFiles::new(
             self.sources.clone(),
             self.sources,
             move |_, _, input: Input| {
@@ -187,7 +187,9 @@ where
                     },
                 ))
             },
-        )?))
+        )?;
+
+        Ok(self.blueprint.add_task_fine(task))
     }
 }
 

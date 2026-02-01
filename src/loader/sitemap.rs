@@ -1,13 +1,56 @@
+//! # Sitemap generation
+//!
+//! Automated generation of XML sitemaps compliant with the [Sitemap Protocol](https://www.sitemaps.org/).
+//!
+//! This module aggregates page outputs from your build graph to construct a
+//! valid `sitemap.xml`. It handles the technical requirements of search engine
+//! indexing, ensuring your content is discoverable without manual maintenance.
+//!
+//! ## Capabilities
+//!
+//! * **Auto-Scaling**: Automatically splits into a `sitemap-index.xml` and
+//!   multiple sub-sitemaps if the URL count exceeds 50,000.
+//! * **Dependency Integration**: Hooks directly into page generation tasks,
+//!   updating the sitemap automatically when pages are added or removed.
+//! * **SEO Control**: helper methods to assign `changefreq` and `priority` to
+//!   different sections of your site.
+//! * **Valid Output**: Uses strict XML serialization to prevent syntax errors
+//!   that could confuse crawlers.
+//!
+//! ## Usage
+//!
+//! Chain the builder off the `Blueprint`, adding handles to your page collections.
+//!
+//! ```rust,no_run
+//! use hauchiwa::{Blueprint, One, Output};
+//! use hauchiwa::loader::sitemap::ChangeFrequency;
+//!
+//! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<()> {
+//!     // Assume `blog_posts` and `landing_pages` are handles from previous tasks
+//!     let blog_posts: One<Vec<Output>> = todo!();
+//!     let landing_pages: One<Vec<Output>>  = todo!();
+//!
+//!     // Generates sitemap.xml at the root of dist
+//!     config.use_sitemap("https://example.org")
+//!         .add(blog_posts, ChangeFrequency::Weekly, 0.8)
+//!         .add(landing_pages, ChangeFrequency::Yearly, 0.5)
+//!         .register();
+//!
+//!     Ok(())
+//! }
+//! ```
+
 use camino::Utf8PathBuf;
 use petgraph::graph::NodeIndex;
 use sitemap_rs::{sitemap::Sitemap, sitemap_index::SitemapIndex, url_set::UrlSet};
 
 pub use sitemap_rs::url::{ChangeFrequency, Link, Url};
 
-use crate::{
-    Blueprint, Handle, Output, Store, TaskContext,
-    graph::{Dynamic, TypedTask},
-};
+use std::collections::HashSet;
+
+use crate::core::{Dynamic, Store};
+use crate::engine::TypedCoarse;
+use crate::{Blueprint, One, Output, TaskContext, engine::Tracking};
 
 const MAX_URLS: usize = 50_000;
 
@@ -45,6 +88,7 @@ impl SitemapSource {
     }
 }
 
+/// A builder for configuring the Sitemap generation task.
 pub struct SitemapBuilder<'a, G: Send + Sync> {
     blueprint: &'a mut Blueprint<G>,
     base: String,
@@ -64,7 +108,7 @@ impl<'a, G: Send + Sync + 'static> SitemapBuilder<'a, G> {
     /// their URLs from their output file paths.
     pub fn add(
         mut self,
-        handle: Handle<Vec<Output>>,
+        handle: One<Vec<Output>>,
         frequency: ChangeFrequency,
         priority: f32,
     ) -> Self {
@@ -93,8 +137,8 @@ impl<'a, G: Send + Sync + 'static> SitemapBuilder<'a, G> {
     //     self
     // }
 
-    pub fn register(self) -> Handle<Vec<Output>> {
-        self.blueprint.add_task_opaque(SitemapTask {
+    pub fn register(self) -> One<Vec<Output>> {
+        self.blueprint.add_task_coarse(SitemapTask {
             base_url: self.base,
             sources: self.deps,
         })
@@ -106,7 +150,7 @@ struct SitemapTask {
     sources: Vec<SitemapSource>,
 }
 
-impl<G: Send + Sync> TypedTask<G> for SitemapTask {
+impl<G: Send + Sync> TypedCoarse<G> for SitemapTask {
     type Output = Vec<Output>;
 
     fn get_name(&self) -> String {
@@ -126,7 +170,7 @@ impl<G: Send + Sync> TypedTask<G> for SitemapTask {
         _: &TaskContext<G>,
         _: &mut Store,
         dependencies: &[Dynamic],
-    ) -> anyhow::Result<Self::Output> {
+    ) -> anyhow::Result<(Tracking, Self::Output)> {
         let mut entries = Vec::new();
 
         for (source, input) in self.sources.iter().zip(dependencies.iter()) {
@@ -150,7 +194,10 @@ impl<G: Send + Sync> TypedTask<G> for SitemapTask {
             let mut buffer = Vec::new();
             set.write(&mut buffer)?;
 
-            return Ok(vec![Output::binary("sitemap.xml", buffer)]);
+            return Ok((
+                Tracking::default(),
+                vec![Output::binary("sitemap.xml", buffer)],
+            ));
         }
 
         // complex case where we need to create a sitemap index
@@ -177,7 +224,16 @@ impl<G: Send + Sync> TypedTask<G> for SitemapTask {
 
         outputs.push(Output::binary("sitemap.xml", buffer));
 
-        Ok(outputs)
+        Ok((Tracking::default(), outputs))
+    }
+
+    fn is_valid(
+        &self,
+        _: &[Option<crate::engine::TrackerState>],
+        _: &[Dynamic],
+        updated: &HashSet<NodeIndex>,
+    ) -> bool {
+        !self.sources.iter().any(|s| updated.contains(&s.index))
     }
 }
 

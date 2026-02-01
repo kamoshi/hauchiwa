@@ -141,9 +141,12 @@ fn normalize_path_html(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     buffer
 }
 
+/// The content of an [`Output`] file.
 #[derive(Debug, Clone)]
 pub enum OutputData {
+    /// Text content (UTF-8).
     Utf8(String),
+    /// Binary content (raw bytes).
     Binary(Vec<u8>),
 }
 

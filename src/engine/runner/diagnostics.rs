@@ -4,14 +4,25 @@ use std::fmt::{Display, Formatter, Write};
 use petgraph::graph::NodeIndex;
 
 use crate::Website;
-use crate::executor::TaskExecution;
+use crate::engine::TaskExecution;
 
+/// Build diagnostics and performance metrics.
+///
+/// This struct is returned by [`Website::build`] and contains information about
+/// the execution of tasks, such as duration and start times.
 #[derive(Debug, Default)]
 pub struct Diagnostics {
+    /// A map of task node indices to their execution metrics.
     pub execution_times: HashMap<NodeIndex, TaskExecution>,
 }
 
 impl Diagnostics {
+    /// Renders the task graph as a Mermaid diagram, color-coded by execution duration.
+    ///
+    /// * **Green**: Fast
+    /// * **Yellow**: Moderate
+    /// * **Red**: Slow
+    /// * **Blue**: Cached (skipped)
     pub fn render_mermaid<G>(&self, site: &Website<G>) -> String
     where
         G: Send + Sync,
@@ -48,7 +59,7 @@ impl Diagnostics {
 
         for index in site.graph.node_indices() {
             let task = &site.graph[index];
-            let name = task.get_name().replace('"', "\\\""); // Simple escape
+            let name = task.name().replace('"', "\\\""); // Simple escape
 
             // Determine status and label
             let (label_extra, color_code) = if let Some(exec) = times.get(&index) {
@@ -99,7 +110,7 @@ impl Diagnostics {
             let (source, target) = site.graph.edge_endpoints(edge).unwrap();
             let source_task = &site.graph[source];
             let type_name = source_task
-                .get_output_type_name()
+                .type_name_output()
                 .replace('<', "&lt;")
                 .replace('>', "&gt;");
             writeln!(
@@ -202,6 +213,7 @@ impl TimelineStats {
 }
 
 impl Diagnostics {
+    /// Renders a waterfall chart of task execution as an SVG file.
     pub fn render_waterfall_to_file<G>(
         &self,
         site: &Website<G>,
@@ -213,6 +225,7 @@ impl Diagnostics {
         std::fs::write(path, self.render_waterfall(site))
     }
 
+    /// Renders a waterfall chart of task execution as an SVG string.
     pub fn render_waterfall<G>(&self, site: &Website<G>) -> String
     where
         G: Send + Sync,
@@ -309,7 +322,7 @@ impl Diagnostics {
     {
         for (i, (node_idx, exec)) in tasks.iter().enumerate() {
             let task = &site.graph[*node_idx];
-            let raw_name = task.get_name();
+            let raw_name = task.name();
             let safe_name = XmlSafe(&raw_name); // Validates XML safety
 
             let y_pos = layout.header_height + (i as u32 * layout.row_height);
