@@ -1,10 +1,9 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use pagefind::api::PagefindIndex;
 use pagefind::options::PagefindServiceConfig;
-use petgraph::graph::NodeIndex;
 use tokio::runtime::Builder;
 
-use crate::{Blueprint, Handle, HandleC, Output, output::OutputData};
+use crate::{Blueprint, HandleC, Output, output::OutputData};
 
 async fn build_closure(pages: &[&Output]) -> Result<Vec<Output>, anyhow::Error> {
     let config = PagefindServiceConfig::builder().build();
@@ -38,7 +37,7 @@ where
     G: Send + Sync,
 {
     blueprint: &'a mut Blueprint<G>,
-    handles: Vec<NodeIndex>,
+    handles: Vec<HandleC<Vec<Output>>>,
 }
 
 impl<'a, G> PagefindBuilder<'a, G>
@@ -46,8 +45,8 @@ where
     G: Send + Sync + 'static,
 {
     /// Adds a handle (source of HTML outputs) to the index.
-    pub fn index(mut self, handle: impl for<'x> Handle<Output<'x> = Vec<Output>>) -> Self {
-        self.handles.push(handle.index());
+    pub fn index(mut self, handle: HandleC<Vec<Output>>) -> Self {
+        self.handles.push(handle);
         self
     }
 

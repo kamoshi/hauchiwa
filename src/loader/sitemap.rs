@@ -5,7 +5,7 @@ use sitemap_rs::{sitemap::Sitemap, sitemap_index::SitemapIndex, url_set::UrlSet}
 pub use sitemap_rs::url::{ChangeFrequency, Link, Url};
 
 use crate::{
-    Blueprint, Handle, HandleC, Output, Store, TaskContext,
+    Blueprint, HandleC, Output, Store, TaskContext,
     engine::{Dynamic, TypedTaskC},
 };
 
@@ -64,7 +64,7 @@ impl<'a, G: Send + Sync + 'static> SitemapBuilder<'a, G> {
     /// their URLs from their output file paths.
     pub fn add(
         mut self,
-        handle: impl for<'x> Handle<Output<'x> = &'x Vec<Output>>,
+        handle: HandleC<Vec<Output>>,
         frequency: ChangeFrequency,
         priority: f32,
     ) -> Self {

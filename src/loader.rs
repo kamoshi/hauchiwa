@@ -32,8 +32,8 @@ use tracing_indicatif::span_ext::IndicatifSpanExt;
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
-// #[cfg(feature = "pagefind")]
-// pub mod pagefind;
+#[cfg(feature = "pagefind")]
+pub mod pagefind;
 
 #[cfg(feature = "sitemap")]
 pub mod sitemap;
