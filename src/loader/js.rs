@@ -1,3 +1,41 @@
+//! # JavaScript/TypeScript bundling pipeline
+//!
+//! Blazingly fast compilation and bundling using [esbuild](https://esbuild.github.io/).
+//!
+//! This module acts as a bridge to `esbuild`, allowing you to treat JavaScript
+//! and TypeScript files as first-class citizens in your build graph. It
+//! automatically handles transpilation, dependency resolution, minification,
+//! and content-hashing.
+//!
+//! **Note**: Requires the `esbuild` binary to be available in your system PATH.
+//!
+//! ## Capabilities
+//!
+//! * **TypeScript**: Native support for `.ts` and `.tsx` files without extra config.
+//! * **Bundling**: Recursively resolves `import`s to produce a single self-contained file.
+//! * **Optimization**: Minifies code for production by default.
+//! * **Cache Busting**: Output files are hashed for immutable caching.
+//!
+//! ## Usage
+//!
+//! Register the loader to generate a handle containing the public path to your script.
+//!
+//! ```rust,no_run
+//! use hauchiwa::{Blueprint, Many};
+//! use hauchiwa::loader::js::Script;
+//!
+//! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<Many<Script>> {
+//!     // Compile main.ts -> dist/hash/js/main.[hash].js
+//!     let app = config.load_js()
+//!         .entry("src/client/main.ts")
+//!         .watch("src/client/**/*.ts") // Rebuild when any client file changes
+//!         .bundle(true)
+//!         .minify(true)
+//!         .register()?;
+//!
+//!     Ok(app)
+//! }
+//! ```
 use std::process::{Command, Stdio};
 
 use camino::{Utf8Path, Utf8PathBuf};

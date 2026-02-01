@@ -1,3 +1,42 @@
+//! # Image optimization pipeline
+//!
+//! Automated image processing, format conversion, and optimization.
+//!
+//! This module processes source images into multiple modern web formats (AVIF,
+//! WebP) with configurable compression. It handles the heavy lifting of
+//! encoding and content-hashing, ensuring your site serves the smallest
+//! possible assets with perfect caching headers.
+//!
+//! ## Capabilities
+//!
+//! * **Format Conversion**: Automatically generate AVIF, WebP, and PNG variants from a single source.
+//! * **Smart Caching**: Uses content-addressable storage; images are only re-processed if pixels change.
+//! * **Metadata Extraction**: Calculates dimensions (width/height) upfront to prevent layout shifts (CLS).
+//! * **Configurable Quality**: Fine-tune lossy compression or opt for lossless.
+//!
+//! ## Usage
+//!
+//! Register the loader to generate a handle containing paths to all generated
+//! formats. This data is structured to easily generate HTML `<picture>`
+//! elements.
+//!
+//! ```rust,no_run
+//! use hauchiwa::{Blueprint, Many};
+//! use hauchiwa::loader::image::{Image, ImageFormat, Quality};
+//!
+//! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<Many<Image>> {
+//!     // Process images
+//!     let images = config.load_images()
+//!         .source("assets/photos/**/*.jpg")
+//!         // Generate AVIF for modern browsers (smaller, better quality)
+//!         .format(ImageFormat::Avif(Quality::Lossy(75)))
+//!         // Generate WebP as a solid fallback
+//!         .format(ImageFormat::WebP)
+//!         .register()?;
+//!
+//!     Ok(images)
+//! }
+//! ```
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter};

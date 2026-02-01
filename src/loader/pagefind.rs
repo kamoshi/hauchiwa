@@ -1,3 +1,41 @@
+//! # Pagefind static search indexing
+//!
+//! Generates a fully client-side search index using [pagefind](https://pagefind.app/).
+//!
+//! This module integrates Pagefind directly into the build graph, scanning your
+//! generated HTML output to build a static search library (WASM/JS + Index
+//! chunks). The resulting search engine runs entirely in the user's browser
+//! with no backend requirement.
+//!
+//! ## Capabilities
+//!
+//! * **Automatic Ingestion**: Filters and indexes `html` outputs from upstream tasks.
+//! * **Static Output**: Generates a self-contained `_pagefind` directory ready for deployment.
+//! * **Zero Runtime Overhead**: Search logic is offloaded to the client's device.
+//! * **Parallel Execution**: Indexing runs concurrently with other unrelated build tasks.
+//!
+//! ## Usage
+//!
+//! Feed your HTML generation handles into the builder. The task will
+//! automatically collect valid HTML files and produce the search assets.
+//!
+//! ```rust,no_run
+//! use hauchiwa::{Blueprint, One, Output};
+//!
+//! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<()> {
+//!     // 1. Define your content rendering task
+//!     // let pages = ...; // One<Vec<Output>>
+//!     let pages: One<Vec<Output>> = todo!();
+//!
+//!     // 2. Attach the search indexer
+//!     // Assets will be generated at `dist/_pagefind/`
+//!     config.use_pagefind()
+//!         .index(pages)
+//!         .register();
+//!
+//!     Ok(())
+//! }
+//! ```
 use camino::{Utf8Path, Utf8PathBuf};
 use pagefind::api::PagefindIndex;
 use pagefind::options::PagefindServiceConfig;

@@ -1,3 +1,45 @@
+//! # Sitemap generation
+//!
+//! Automated generation of XML sitemaps compliant with the [Sitemap Protocol](https://www.sitemaps.org/).
+//!
+//! This module aggregates page outputs from your build graph to construct a
+//! valid `sitemap.xml`. It handles the technical requirements of search engine
+//! indexing, ensuring your content is discoverable without manual maintenance.
+//!
+//! ## Capabilities
+//!
+//! * **Auto-Scaling**: Automatically splits into a `sitemap-index.xml` and
+//!   multiple sub-sitemaps if the URL count exceeds 50,000.
+//! * **Dependency Integration**: Hooks directly into page generation tasks,
+//!   updating the sitemap automatically when pages are added or removed.
+//! * **SEO Control**: helper methods to assign `changefreq` and `priority` to
+//!   different sections of your site.
+//! * **Valid Output**: Uses strict XML serialization to prevent syntax errors
+//!   that could confuse crawlers.
+//!
+//! ## Usage
+//!
+//! Chain the builder off the `Blueprint`, adding handles to your page collections.
+//!
+//! ```rust,no_run
+//! use hauchiwa::{Blueprint, One, Output};
+//! use hauchiwa::loader::sitemap::ChangeFrequency;
+//!
+//! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<()> {
+//!     // Assume `blog_posts` and `landing_pages` are handles from previous tasks
+//!     let blog_posts: One<Vec<Output>> = todo!();
+//!     let landing_pages: One<Vec<Output>>  = todo!();
+//!
+//!     // Generates sitemap.xml at the root of dist
+//!     config.use_sitemap("https://example.org")
+//!         .add(blog_posts, ChangeFrequency::Weekly, 0.8)
+//!         .add(landing_pages, ChangeFrequency::Yearly, 0.5)
+//!         .register();
+//!
+//!     Ok(())
+//! }
+//! ```
+
 use camino::Utf8PathBuf;
 use petgraph::graph::NodeIndex;
 use sitemap_rs::{sitemap::Sitemap, sitemap_index::SitemapIndex, url_set::UrlSet};

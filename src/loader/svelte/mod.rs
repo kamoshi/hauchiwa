@@ -1,3 +1,62 @@
+//! # Svelte hybrid rendering pipeline
+//!
+//! Compiles Svelte components for Server-Side Rendering (SSR) and Client-Side Hydration.
+//!
+//! This module bridges the gap between Rust and Svelte. It uses
+//! [Deno](https://deno.land/) to compile your components into two parts: a
+//! server-side renderer (callable from Rust) and a client-side hydration script
+//! (loadable by the browser).
+//!
+//! **Note**: Requires the `deno` binary to be available in your system PATH.
+//!
+//! ## Capabilities
+//!
+//! * **Hybrid Rendering**: Generates static HTML at build time while keeping components interactive in the browser.
+//! * **Type-Safe Props**: Pass data from Rust to Svelte using strongly-typed, serializable structs.
+//! * **Sandboxed Compilation**: Uses Deno for a secure, standard-compliant build environment.
+//! * **Automatic Hydration**: Injects the necessary code to "wake up" components on the client side.
+//!
+//! ## Usage
+//!
+//! Define your props struct, register the loader, and use the resulting handle
+//! to render HTML strings within your page tasks.
+//!
+//! ```rust,no_run
+//! use hauchiwa::Blueprint;
+//! use serde::{Serialize, Deserialize};
+//!
+//! #[derive(Clone, Serialize, Deserialize)]
+//! struct ButtonProps {
+//!     label: String,
+//!     count: i32,
+//! }
+//!
+//! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<()> {
+//!     // 1. Load the component
+//!     // Returns Many<Svelte<ButtonProps>>
+//!     let buttons = config.load_svelte::<ButtonProps>()
+//!         .entry("components/Counter.svelte")
+//!         .register()?;
+//!
+//!     // 2. Use it in a task to render HTML
+//!     config
+//!         .task()
+//!         .depends_on(buttons)
+//!         .run(|ctx, buttons| {
+//!         let component = buttons.get("components/Counter.svelte").unwrap();
+//!
+//!         // SSR happens here (Rust -> JS -> HTML)
+//!         let props = ButtonProps { label: "Click me".into(), count: 0 };
+//!         let html = (component.prerender)(&props)?;
+//!
+//!         // The `component.hydration` field contains the path to the client-side JS
+//!         println!("Rendered: {}", html);
+//!         Ok(())
+//!     });
+//!
+//!     Ok(())
+//! }
+//! ```
 use std::{
     io::Write,
     process::{Command, Stdio},

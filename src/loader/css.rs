@@ -1,3 +1,43 @@
+//! # CSS/Sass asset pipeline
+//!
+//! Compiles, optimizes, and hashes stylesheets using
+//! [grass](https://github.com/connorskees/grass).
+//!
+//! This module handles the transformation of raw SCSS/CSS files into
+//! production-ready assets. It automatically handles content-addressing
+//! (hashing) for aggressive browser caching and integrates with the build graph
+//! to only recompile when necessary.
+//!
+//! ## Capabilities
+//!
+//! * **CSS/Sass**: Full compatibility with Sass syntax.
+//! * **Minification**: Output is compressed by default (can be toggled).
+//! * **Cache Busting**: Generates unique filenames based on content hash.
+//! * **Watch Mode**: Smartly tracks dependencies to trigger re-builds during development.
+//!
+//! ## Usage
+//!
+//! Register the loader in your `Blueprint`. The resulting handle contains the
+//! public paths to your compiled stylesheets, which you can pass to your HTML
+//! rendering tasks.
+//!
+//! ```rust,no_run
+//! use hauchiwa::{Blueprint, Many};
+//! use hauchiwa::loader::css::Stylesheet;
+//!
+//! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<Many<Stylesheet>> {
+//!     // Compile main.scss
+//!     let css = config.load_css()
+//!         .entry("./styles/main.scss")
+//!         .watch("./styles/**/*.scss") // Watch partials/_*.scss too
+//!         .minify(true)
+//!         .register()?;
+//!
+//!     // Pass `css` handle to your page renderer...
+//!     Ok(css)
+//! }
+//! ```
+
 use thiserror::Error;
 
 use crate::core::Hash32;

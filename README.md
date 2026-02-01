@@ -41,7 +41,7 @@ Then Hauchiwa is for you.
   * **[Images](crate::loader::image)**: Automatically generates multi-format
     sources (WebP, AVIF) with content-addressed hashing for immutable caching
     via the `image` crate.
-  * **[Sass/SCSS](crate::loader::css)**: Integrates `grass` to compile and
+  * **[CSS/Sass](crate::loader::css)**: Integrates `grass` to compile and
     minify stylesheets, outputting hashed CSS bundles that are ready for
     aggressive browser caching.
   * **[JavaScript](crate::loader::js)**: Bundling and minification via `esbuild`.
