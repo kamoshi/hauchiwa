@@ -48,7 +48,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
     Hash32, TaskContext,
-    engine::{Dynamic, Map, TypedTaskF},
+    engine::{Dynamic, Map, Provenance, TypedTaskF},
     error::{BuildError, HauchiwaError},
     importmap::ImportMap,
 };
@@ -248,18 +248,23 @@ where
                 let mut rt = Store::new();
 
                 // call the user callback
-                let (out_path, res) = (self.callback)(context, &mut rt, file)?;
+                let (path, res) = (self.callback)(context, &mut rt, file)?;
 
                 // next iteration
                 context.span.pb_inc(1);
 
-                Ok((out_path, res, rt.imports))
+                let provenance = Provenance {
+                    id: path.to_string(),
+                    hash,
+                };
+
+                Ok((path, provenance, res, rt.imports))
             })
             .collect();
 
         let mut registry = HashMap::new();
-        for (path, res, imports) in results? {
-            registry.insert(path.into_string(), res);
+        for (path, provenance, res, imports) in results? {
+            registry.insert(path.into_string(), (res, provenance));
             runtime.imports.merge(imports);
         }
 

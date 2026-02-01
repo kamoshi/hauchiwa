@@ -3,6 +3,7 @@ mod handle_f;
 mod task_c;
 mod task_f;
 
+use std::collections::HashMap;
 use std::{any::Any, collections::HashSet, sync::Arc};
 
 use petgraph::graph::NodeIndex;
@@ -11,8 +12,8 @@ pub use crate::engine::handle_c::HandleC;
 pub use crate::engine::handle_f::HandleF;
 
 pub(crate) use crate::engine::task_c::TypedTaskC;
-pub use crate::engine::task_f::Tracker;
 pub(crate) use crate::engine::task_f::{Map, TrackerPtr, TypedTaskF};
+pub use crate::engine::task_f::{Provenance, Tracker};
 
 pub(crate) type Dynamic = Arc<dyn Any + Send + Sync>;
 
@@ -22,7 +23,7 @@ pub struct Tracking {
 }
 
 impl Tracking {
-    pub(crate) fn unwrap(self) -> Vec<Option<HashSet<String>>> {
+    pub(crate) fn unwrap(self) -> Vec<Option<HashMap<String, Provenance>>> {
         self.edges
             .into_iter()
             .map(|edge| edge.map(|item| Arc::try_unwrap(item.ptr).unwrap().into_inner().unwrap()))

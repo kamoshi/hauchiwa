@@ -27,13 +27,16 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{Hash32, engine::Dynamic, importmap::ImportMap};
+use crate::{
+    engine::{Dynamic, Provenance},
+    importmap::ImportMap,
+};
 
 /// Represents the data stored in the graph for each node.
 /// Includes the user's output and the concatenated import map.
 #[derive(Clone, Debug)]
 pub(crate) struct NodeData {
     pub output: Dynamic,
-    pub tracking: Vec<Option<HashSet<String>>>,
+    pub tracking: Vec<Option<HashMap<String, Provenance>>>,
     pub importmap: ImportMap,
 }

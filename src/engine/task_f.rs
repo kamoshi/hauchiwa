@@ -6,7 +6,13 @@ use std::{
 use glob::Pattern;
 use petgraph::graph::NodeIndex;
 
-use crate::error::HauchiwaError;
+use crate::{Hash32, error::HauchiwaError};
+
+#[derive(Debug, Clone)]
+pub struct Provenance {
+    pub(crate) id: String,
+    pub(crate) hash: Hash32,
+}
 
 /// A collection of processed assets, indexed by their source file path.
 ///
@@ -34,7 +40,7 @@ use crate::error::HauchiwaError;
 /// ```
 #[derive(Debug)]
 pub(crate) struct Map<T> {
-    pub(crate) map: HashMap<String, T>,
+    pub(crate) map: HashMap<String, (T, Provenance)>,
 }
 
 pub struct Tracker<'a, T> {
@@ -44,7 +50,7 @@ pub struct Tracker<'a, T> {
 
 #[derive(Clone, Default)]
 pub struct TrackerPtr {
-    pub(crate) ptr: Arc<Mutex<HashSet<String>>>,
+    pub(crate) ptr: Arc<Mutex<HashMap<String, Provenance>>>,
 }
 
 impl<'a, T> Tracker<'a, T> {
@@ -54,14 +60,11 @@ impl<'a, T> Tracker<'a, T> {
         K: AsRef<str>,
     {
         match self.map.map.get(key.as_ref()) {
-            Some(val) => {
-                self.tracker
-                    .ptr
-                    .lock()
-                    .unwrap()
-                    .insert(key.as_ref().to_string());
+            Some((item, provenance)) => {
+                let mut tracker = self.tracker.ptr.lock().unwrap();
+                tracker.insert(key.as_ref().to_string(), provenance.clone());
 
-                Ok(val)
+                Ok(item)
             }
             None => Err(HauchiwaError::AssetNotFound(
                 key.as_ref().to_string().into(),
@@ -74,15 +77,17 @@ impl<'a, T> Tracker<'a, T> {
     where
         P: AsRef<str>,
     {
-        let tracker = self.tracker.clone();
         let matcher = Pattern::new(pattern.as_ref())?;
 
         let iter = self.map.map.iter().filter_map(move |(key, val)| {
             let key = key.as_str();
+            let (item, provenance) = val;
 
             if matcher.matches(key) {
-                tracker.ptr.lock().unwrap().insert(key.to_string());
-                Some((key, val))
+                let mut tracker = self.tracker.ptr.lock().unwrap();
+                tracker.insert(key.to_string(), provenance.clone());
+
+                Some((key, item))
             } else {
                 None
             }
@@ -91,35 +96,60 @@ impl<'a, T> Tracker<'a, T> {
         Ok(iter)
     }
 
-    // This method borrows self immutable (&) and returns an iterator over &T
     pub fn iter(&self) -> impl Iterator<Item = (&String, &T)> {
-        let tracker = self.tracker.clone();
-
-        self.map.map.iter().inspect(move |row| {
-            tracker.ptr.lock().unwrap().insert(row.0.to_string());
-        })
+        self.map
+            .map
+            .iter()
+            .inspect(move |(key, (_, provenance))| {
+                let mut tracker = self.tracker.ptr.lock().unwrap();
+                tracker.insert(key.to_string(), provenance.clone());
+            })
+            .map(|(key, val)| (key, &val.0))
     }
 
-    pub fn values(&self) -> std::collections::hash_map::Values<'_, String, T> {
-        self.map.map.values()
+    pub fn values(&self) -> Box<dyn Iterator<Item = &T> + '_> {
+        let tracker = self.tracker.ptr.clone();
+
+        Box::new(self.map.map.iter().map(move |(key, (item, provenance))| {
+            let mut tracker = tracker.lock().unwrap();
+            tracker.insert(key.to_string(), provenance.clone());
+
+            item
+        }))
     }
 }
 
 impl<'a, T> IntoIterator for Tracker<'a, T> {
     type Item = &'a T;
-    type IntoIter = std::collections::hash_map::Values<'a, String, T>;
+    type IntoIter = Box<dyn Iterator<Item = &'a T> + 'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.map.map.values()
+        let tracker = self.tracker.ptr.clone();
+
+        Box::new(self.map.map.iter().map(move |(key, (item, provenance))| {
+            let mut tracker = tracker.lock().unwrap();
+            tracker.insert(key.to_string(), provenance.clone());
+
+            item
+        }))
     }
 }
 
-impl<'a, T> IntoIterator for &Tracker<'a, T> {
+impl<'a, 'b, T> IntoIterator for &'b Tracker<'a, T> {
     type Item = &'a T;
-    type IntoIter = std::collections::hash_map::Values<'a, String, T>;
+    type IntoIter = Box<dyn Iterator<Item = &'a T> + 'b>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.map.map.values()
+        let tracker = self.tracker.ptr.clone();
+
+        let iter = self.map.map.iter().map(move |(key, (item, provenance))| {
+            let mut tracker = tracker.lock().unwrap();
+            tracker.insert(key.to_string(), provenance.clone());
+
+            item
+        });
+
+        Box::new(iter)
     }
 }
 
