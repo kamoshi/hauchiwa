@@ -6,7 +6,7 @@ use std::sync::Arc;
 use petgraph::Graph;
 use petgraph::graph::NodeIndex;
 
-use crate::graph::{Dynamic, Handle, Task, TaskDependencies, TypedTask};
+use crate::engine::{Dependencies, Dynamic, HandleC, HandleF, Task, TypedTaskC, TypedTaskF};
 use crate::loader::Store;
 use crate::{Environment, Mode, TaskContext};
 
@@ -27,7 +27,7 @@ use crate::{Environment, Mode, TaskContext};
 /// // Add tasks here...
 /// ```
 pub struct Blueprint<G: Send + Sync = ()> {
-    pub(crate) graph: Graph<Arc<dyn Task<G>>, ()>,
+    pub(crate) graph: Graph<Task<G>, ()>,
 }
 
 impl<G: Send + Sync + 'static> Blueprint<G> {
@@ -50,19 +50,34 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
         }
     }
 
-    pub(crate) fn add_task_opaque<O, T>(&mut self, task: T) -> Handle<O>
+    pub(crate) fn add_task_fine<O, T>(&mut self, task: T) -> HandleF<O>
     where
         O: 'static,
-        T: TypedTask<G, Output = O> + 'static,
+        T: TypedTaskF<G, Output = O> + 'static,
     {
         let dependencies = task.dependencies();
-        let index = self.graph.add_node(Arc::new(task));
+        let index = self.graph.add_node(Task::F(Arc::new(task)));
 
         for dependency in dependencies {
             self.graph.add_edge(dependency, index, ());
         }
 
-        Handle::new(index)
+        HandleF::new(index)
+    }
+
+    pub(crate) fn add_task_coarse<O, T>(&mut self, task: T) -> HandleC<O>
+    where
+        O: 'static,
+        T: TypedTaskC<G, Output = O> + 'static,
+    {
+        let dependencies = task.dependencies();
+        let index = self.graph.add_node(Task::C(Arc::new(task)));
+
+        for dependency in dependencies {
+            self.graph.add_edge(dependency, index, ());
+        }
+
+        HandleC::new(index)
     }
 }
 
@@ -81,7 +96,7 @@ where
 
         for index in self.graph.node_indices() {
             let task = &self.graph[index];
-            let name = task.get_name().replace('"', "\\\""); // Simple escape
+            let name = task.name().replace('"', "\\\""); // Simple escape
             writeln!(f, "    {:?}[\"{}\"]", index.index(), name)?;
 
             if task.is_output() {
@@ -95,7 +110,7 @@ where
             let (source, target) = self.graph.edge_endpoints(edge).unwrap();
             let source_task = &self.graph[source];
             let type_name = source_task
-                .get_output_type_name()
+                .type_name_output()
                 .replace('<', "&lt;")
                 .replace('>', "&gt;");
             writeln!(
@@ -132,7 +147,7 @@ impl<'a, G: Send + Sync + 'static> TaskDef<'a, G> {
 
     pub fn depends_on<D>(self, dependencies: D) -> TaskBinder<'a, G, D>
     where
-        D: TaskDependencies,
+        D: Dependencies,
     {
         TaskBinder {
             blueprint: self.blueprint,
@@ -141,12 +156,12 @@ impl<'a, G: Send + Sync + 'static> TaskDef<'a, G> {
         }
     }
 
-    pub fn run<F, R>(self, callback: F) -> Handle<R>
+    pub fn run<F, R>(self, callback: F) -> HandleC<R>
     where
         F: Fn(&TaskContext<'_, G>) -> anyhow::Result<R> + Send + Sync + 'static,
         R: Send + Sync + 'static,
     {
-        self.blueprint.add_task_opaque(TaskNode {
+        self.blueprint.add_task_coarse(TaskNode {
             name: self.name.unwrap_or(type_name::<F>().into()),
             dependencies: (),
             callback: move |ctx, _| callback(ctx),
@@ -172,10 +187,7 @@ impl<'a, G: Send + Sync + 'static> TaskSourceBinder<'a, G> {
         self
     }
 
-    pub fn run<F, R>(
-        self,
-        callback: F,
-    ) -> Result<Handle<crate::loader::Assets<R>>, crate::error::HauchiwaError>
+    pub fn run<F, R>(self, callback: F) -> Result<HandleF<R>, crate::error::HauchiwaError>
     where
         F: Fn(&TaskContext<G>, &mut Store, crate::loader::Input) -> anyhow::Result<R>
             + Send
@@ -193,7 +205,7 @@ impl<'a, G: Send + Sync + 'static> TaskSourceBinder<'a, G> {
             },
         )?;
 
-        Ok(self.blueprint.add_task_opaque(task))
+        Ok(self.blueprint.add_task_fine(task))
     }
 }
 
@@ -206,14 +218,14 @@ pub struct TaskBinder<'a, G: Send + Sync, D> {
 impl<'a, G, D> TaskBinder<'a, G, D>
 where
     G: Send + Sync + 'static,
-    D: TaskDependencies + Send + Sync + 'static,
+    D: Dependencies + Send + Sync + 'static,
 {
     pub fn name(mut self, name: impl Into<Cow<'static, str>>) -> Self {
         self.name = Some(name.into());
         self
     }
 
-    pub fn run<F, R>(self, callback: F) -> Handle<R>
+    pub fn run<F, R>(self, callback: F) -> HandleC<R>
     where
         F: for<'b> Fn(&TaskContext<'b, G>, D::Output<'b>) -> anyhow::Result<R>
             + Send
@@ -221,7 +233,7 @@ where
             + 'static,
         R: Send + Sync + 'static,
     {
-        self.blueprint.add_task_opaque(TaskNode {
+        self.blueprint.add_task_coarse(TaskNode {
             name: self.name.unwrap_or(type_name::<F>().into()),
             dependencies: self.dependencies,
             callback,
@@ -236,7 +248,7 @@ where
 /// A [`Website`] is created from a [`Blueprint`] and is the primary interface
 /// for executing the build process.
 pub struct Website<G: Send + Sync = ()> {
-    pub(crate) graph: Graph<Arc<dyn Task<G>>, ()>,
+    pub(crate) graph: Graph<Task<G>, ()>,
 }
 
 impl<G> Website<G>
@@ -303,7 +315,7 @@ pub(crate) struct TaskNode<G, R, D, F>
 where
     G: Send + Sync,
     R: Send + Sync + 'static,
-    D: TaskDependencies,
+    D: Dependencies,
     F: for<'a> Fn(&TaskContext<'a, G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync,
 {
     pub name: Cow<'static, str>,
@@ -312,11 +324,11 @@ where
     pub _phantom: PhantomData<G>,
 }
 
-impl<G, R, D, F> TypedTask<G> for TaskNode<G, R, D, F>
+impl<G, R, D, F> TypedTaskC<G> for TaskNode<G, R, D, F>
 where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
-    D: TaskDependencies + Send + Sync,
+    D: Dependencies + Send + Sync,
     F: for<'a> Fn(&TaskContext<'a, G>, D::Output<'a>) -> anyhow::Result<R> + Send + Sync + 'static,
 {
     type Output = R;

@@ -94,7 +94,7 @@ fn main() -> anyhow::Result<()> {
 
             // Inject the link tag for our compiled CSS.
             // `styles.values()` gives us access to the processed CSS metadata.
-            for css in styles.values() {
+            for css in styles {
                 html.push_str(&format!(r#"<link rel="stylesheet" href="{}">"#, css.path));
             }
 
@@ -103,7 +103,7 @@ fn main() -> anyhow::Result<()> {
 
             // Example: Find and display a specific logo image.
             // `images` is a Map, but we can search it using a glob pattern.
-            if let Some(logo) = images.glob("**/logo.ppm")?.first() {
+            if let Some(logo) = images.glob("**/logo.ppm")?.next() {
                 // logo.1 contains the Image metadata (like its final path in `dist`).
                 html.push_str(&format!(r#"<img src="{}" alt="Logo">"#, logo.1.default));
             }
@@ -111,13 +111,13 @@ fn main() -> anyhow::Result<()> {
             html.push_str("<ul>");
 
             // Iterate over our markdown posts and create a list.
-            for post in posts.values() {
+            for post in &posts {
                 html.push_str(&format!("<li>{}</li>", post.matter.title));
             }
             html.push_str("</ul>");
 
             // Inject the script tag for our compiled JS.
-            for js in scripts.values() {
+            for js in &scripts {
                 html.push_str(&format!(
                     r#"<script type="module" src="{}"></script>"#,
                     js.path

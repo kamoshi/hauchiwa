@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 use camino::{Utf8Path, Utf8PathBuf};
 use thiserror::Error;
 
-use crate::{Blueprint, error::HauchiwaError, graph::Handle, loader::GlobAssetsTask};
+use crate::{Blueprint, engine::HandleF, error::HauchiwaError, loader::GlobAssetsTask};
 
 /// Errors that can occur when compiling JavaScript files.
 #[derive(Debug, Error)]
@@ -85,7 +85,7 @@ where
     }
 
     /// Registers the task with the Blueprint.
-    pub fn register(self) -> Result<Handle<super::Assets<Script>>, HauchiwaError> {
+    pub fn register(self) -> Result<HandleF<Script>, HauchiwaError> {
         let watch_globs = if self.watch_globs.is_empty() {
             self.entry_globs.clone()
         } else {
@@ -95,16 +95,14 @@ where
         let bundle = self.bundle;
         let minify = self.minify;
 
-        Ok(self.blueprint.add_task_opaque(GlobAssetsTask::new(
-            self.entry_globs,
-            watch_globs,
-            move |_, store, input| {
-                let data = compile_esbuild(&input.path, bundle, minify)?;
-                let path = store.save(&data, "js").map_err(ScriptError::Build)?;
+        let task = GlobAssetsTask::new(self.entry_globs, watch_globs, move |_, store, input| {
+            let data = compile_esbuild(&input.path, bundle, minify)?;
+            let path = store.save(&data, "js").map_err(ScriptError::Build)?;
 
-                Ok((input.path, Script { path }))
-            },
-        )?))
+            Ok((input.path, Script { path }))
+        })?;
+
+        Ok(self.blueprint.add_task_fine(task))
     }
 }
 

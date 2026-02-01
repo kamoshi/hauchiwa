@@ -5,8 +5,8 @@ use sitemap_rs::{sitemap::Sitemap, sitemap_index::SitemapIndex, url_set::UrlSet}
 pub use sitemap_rs::url::{ChangeFrequency, Link, Url};
 
 use crate::{
-    Blueprint, Handle, Output, Store, TaskContext,
-    graph::{Dynamic, TypedTask},
+    Blueprint, Handle, HandleC, Output, Store, TaskContext,
+    engine::{Dynamic, TypedTaskC},
 };
 
 const MAX_URLS: usize = 50_000;
@@ -64,7 +64,7 @@ impl<'a, G: Send + Sync + 'static> SitemapBuilder<'a, G> {
     /// their URLs from their output file paths.
     pub fn add(
         mut self,
-        handle: Handle<Vec<Output>>,
+        handle: impl for<'x> Handle<Output<'x> = &'x Vec<Output>>,
         frequency: ChangeFrequency,
         priority: f32,
     ) -> Self {
@@ -93,8 +93,8 @@ impl<'a, G: Send + Sync + 'static> SitemapBuilder<'a, G> {
     //     self
     // }
 
-    pub fn register(self) -> Handle<Vec<Output>> {
-        self.blueprint.add_task_opaque(SitemapTask {
+    pub fn register(self) -> HandleC<Vec<Output>> {
+        self.blueprint.add_task_coarse(SitemapTask {
             base_url: self.base,
             sources: self.deps,
         })
@@ -106,7 +106,7 @@ struct SitemapTask {
     sources: Vec<SitemapSource>,
 }
 
-impl<G: Send + Sync> TypedTask<G> for SitemapTask {
+impl<G: Send + Sync> TypedTaskC<G> for SitemapTask {
     type Output = Vec<Output>;
 
     fn get_name(&self) -> String {

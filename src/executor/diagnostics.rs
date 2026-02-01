@@ -48,7 +48,7 @@ impl Diagnostics {
 
         for index in site.graph.node_indices() {
             let task = &site.graph[index];
-            let name = task.get_name().replace('"', "\\\""); // Simple escape
+            let name = task.name().replace('"', "\\\""); // Simple escape
 
             // Determine status and label
             let (label_extra, color_code) = if let Some(exec) = times.get(&index) {
@@ -99,7 +99,7 @@ impl Diagnostics {
             let (source, target) = site.graph.edge_endpoints(edge).unwrap();
             let source_task = &site.graph[source];
             let type_name = source_task
-                .get_output_type_name()
+                .type_name_output()
                 .replace('<', "&lt;")
                 .replace('>', "&gt;");
             writeln!(
@@ -309,7 +309,7 @@ impl Diagnostics {
     {
         for (i, (node_idx, exec)) in tasks.iter().enumerate() {
             let task = &site.graph[*node_idx];
-            let raw_name = task.get_name();
+            let raw_name = task.name();
             let safe_name = XmlSafe(&raw_name); // Validates XML safety
 
             let y_pos = layout.header_height + (i as u32 * layout.row_height);

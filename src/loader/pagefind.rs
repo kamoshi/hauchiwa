@@ -1,9 +1,10 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use pagefind::api::PagefindIndex;
 use pagefind::options::PagefindServiceConfig;
+use petgraph::graph::NodeIndex;
 use tokio::runtime::Builder;
 
-use crate::{Blueprint, Output, graph::Handle, output::OutputData};
+use crate::{Blueprint, Handle, HandleC, Output, output::OutputData};
 
 async fn build_closure(pages: &[&Output]) -> Result<Vec<Output>, anyhow::Error> {
     let config = PagefindServiceConfig::builder().build();
@@ -32,25 +33,30 @@ async fn build_closure(pages: &[&Output]) -> Result<Vec<Output>, anyhow::Error> 
     Ok(output)
 }
 
-impl<G> Blueprint<G>
+pub struct PagefindBuilder<'a, G>
+where
+    G: Send + Sync,
+{
+    blueprint: &'a mut Blueprint<G>,
+    handles: Vec<NodeIndex>,
+}
+
+impl<'a, G> PagefindBuilder<'a, G>
 where
     G: Send + Sync + 'static,
 {
-    /// Registers a task to generate a static search index using Pagefind.
-    ///
-    /// This reads the provided HTML outputs and produces the necessary
-    /// Pagefind Wasm and index files for client-side searching.
-    ///
-    /// The Wasm file is placed in the `_pagefind` directory, and the index
-    /// files are placed in the `_pagefind/index` directory. Clients can use the
-    /// generated `_pagefind/pagefind.js` file to perform client-side searching.
-    pub fn use_pagefind(
-        &mut self,
-        handles: impl IntoIterator<Item = Handle<Vec<Output>>>,
-    ) -> Handle<Vec<Output>> {
-        let dependencies = handles.into_iter().collect::<Vec<_>>();
+    /// Adds a handle (source of HTML outputs) to the index.
+    pub fn index(mut self, handle: impl for<'x> Handle<Output<'x> = Vec<Output>>) -> Self {
+        self.handles.push(handle.index());
+        self
+    }
 
-        self.task()
+    /// Consumes the builder and registers the task with the Blueprint.
+    pub fn register(self) -> HandleC<Vec<Output>> {
+        let dependencies = self.handles.clone();
+
+        self.blueprint
+            .task()
             .name("pagefind")
             .depends_on(dependencies)
             .run(|_, handles| {
@@ -66,5 +72,21 @@ where
 
                 Ok(output)
             })
+    }
+}
+
+impl<G> Blueprint<G>
+where
+    G: Send + Sync + 'static,
+{
+    /// Initiates the configuration for a static search index using Pagefind.
+    ///
+    /// Returns a builder that allows adding multiple sources via `.index()`.
+    /// Call `.register()` to finalize the task.
+    pub fn use_pagefind(&mut self) -> PagefindBuilder<'_, G> {
+        PagefindBuilder {
+            blueprint: self,
+            handles: Vec::new(),
+        }
     }
 }

@@ -7,9 +7,10 @@ use image::{ExtendedColorType, ImageReader};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::engine::HandleF;
 use crate::error::{BuildError, HauchiwaError};
-use crate::loader::{Assets, GlobAssetsTask, Input, Store};
-use crate::{Blueprint, Handle, TaskContext};
+use crate::loader::{GlobAssetsTask, Input, Store};
+use crate::{Blueprint, TaskContext};
 
 const DIR_STORE: &str = "/hash/img/";
 const DIR_CACHE: &str = ".cache/hash/img/";
@@ -131,7 +132,7 @@ where
     }
 
     /// Registers the task with the Blueprint.
-    pub fn register(self) -> Result<Handle<Assets<Image>>, HauchiwaError> {
+    pub fn register(self) -> Result<HandleF<Image>, HauchiwaError> {
         let mut formats = self.formats;
 
         // Default to WebP if no format is specified
@@ -149,7 +150,7 @@ where
             },
         )?;
 
-        Ok(self.blueprint.add_task_opaque(task))
+        Ok(self.blueprint.add_task_fine(task))
     }
 }
 

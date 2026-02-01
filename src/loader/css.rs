@@ -1,6 +1,7 @@
 use thiserror::Error;
 
-use crate::{Blueprint, error::HauchiwaError, graph::Handle, loader::GlobAssetsTask};
+use crate::engine::HandleF;
+use crate::{Blueprint, error::HauchiwaError, loader::GlobAssetsTask};
 
 /// Errors that can occur when compiling Stylesheets.
 #[derive(Debug, Error)]
@@ -70,7 +71,7 @@ where
     }
 
     /// Registers the task with the Blueprint.
-    pub fn register(self) -> Result<Handle<super::Assets<Stylesheet>>, HauchiwaError> {
+    pub fn register(self) -> Result<HandleF<Stylesheet>, HauchiwaError> {
         let watch_globs = if self.watch_globs.is_empty() {
             self.entry_globs.clone()
         } else {
@@ -79,28 +80,25 @@ where
 
         let minify = self.minify;
 
-        Ok(self.blueprint.add_task_opaque(GlobAssetsTask::new(
-            self.entry_globs,
-            watch_globs,
-            move |_, store, input| {
-                let style = if minify {
-                    grass::OutputStyle::Compressed
-                } else {
-                    grass::OutputStyle::Expanded
-                };
+        let task = GlobAssetsTask::new(self.entry_globs, watch_globs, move |_, store, input| {
+            let style = if minify {
+                grass::OutputStyle::Compressed
+            } else {
+                grass::OutputStyle::Expanded
+            };
 
-                let options = grass::Options::default().style(style);
+            let options = grass::Options::default().style(style);
 
-                let data =
-                    grass::from_path(&input.path, &options).map_err(StyleError::Sass)?;
+            let data = grass::from_path(&input.path, &options).map_err(StyleError::Sass)?;
 
-                let path = store
-                    .save(data.as_bytes(), "css")
-                    .map_err(StyleError::Build)?;
+            let path = store
+                .save(data.as_bytes(), "css")
+                .map_err(StyleError::Build)?;
 
-                Ok((input.path, Stylesheet { path }))
-            },
-        )?))
+            Ok((input.path, Stylesheet { path }))
+        })?;
+
+        Ok(self.blueprint.add_task_fine(task))
     }
 }
 

@@ -32,8 +32,8 @@ use tracing_indicatif::span_ext::IndicatifSpanExt;
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
-#[cfg(feature = "pagefind")]
-pub mod pagefind;
+// #[cfg(feature = "pagefind")]
+// pub mod pagefind;
 
 #[cfg(feature = "sitemap")]
 pub mod sitemap;
@@ -48,76 +48,10 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::{
     Hash32, TaskContext,
+    engine::{Dynamic, Map, TypedTaskF},
     error::{BuildError, HauchiwaError},
-    graph::{Dynamic, TypedTask},
     importmap::ImportMap,
 };
-
-/// A collection of processed assets, indexed by their source file path.
-///
-/// `Assets<T>` is the standard return type for most loaders. It allows you to
-/// access processed items (like posts or images) using their original file
-/// path.
-///
-/// # Example
-///
-/// ```rust,no_run
-/// # use hauchiwa::{Blueprint, task, loader::{Assets, Document}};
-/// # #[derive(Clone, serde::Deserialize)]
-/// # struct Post { title: String }
-/// # let mut config = Blueprint::<()>::default();
-/// # let posts = config.load_documents::<Post>().source("content/posts/*.md").register().unwrap();
-/// # task!(config, |ctx, posts| {
-/// // Assuming `posts` is a Assets<Document<Post>>
-/// for post in posts.values() {
-///     println!("Title: {}", post.matter.title);
-/// }
-///
-/// let specific_post = posts.get("content/posts/hello.md")?;
-/// # Ok(())
-/// # });
-/// ```
-#[derive(Debug)]
-pub struct Assets<T> {
-    map: HashMap<camino::Utf8PathBuf, T>,
-}
-
-impl<T: Clone> Assets<T> {
-    /// Retrieves a reference to the processed data for a given source path.
-    ///
-    /// # Errors
-    ///
-    /// Returns `HauchiwaError::AssetNotFound` if the path does not exist in the registry.
-    pub fn get(&self, path: impl AsRef<Utf8Path>) -> Result<&T, HauchiwaError> {
-        self.map
-            .get(path.as_ref())
-            .ok_or(HauchiwaError::AssetNotFound(
-                path.as_ref().to_string().into(),
-            ))
-    }
-
-    /// Returns an iterator over all items in the registry.
-    pub fn values(&self) -> std::collections::hash_map::Values<'_, Utf8PathBuf, T> {
-        self.map.values()
-    }
-
-    /// Finds all items whose source paths match the given glob pattern.
-    ///
-    /// # Returns
-    ///
-    /// A vector of `(Path, &Item)` tuples.
-    pub fn glob(&self, pattern: &str) -> Result<Vec<(&Utf8PathBuf, &T)>, HauchiwaError> {
-        let matcher = Pattern::new(pattern)?;
-
-        let matches: Vec<_> = self
-            .map
-            .iter()
-            .filter(|(path, _)| matcher.matches(path.as_str()))
-            .collect();
-
-        Ok(matches)
-    }
-}
 
 /// A raw file read from the filesystem.
 ///
@@ -264,12 +198,12 @@ where
     }
 }
 
-impl<G, R> TypedTask<G> for GlobAssetsTask<G, R>
+impl<G, R> TypedTaskF<G> for GlobAssetsTask<G, R>
 where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
-    type Output = Assets<R>;
+    type Output = R;
 
     fn get_name(&self) -> String {
         self.glob_entry.join(", ")
@@ -291,7 +225,7 @@ where
         context: &TaskContext<G>,
         runtime: &mut Store,
         _: &[Dynamic],
-    ) -> anyhow::Result<Self::Output> {
+    ) -> anyhow::Result<Map<Self::Output>> {
         let mut paths = Vec::new();
         for glob_entry in &self.glob_entry {
             for path in glob(glob_entry)? {
@@ -325,13 +259,11 @@ where
 
         let mut registry = HashMap::new();
         for (path, res, imports) in results? {
-            registry.insert(path, res);
+            registry.insert(path.into_string(), res);
             runtime.imports.merge(imports);
         }
 
-        let registry = Assets { map: registry };
-
-        Ok(registry)
+        Ok(Map { map: registry })
     }
 
     fn is_dirty(&self, path: &Utf8Path) -> bool {

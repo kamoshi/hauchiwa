@@ -1,8 +1,9 @@
 use std::future::Future;
 
+use crate::Blueprint;
 use crate::TaskContext;
+use crate::engine::HandleC;
 use crate::error::HauchiwaError;
-use crate::{Blueprint, graph::Handle};
 
 impl<G> Blueprint<G>
 where
@@ -38,7 +39,7 @@ where
     ///     Ok(json)
     /// })?;
     /// ```
-    pub fn load_async<R, F, Fut>(&mut self, callback: F) -> Result<Handle<R>, HauchiwaError>
+    pub fn load_async<R, F, Fut>(&mut self, callback: F) -> Result<HandleC<R>, HauchiwaError>
     where
         G: Send + Sync + 'static,
         R: Send + Sync + 'static,

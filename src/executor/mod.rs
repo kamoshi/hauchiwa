@@ -139,9 +139,9 @@ fn run_tasks_parallel<G: Send + Sync>(
             // Spawn on Rayon pool
             s.spawn(move |_| {
                 // Tracing span
-                let span = span!(Level::INFO, "task", name = task.get_name());
+                let span = span!(Level::INFO, "task", name = task.name());
                 span.pb_set_style(&pb_style);
-                span.pb_set_message(&format!("Running {}", task.get_name()));
+                span.pb_set_message(&format!("Running {}", task.name()));
                 let _enter = span.enter();
 
                 let context = TaskContext {
@@ -304,7 +304,7 @@ mod live {
         let mut watched = HashSet::new();
         let mut filters = HashSet::new();
         for (_, task) in site.graph.node_references() {
-            for path in &task.get_watched() {
+            for path in &task.watched() {
                 if let Ok((path, pattern)) = resolve_watch_path(path) {
                     watched.insert(path);
                     filters.insert(pattern);
@@ -651,7 +651,7 @@ mod tests {
 
     use petgraph::graph::NodeIndex;
 
-    use crate::{graph::Dynamic, output::OutputData};
+    use crate::{engine::Dynamic, output::OutputData};
 
     #[test]
     fn test_collect_pages() {
@@ -672,21 +672,21 @@ mod tests {
         cache.insert(
             NodeIndex::new(0),
             NodeData {
-                output: Arc::new(page1.clone()) as Dynamic,
+                output: Arc::new(page1.clone()),
                 importmap: ImportMap::default(),
             },
         );
         cache.insert(
             NodeIndex::new(1),
             NodeData {
-                output: Arc::new(vec![page2.clone(), page3.clone()]) as Dynamic,
+                output: Arc::new(vec![page2.clone(), page3.clone()]),
                 importmap: ImportMap::default(),
             },
         );
         cache.insert(
             NodeIndex::new(2),
             NodeData {
-                output: Arc::new("not a page".to_string()) as Dynamic,
+                output: Arc::new("not a page".to_string()),
                 importmap: ImportMap::default(),
             },
         );

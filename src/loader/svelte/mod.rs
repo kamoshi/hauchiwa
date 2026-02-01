@@ -10,8 +10,8 @@ use thiserror::Error;
 
 use crate::{
     Blueprint, Hash32,
+    engine::HandleF,
     error::HauchiwaError,
-    graph::Handle,
     loader::{GlobAssetsTask, Script},
 };
 
@@ -114,69 +114,67 @@ where
     }
 
     /// Registers the task with the Blueprint.
-    pub fn register(self) -> Result<Handle<super::Assets<Svelte<P>>>, HauchiwaError> {
+    pub fn register(self) -> Result<HandleF<Svelte<P>>, HauchiwaError> {
         let watch_globs = if self.watch_globs.is_empty() {
             self.entry_globs.clone()
         } else {
             self.watch_globs
         };
 
-        Ok(self.blueprint.add_task_opaque(GlobAssetsTask::new(
-            self.entry_globs,
-            watch_globs,
-            move |_, store, input| {
-                let runtime = match RUNTIME.as_ref() {
-                    Ok(runtime) => {
-                        let srcmap = store.save(&runtime.map, "js.map")?;
-                        let script = format!("{}\n//# sourceMappingURL={}", runtime.code, srcmap);
-                        store.save(script.as_bytes(), "js")?
-                    }
-                    Err(err) => return Err(SvelteError::Runtime(err.to_string()).into()),
-                };
-
-                // In the import map "svelte" should be registered, so that it
-                // points to the runtime file.
-                store.register("svelte", runtime.as_str());
-                store.register("svelte/internal/client", runtime.as_str());
-                store.register("svelte/internal/disclose-version", runtime.as_str());
-
-                // Compile the SSR script
-                let server = compile_svelte_server(&input.path)?;
-                let anchor = Hash32::hash(&server);
-
-                // Compile lean browser glue
-                let client = {
-                    let client = compile_svelte_init(&input.path, anchor)?;
-                    let srcmap = store.save(&client.map, "js.map")?;
-                    let script = format!("{}\n//# sourceMappingURL={}", client.code, srcmap);
+        let task = GlobAssetsTask::new(self.entry_globs, watch_globs, move |_, store, input| {
+            let runtime = match RUNTIME.as_ref() {
+                Ok(runtime) => {
+                    let srcmap = store.save(&runtime.map, "js.map")?;
+                    let script = format!("{}\n//# sourceMappingURL={}", runtime.code, srcmap);
                     store.save(script.as_bytes(), "js")?
-                };
+                }
+                Err(err) => return Err(SvelteError::Runtime(err.to_string()).into()),
+            };
 
-                // With the compiled SSR script we can now pre-render the
-                // component on demand.
-                let prerender = Arc::new({
-                    let anchor = anchor.to_hex();
+            // In the import map "svelte" should be registered, so that it
+            // points to the runtime file.
+            store.register("svelte", runtime.as_str());
+            store.register("svelte/internal/client", runtime.as_str());
+            store.register("svelte/internal/disclose-version", runtime.as_str());
 
-                    move |props: &P| {
-                        let json = serde_json::to_string(props)?;
-                        let html = run_ssr(&server, &json)?;
+            // Compile the SSR script
+            let server = compile_svelte_server(&input.path)?;
+            let anchor = Hash32::hash(&server);
 
-                        Ok(format!(
-                            "<div class='_{anchor}' data-props='{json}'>{html}</div>"
-                        ))
-                    }
-                });
+            // Compile lean browser glue
+            let client = {
+                let client = compile_svelte_init(&input.path, anchor)?;
+                let srcmap = store.save(&client.map, "js.map")?;
+                let script = format!("{}\n//# sourceMappingURL={}", client.code, srcmap);
+                store.save(script.as_bytes(), "js")?
+            };
 
-                Ok((
-                    input.path,
-                    Svelte::<P> {
-                        prerender,
-                        hydration: Script { path: client },
-                        runtime: Script { path: runtime },
-                    },
-                ))
-            },
-        )?))
+            // With the compiled SSR script we can now pre-render the
+            // component on demand.
+            let prerender = Arc::new({
+                let anchor = anchor.to_hex();
+
+                move |props: &P| {
+                    let json = serde_json::to_string(props)?;
+                    let html = run_ssr(&server, &json)?;
+
+                    Ok(format!(
+                        "<div class='_{anchor}' data-props='{json}'>{html}</div>"
+                    ))
+                }
+            });
+
+            Ok((
+                input.path,
+                Svelte::<P> {
+                    prerender,
+                    hydration: Script { path: client },
+                    runtime: Script { path: runtime },
+                },
+            ))
+        })?;
+
+        Ok(self.blueprint.add_task_fine(task))
     }
 }
 
