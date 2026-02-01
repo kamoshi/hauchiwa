@@ -7,11 +7,12 @@ use std::sync::Arc;
 use petgraph::Graph;
 use petgraph::graph::NodeIndex;
 
+use crate::TaskContext;
+use crate::core::{Dynamic, Environment, Mode};
 use crate::engine::{
-    Dependencies, Dynamic, HandleC, HandleF, Task, TrackerState, Tracking, TypedTaskC, TypedTaskF,
+    Dependencies, HandleC, HandleF, Task, TrackerState, Tracking, TypedCoarse, TypedFine,
 };
 use crate::loader::Store;
-use crate::{Environment, Mode, TaskContext};
 
 /// The blueprint for your static site.
 ///
@@ -56,7 +57,7 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
     pub(crate) fn add_task_fine<O, T>(&mut self, task: T) -> HandleF<O>
     where
         O: 'static,
-        T: TypedTaskF<G, Output = O> + 'static,
+        T: TypedFine<G, Output = O> + 'static,
     {
         let dependencies = task.dependencies();
         let index = self.graph.add_node(Task::F(Arc::new(task)));
@@ -71,7 +72,7 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
     pub(crate) fn add_task_coarse<O, T>(&mut self, task: T) -> HandleC<O>
     where
         O: 'static,
-        T: TypedTaskC<G, Output = O> + 'static,
+        T: TypedCoarse<G, Output = O> + 'static,
     {
         let dependencies = task.dependencies();
         let index = self.graph.add_node(Task::C(Arc::new(task)));
@@ -327,7 +328,7 @@ where
     pub _phantom: PhantomData<G>,
 }
 
-impl<G, R, D, F> TypedTaskC<G> for TaskNode<G, R, D, F>
+impl<G, R, D, F> TypedCoarse<G> for TaskNode<G, R, D, F>
 where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,

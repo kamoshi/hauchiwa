@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::Hash32;
+use crate::core::Hash32;
 use crate::engine::HandleF;
 use crate::loader::GlobBundle;
 use crate::{Blueprint, error::HauchiwaError};

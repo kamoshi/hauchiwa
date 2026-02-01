@@ -3,10 +3,86 @@ use std::sync::Arc;
 
 use petgraph::graph::NodeIndex;
 
-use crate::engine::{Dynamic, TrackerState, Tracking};
+use crate::core::Dynamic;
+use crate::engine::Handle;
+use crate::engine::tracking::{TrackerPtr, TrackerState, Tracking};
 
-pub(crate) trait TypedTaskC<G: Send + Sync = ()>: Send + Sync {
-    /// The concrete output type of this task.
+/// A "coarse" type-safe reference to a task in the build graph.
+///
+/// A `HandleC<T>` represents a dependency on the **entire** result of an
+/// upstream task. Unlike granular dependencies (which track specific reads),
+/// this operates on an "all-or-nothing" basis.
+///
+/// # Granularity
+///
+/// This handle provides direct access to the output as `&T`. Because it does
+/// not record which specific parts of `T` were used, the build system takes a
+/// conservative approach: if the upstream task is re-executed (is "dirty"), any
+/// task holding a `HandleC` to it is automatically invalidated and forced to
+/// re-run.
+///
+/// # Diamond dependencies
+///
+/// Handles are smart enough to handle "diamond dependencies". If Task C and
+/// Task B both depend on Task A, and Task D depends on both B and C, Task A
+/// will only be executed *once*, and its result will be shared.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct HandleC<T> {
+    pub(crate) index: NodeIndex,
+    _phantom: std::marker::PhantomData<T>,
+}
+
+impl<T> HandleC<T> {
+    pub(crate) fn new(index: NodeIndex) -> Self {
+        Self {
+            index,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Returns the underlying `NodeIndex` of the task in the graph.
+    pub fn index(&self) -> NodeIndex {
+        self.index
+    }
+}
+
+impl<T> Clone for HandleC<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for HandleC<T> {}
+
+impl<T> Handle for HandleC<T>
+where
+    T: Send + Sync + 'static,
+{
+    type Output<'a> = &'a T;
+
+    fn index(&self) -> NodeIndex {
+        self.index
+    }
+
+    fn downcast<'a>(&self, output: &'a Dynamic) -> (Option<TrackerPtr>, Self::Output<'a>) {
+        let output = output
+            .downcast_ref::<T>()
+            .expect("Type mismatch in dependency resolution");
+
+        (None, output)
+    }
+
+    fn is_valid(
+        &self,
+        _: &Option<TrackerState>,
+        _: &Dynamic,
+        updated: &HashSet<NodeIndex>,
+    ) -> bool {
+        !updated.contains(&self.index)
+    }
+}
+
+pub(crate) trait TypedCoarse<G: Send + Sync = ()>: Send + Sync {
     type Output: Send + Sync + 'static;
 
     fn get_name(&self) -> String;
@@ -34,12 +110,7 @@ pub(crate) trait TypedTaskC<G: Send + Sync = ()>: Send + Sync {
     ) -> bool;
 }
 
-/// The core trait for all tasks in the graph.
-///
-/// While most users will interact with the typed [`Blueprint::add_task`](crate::Blueprint::add_task)
-/// API, this trait is the type-erased foundation that allows the graph to hold
-/// tasks with different output types.
-pub(crate) trait TaskC<G: Send + Sync = ()>: Send + Sync {
+pub(crate) trait Coarse<G: Send + Sync = ()>: Send + Sync {
     fn get_name(&self) -> String;
 
     fn get_output_type_name(&self) -> &'static str;
@@ -70,12 +141,10 @@ pub(crate) trait TaskC<G: Send + Sync = ()>: Send + Sync {
     ) -> bool;
 }
 
-// A blanket implementation to automatically bridge the two. This is where the
-// type erasure actually happens.
-impl<G, T> TaskC<G> for T
+impl<G, T> Coarse<G> for T
 where
     G: Send + Sync,
-    T: TypedTaskC<G> + 'static,
+    T: TypedCoarse<G> + 'static,
 {
     fn get_name(&self) -> String {
         T::get_name(self)

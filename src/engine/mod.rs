@@ -1,33 +1,30 @@
-mod handle_c;
-mod handle_f;
-mod task_c;
-mod task_f;
+mod coarse;
+mod fine;
+mod tracking;
 
-use std::{any::Any, collections::HashSet, sync::Arc};
+use std::collections::{BTreeMap, HashSet};
+use std::sync::Arc;
 
 use petgraph::graph::NodeIndex;
 
-pub use crate::engine::handle_c::HandleC;
-pub use crate::engine::handle_f::HandleF;
+use crate::core::{Dynamic, Hash32};
+use crate::engine::tracking::TrackerPtr;
 
-pub(crate) use crate::engine::task_c::TypedTaskC;
-pub(crate) use crate::engine::task_f::{Map, TrackerPtr, TypedTaskF, TrackerState};
-pub use crate::engine::task_f::{Provenance, Tracker};
+pub(crate) use coarse::TypedCoarse;
+pub(crate) use fine::TypedFine;
+pub(crate) use tracking::{TrackerState, Tracking};
 
-pub(crate) type Dynamic = Arc<dyn Any + Send + Sync>;
+pub use coarse::HandleC;
+pub use fine::HandleF;
+pub use tracking::Tracker;
 
-#[derive(Default)]
-pub struct Tracking {
-    pub edges: Vec<Option<TrackerPtr>>,
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Provenance(pub(crate) Hash32);
 
-impl Tracking {
-    pub(crate) fn unwrap(self) -> Vec<Option<TrackerState>> {
-        self.edges
-            .into_iter()
-            .map(|edge| edge.map(|item| Arc::try_unwrap(item.ptr).unwrap().into_inner().unwrap()))
-            .collect()
-    }
+/// A collection of processed assets, indexed by unique identifier.
+#[derive(Debug)]
+pub(crate) struct Map<T> {
+    pub(crate) map: BTreeMap<String, (T, Provenance)>,
 }
 
 // Things that can be used as dependency Handle
@@ -45,8 +42,8 @@ pub trait Handle: Copy + Send + Sync {
 }
 
 pub enum Task<G> {
-    C(Arc<dyn task_c::TaskC<G>>),
-    F(Arc<dyn task_f::TaskF<G>>),
+    C(Arc<dyn coarse::Coarse<G>>),
+    F(Arc<dyn fine::Fine<G>>),
 }
 
 impl<G> Task<G>
@@ -160,12 +157,7 @@ impl Dependencies for () {
         (Tracking::default(), ())
     }
 
-    fn is_valid(
-        &self,
-        _: &[Option<TrackerState>],
-        _: &[Dynamic],
-        _: &HashSet<NodeIndex>,
-    ) -> bool {
+    fn is_valid(&self, _: &[Option<TrackerState>], _: &[Dynamic], _: &HashSet<NodeIndex>) -> bool {
         true
     }
 }
@@ -232,9 +224,7 @@ where
         self.iter()
             .zip(old_tracking.iter())
             .zip(new_outputs.iter())
-            .all(|((handle, tracking), output)| {
-                handle.is_valid(tracking, output, updated_nodes)
-            })
+            .all(|((handle, tracking), output)| handle.is_valid(tracking, output, updated_nodes))
     }
 }
 

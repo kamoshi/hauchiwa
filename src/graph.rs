@@ -25,10 +25,7 @@
 //!   logic. It acts as the safe bridge, panicking only if the strictly-typed
 //!   blueprint construction was somehow bypassed (which the compiler prevents).
 
-use crate::{
-    engine::{Dynamic, TrackerState},
-    importmap::ImportMap,
-};
+use crate::{core::Dynamic, engine::TrackerState, importmap::ImportMap};
 
 /// Represents the data stored in the graph for each node.
 /// Includes the user's output and the concatenated import map.

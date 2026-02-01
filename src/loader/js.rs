@@ -3,7 +3,8 @@ use std::process::{Command, Stdio};
 use camino::{Utf8Path, Utf8PathBuf};
 use thiserror::Error;
 
-use crate::{Blueprint, Hash32, engine::HandleF, error::HauchiwaError, loader::GlobBundle};
+use crate::core::Hash32;
+use crate::{Blueprint, engine::HandleF, error::HauchiwaError, loader::GlobBundle};
 
 /// Errors that can occur when compiling JavaScript files.
 #[derive(Debug, Error)]

@@ -6,10 +6,9 @@ pub use sitemap_rs::url::{ChangeFrequency, Link, Url};
 
 use std::collections::HashSet;
 
-use crate::{
-    Blueprint, HandleC, Output, Store, TaskContext,
-    engine::{Dynamic, Tracking, TypedTaskC},
-};
+use crate::core::Dynamic;
+use crate::engine::TypedCoarse;
+use crate::{Blueprint, HandleC, Output, Store, TaskContext, engine::Tracking};
 
 const MAX_URLS: usize = 50_000;
 
@@ -108,7 +107,7 @@ struct SitemapTask {
     sources: Vec<SitemapSource>,
 }
 
-impl<G: Send + Sync> TypedTaskC<G> for SitemapTask {
+impl<G: Send + Sync> TypedCoarse<G> for SitemapTask {
     type Output = Vec<Output>;
 
     fn get_name(&self) -> String {

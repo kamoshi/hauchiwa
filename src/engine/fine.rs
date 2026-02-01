@@ -1,12 +1,12 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use glob::Pattern;
 use petgraph::graph::NodeIndex;
 
-use crate::engine::{
-    Dynamic,
-    task_f::{Map, Tracker, TrackerPtr, TrackerState},
-};
+use crate::core::Dynamic;
+use crate::engine::Map;
+use crate::engine::tracking::{Tracker, TrackerPtr, TrackerState};
 
 pub struct HandleF<T> {
     pub(crate) index: NodeIndex,
@@ -177,11 +177,128 @@ where
     }
 }
 
+pub(crate) trait TypedFine<G: Send + Sync = ()>: Send + Sync {
+    /// The concrete output type of this task.
+    type Output: Send + Sync + 'static;
+
+    fn get_name(&self) -> String;
+
+    fn dependencies(&self) -> Vec<NodeIndex>;
+
+    fn get_watched(&self) -> Vec<camino::Utf8PathBuf>;
+
+    fn execute(
+        &self,
+        context: &crate::TaskContext<G>,
+        runtime: &mut crate::Store,
+        dependencies: &[super::Dynamic],
+    ) -> anyhow::Result<Map<Self::Output>>;
+
+    fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
+        false
+    }
+
+    fn is_valid(&self, _: &[Option<TrackerState>], _: &[Dynamic], _: &HashSet<NodeIndex>) -> bool {
+        true
+    }
+}
+
+/// The core trait for all tasks in the graph.
+///
+/// While most users will interact with the typed [`Blueprint::add_task`](crate::Blueprint::add_task)
+/// API, this trait is the type-erased foundation that allows the graph to hold
+/// tasks with different output types.
+pub(crate) trait Fine<G: Send + Sync = ()>: Send + Sync {
+    fn get_name(&self) -> String;
+
+    fn get_output_type_name(&self) -> &'static str;
+
+    fn is_output(&self) -> bool;
+
+    fn dependencies(&self) -> Vec<NodeIndex>;
+
+    fn get_watched(&self) -> Vec<camino::Utf8PathBuf>;
+
+    fn execute(
+        &self,
+        context: &crate::TaskContext<G>,
+        runtime: &mut crate::Store,
+        dependencies: &[super::Dynamic],
+    ) -> anyhow::Result<super::Dynamic>;
+
+    #[inline]
+    fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
+        false
+    }
+
+    fn is_valid(
+        &self,
+        old_tracking: &[Option<TrackerState>],
+        new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool;
+}
+
+// A blanket implementation to automatically bridge the two. This is where the
+// type erasure actually happens.
+impl<G, T> Fine<G> for T
+where
+    G: Send + Sync,
+    T: TypedFine<G> + 'static,
+{
+    fn get_name(&self) -> String {
+        T::get_name(self)
+    }
+
+    fn get_output_type_name(&self) -> &'static str {
+        std::any::type_name::<T::Output>()
+    }
+
+    fn is_output(&self) -> bool {
+        use std::any::TypeId;
+
+        TypeId::of::<T::Output>() == TypeId::of::<crate::Output>()
+            || TypeId::of::<T::Output>() == TypeId::of::<Vec<crate::Output>>()
+    }
+
+    fn dependencies(&self) -> Vec<NodeIndex> {
+        T::dependencies(self)
+    }
+
+    fn get_watched(&self) -> Vec<camino::Utf8PathBuf> {
+        T::get_watched(self)
+    }
+
+    fn execute(
+        &self,
+        context: &crate::TaskContext<G>,
+        runtime: &mut crate::Store,
+        dependencies: &[super::Dynamic],
+    ) -> anyhow::Result<super::Dynamic> {
+        // Call the typed method, then erase the result.
+        Ok(Arc::new(T::execute(self, context, runtime, dependencies)?))
+    }
+
+    fn is_dirty(&self, path: &camino::Utf8Path) -> bool {
+        T::is_dirty(self, path)
+    }
+
+    fn is_valid(
+        &self,
+        old_tracking: &[Option<TrackerState>],
+        new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool {
+        T::is_valid(self, old_tracking, new_outputs, updated_nodes)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Hash32;
-    use crate::engine::{Handle, Provenance, task_f::IterationState};
+    use crate::core::Hash32;
+    use crate::engine::tracking::IterationState;
+    use crate::engine::{Handle, Provenance};
     use std::collections::BTreeMap;
     use std::sync::Arc;
 

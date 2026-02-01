@@ -16,8 +16,9 @@ use petgraph::{algo::toposort, visit::Dfs};
 use tracing::{Level, error, info, span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
+use crate::core::{Environment, Mode};
 pub use crate::executor::diagnostics::Diagnostics;
-use crate::{Environment, ImportMap, Mode, Output, Store, TaskContext, engine::Task};
+use crate::{ImportMap, Output, Store, TaskContext, engine::Task};
 use crate::{blueprint::Website, graph::NodeData};
 
 #[cfg(feature = "live")]
@@ -382,6 +383,8 @@ mod live {
         loop {
             match rx.recv() {
                 Ok(Ok(events)) => {
+                    tracing::info!("{:?} events received", events);
+
                     let mut dirty_nodes = HashSet::new();
                     for de in events {
                         for path in &de.event.paths {

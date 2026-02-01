@@ -8,8 +8,9 @@ use camino::Utf8Path;
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
+use crate::core::Hash32;
 use crate::{
-    Blueprint, Hash32,
+    Blueprint,
     engine::HandleF,
     error::HauchiwaError,
     loader::{GlobBundle, Script},

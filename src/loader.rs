@@ -46,9 +46,10 @@ use gray_matter::engine::YAML;
 use petgraph::graph::NodeIndex;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
+use crate::core::{Dynamic, Hash32};
+use crate::engine::{Map, Provenance, TypedFine};
 use crate::{
-    Hash32, TaskContext,
-    engine::{Dynamic, Map, Provenance, TypedTaskF},
+    TaskContext,
     error::{BuildError, HauchiwaError},
     importmap::ImportMap,
 };
@@ -198,7 +199,7 @@ where
     }
 }
 
-impl<G, R> TypedTaskF<G> for GlobFiles<G, R>
+impl<G, R> TypedFine<G> for GlobFiles<G, R>
 where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
@@ -325,7 +326,7 @@ where
     }
 }
 
-impl<G, R> TypedTaskF<G> for GlobBundle<G, R>
+impl<G, R> TypedFine<G> for GlobBundle<G, R>
 where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
