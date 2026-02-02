@@ -147,11 +147,17 @@ of them by disabling them in your `Cargo.toml` file, if you don't need them.
 
 ## Documentation
 
-The best place to learn is the [API Documentation](https://docs.rs/hauchiwa). It
-covers the core concepts in depth.
+Introduction is available in the `docs/` directory (run `make watch`), or you
+can visit the [online version](https://hauchiwa.kamoshi.org). The best place to
+learn the API is the [full documentation](https://docs.rs/hauchiwa). It covers
+the available features in depth.
 
 ## Examples
 
+Some examples are available in the `examples/` directory.
+
+In addition, there are also some real-world examples:
+- [hauchiwa.kamoshi.org](https://github.com/kamoshi/hauchiwa/tree/main/docs)
 - [kamoshi.org](https://github.com/kamoshi/kamoshi.org)
 
 ## License
