@@ -1,0 +1,111 @@
+/* Atom One Light Syntax Highlighting */
+.atom-one-light {
+  /* -- Palette Definitions -- */
+  --aol-fg:        #383A42;
+  --aol-bg:        #FAFAFA;
+  --aol-mono-1:    #383A42;
+  --aol-mono-2:    #696C77; /* Delimiters */
+  --aol-mono-3:    #A0A1A7; /* Comments */
+  
+  --aol-cyan:      #0184BC; /* Operators */
+  --aol-blue:      #4078F2; /* Functions */
+  --aol-purple:    #A626A4; /* Keywords */
+  --aol-green:     #50A14F; /* Strings */
+  --aol-red-1:     #E45649; /* Variables, Tags, Properties */
+  --aol-red-2:     #CA1243; 
+  --aol-orange-1:  #986801; /* Constants, Numbers */
+  --aol-orange-2:  #C18401; /* Types */
+
+  background-color: var(--aol-bg);
+  color: var(--aol-fg);
+
+  /* Optional: Line numbers gutter background */
+  &::before {
+    background: #E5E5E6; 
+  }
+
+  /* -- Identifiers -- */
+  /* "self", "this", etc. often Red in One Light */
+  .variable-builtin { color: var(--aol-red-1); }
+  
+  /* Parameters often simple foreground or Red depending on variant */
+  .variable-parameter { color: var(--aol-fg); }
+  .variable-member { color: var(--aol-red-1); }
+
+  /* -- Constants -- */
+  .constant { color: var(--aol-orange-1); }
+  .constant-builtin { color: var(--aol-orange-1); }
+  .constant-macro { color: var(--aol-orange-1); }
+
+  .label { color: var(--aol-purple); }
+
+  /* -- Literals -- */
+  .string { color: var(--aol-green); }
+  .string-special { color: var(--aol-green); }
+  .string-regexp { color: var(--aol-green); }
+
+  .number { color: var(--aol-orange-1); }
+  .number-float { color: var(--aol-orange-1); }
+  .boolean { color: var(--aol-orange-1); }
+
+  /* -- Types -- */
+  .type { color: var(--aol-orange-2); }
+  .type-builtin { color: var(--aol-orange-2); }
+  .type-definition { color: var(--aol-orange-2); }
+
+  /* -- Properties & Attributes -- */
+  /* HTML attributes / Object properties are typically Red */
+  .attribute { color: var(--aol-orange-2); } 
+  .property { color: var(--aol-red-1); }
+
+  /* -- Functions -- */
+  .function { color: var(--aol-blue); }
+  .function-macro { color: var(--aol-blue); }
+  .function-method { color: var(--aol-blue); }
+  .function-call { color: var(--aol-blue); }
+
+  .constructor { color: var(--aol-orange-2); }
+  
+  /* Operators (e.g. +, -, =) are often Cyan in One Light */
+  .operator { color: var(--aol-cyan); }
+
+  /* -- Keywords -- */
+  .keyword { color: var(--aol-purple); }
+  .keyword-coroutine { color: var(--aol-purple); }
+  .keyword-function { color: var(--aol-purple); }
+  .keyword-operator { color: var(--aol-purple); } /* e.g. sizeof, new */
+  .keyword-import { color: var(--aol-purple); }
+  .keyword-repeat { color: var(--aol-purple); }
+  .keyword-return { color: var(--aol-purple); }
+  .keyword-debug { color: var(--aol-purple); }
+  .keyword-exception { color: var(--aol-purple); }
+  .keyword-conditional { color: var(--aol-purple); }
+  .keyword-directive { color: var(--aol-purple); }
+  .keyword-modifier { color: var(--aol-purple); }
+  .keyword-type { color: var(--aol-purple); }
+
+  /* -- Punctuation -- */
+  .punctuation-delimiter { color: var(--aol-mono-2); }
+  .punctuation-bracket { color: var(--aol-mono-2); }
+  .punctuation-special { color: var(--aol-mono-2); }
+
+  /* -- Comments -- */
+  .comment-documentation,
+  .comment { 
+    color: var(--aol-mono-3); 
+    font-style: italic;
+  }
+
+  /* -- Markup -- */
+  .tag { color: var(--aol-red-1); }
+  .tag-builtin { color: var(--aol-red-1); }
+  .tag-attribute { color: var(--aol-orange-2); }
+  .tag-delimiter { color: var(--aol-mono-2); }
+
+  /* Markdown specific */
+  .markup-heading { color: var(--aol-red-1); font-weight: bold; }
+  .markup-strong { font-weight: bold; }
+  .markup-italic { font-style: italic; }
+  .markup-link-url { color: var(--aol-cyan); text-decoration: underline; }
+  .markup-link-label { color: var(--aol-blue); }
+}
