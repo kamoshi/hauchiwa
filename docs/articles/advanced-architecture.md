@@ -1,5 +1,5 @@
 ---
-title: Advanced Architecture
+title: Advanced architecture
 order: 5
 ---
 

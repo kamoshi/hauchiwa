@@ -1,9 +1,9 @@
 ---
-title: The Asset Pipeline
+title: The asset pipeline
 order: 4
 ---
 
-# The Asset Pipeline
+# The asset pipeline
 
 Hauchiwa comes batteries-included with a powerful asset pipeline. It treats
 assets as first-class citizens in the graph.
