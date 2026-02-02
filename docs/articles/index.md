@@ -1,20 +1,47 @@
 ---
-title: Welcome to Hauchiwa
+title: Introduction
 order: 1
 ---
 
-# Welcome to Hauchiwa
+# Introduction
 
-Hauchiwa is a flexible static website generator library with incremental rebuilds and cached image optimization.
+## What is Hauchiwa?
 
-It is designed to be:
+Hauchiwa is a **static site generator library** for Rust. It is **not** a CLI
+framework with a rigid directory structure.
 
-*   **Fast**: Incremental builds mean only changed files are processed.
-*   **Flexible**: You define the build pipeline as a Directed Acyclic Graph (DAG) of tasks.
-*   **Type-safe**: Built in Rust with strict typing for data passing between tasks.
+Unlike traditional tools like Jekyll or Hugo that force you into a specific
+folder layout (`_posts`, `layouts`, etc.), Hauchiwa gives you a set of building
+blocks to construct your own build pipeline. You write a Rust binary that
+defines exactly how your site is built.
 
-## Why Hauchiwa?
+### The core philosophy: "task graph"
 
-Unlike traditional static site generators that enforce a specific directory structure or build pipeline (like Hugo or Jekyll), Hauchiwa gives you the building blocks to create your own generator. It handles the hard parts—caching, dependency tracking, parallel execution—so you can focus on your site's logic.
+At the heart of Hauchiwa is the **task graph**. Instead of implicitly guessing
+relationships between files, Hauchiwa requires you to map dependencies
+explicitly using a Directed Acyclic Graph (DAG).
 
-Check out [Getting Started](getting-started.html) to build your first site.
+* **Task A** (Load Markdown) produces data.
+* **Task B** (Render HTML) depends on Task A.
+* **Task C** (Compile SCSS) runs independently.
+
+This explicit mapping allows Hauchiwa to understand exactly how data flows
+through your build process.
+
+## Why "graph-based"?
+
+By defining your build as a graph, you unlock two massive benefits:
+
+1. **Massive parallelism**: Since the dependencies are known upfront, Hauchiwa
+   can schedule independent tasks to run simultaneously, saturating your CPU
+   cores. For example, your CSS can compile at the exact same time your Markdown
+   is being parsed.
+
+2. **True incrementalism**: When a file changes, Hauchiwa calculates the "dirty"
+   subgraph. It only rebuilds the tasks that depend on that specific change. If
+   you change a CSS file, we don't re-render your HTML unless you explicitly
+   wired them together.
+
+## Audience
+
+Hauchiwa is for you!

@@ -1,69 +1,101 @@
 ---
-title: Getting Started
+title: Getting started
 order: 2
 ---
 
 # Getting Started
 
-To use Hauchiwa, you create a new Rust binary project that acts as your site generator.
+To use Hauchiwa, you don't install a CLI tool. Instead, you create a new Rust
+binary project that acts as your site generator.
 
 ## Installation
 
-Add `hauchiwa` to your `Cargo.toml`:
+First, create a new Rust project:
+
+```bash
+cargo new generator
+cd generator
+```
+
+Then, add `hauchiwa` and `serde` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-hauchiwa = "0.12.0"
+hauchiwa = "*"
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 ```
 
-## Basic Example
+## Quick start
 
-Here is a minimal example of a Hauchiwa build script:
+This minimal example sets up a graph that reads Markdown files and "renders"
+them (prints to log).
+
+Open `src/main.rs` and paste the following:
 
 ```rust
 use hauchiwa::Blueprint;
 use serde::Deserialize;
 
-#[derive(Clone, Deserialize)]
+// 1. Define your Frontmatter
+#[derive(Clone, Deserialize, Debug)]
 struct Frontmatter {
     title: String,
 }
 
 fn main() -> anyhow::Result<()> {
+    // 2. Create the Blueprint
     let mut config = Blueprint::<()>::new();
 
-    // 1. Load Markdown files
+    // 3. Register a Loader (Input)
+    // This scans for .md files in the "content" directory
     let pages = config.load_documents::<Frontmatter>()
         .source("content/*.md")
         .register()?;
 
-    // 2. Define a build task
+    // 4. Define a Task (Processing)
     config.task()
         .depends_on(pages)
         .run(|_ctx, pages| {
-            // Process pages and generate output
-            for page in pages {
-                println!("Processing page: {}", page.matter.title);
-                // In a real app, you would render HTML and return outputs
+            // "pages" is a Tracker containing all your markdown files
+            for (_path, doc) in pages {
+                hauchiwa::tracing::info!("Found page: {}", doc.matter.title);
+                // In a real site, you would render HTML here
             }
             Ok(())
         });
 
-    // 3. Execute
+    // 5. Run the Website
     config.finish().build(())?;
 
     Ok(())
 }
 ```
 
-## Running the Build
+### Running it
 
-Simply run your binary:
+Create a dummy content file to test it:
+
+```bash
+mkdir content
+echo '---\ntitle: Hello Hauchiwa\n---\n# Content' > content/index.md
+```
+
+You also need a `public` directory for static assets (even if empty):
+
+```bash
+mkdir public
+```
+
+Now run your generator:
 
 ```bash
 cargo run
 ```
 
-This will execute the defined tasks. Hauchiwa automatically handles parallelism and caching.
+You should see:
+```text
+Found page: Hello Hauchiwa
+```
+
+Congratulations! You have just built your first static site generator.
