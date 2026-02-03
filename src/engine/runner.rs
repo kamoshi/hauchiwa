@@ -14,7 +14,7 @@ use tracing::Level;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use crate::core::{Dynamic, Store};
-use crate::engine::{Task, TrackerState};
+use crate::engine::{Map, Task, TrackerState};
 use crate::{Environment, ImportMap, Output, TaskContext, Website};
 
 #[cfg(feature = "live")]
@@ -299,6 +299,8 @@ fn collect_pages(cache: &HashMap<NodeIndex, NodeData>) -> Vec<Output> {
             pages.push(page.clone());
         } else if let Some(page_vec) = value.downcast_ref::<Vec<Output>>() {
             pages.extend(page_vec.clone());
+        } else if let Some(page_map) = value.downcast_ref::<Map<Output>>() {
+            pages.extend(page_map.map.values().map(|(item, _)| item).cloned());
         }
     }
     pages

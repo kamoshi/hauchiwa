@@ -60,6 +60,28 @@ impl std::fmt::Debug for Hash32 {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct Blake3Hasher(blake3::Hasher);
+
+impl From<Blake3Hasher> for Hash32 {
+    fn from(value: Blake3Hasher) -> Self {
+        let bytes: [u8; 32] = value.0.finalize().into();
+        Hash32::from(bytes)
+    }
+}
+
+impl std::hash::Hasher for Blake3Hasher {
+    fn finish(&self) -> u64 {
+        let mut output = [0u8; 8];
+        self.0.finalize_xof().fill(&mut output);
+        u64::from_le_bytes(output)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+}
+
 /// The mode in which the site generator is running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {

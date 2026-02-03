@@ -10,15 +10,14 @@ use std::sync::Arc;
 use petgraph::graph::NodeIndex;
 
 use crate::core::{Dynamic, Hash32};
-use crate::engine::tracking::TrackerPtr;
 
 pub(crate) use coarse::TypedCoarse;
 pub(crate) use fine::TypedFine;
-pub(crate) use node::TaskNode;
+pub(crate) use node::{TaskNodeCoarse, TaskNodeFine};
 #[cfg(feature = "live")]
 pub(crate) use runner::watch;
 pub(crate) use runner::{TaskExecution, run_once_parallel, run_tasks_parallel};
-pub(crate) use tracking::{TrackerState, Tracking};
+pub(crate) use tracking::{TrackerPtr, TrackerState, Tracking};
 
 pub use coarse::One;
 pub use fine::Many;

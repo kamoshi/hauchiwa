@@ -42,14 +42,17 @@
 
 use camino::Utf8PathBuf;
 use petgraph::graph::NodeIndex;
-use sitemap_rs::{sitemap::Sitemap, sitemap_index::SitemapIndex, url_set::UrlSet};
+use sitemap_rs::sitemap::Sitemap;
+use sitemap_rs::sitemap_index::SitemapIndex;
+use sitemap_rs::url_set::UrlSet;
 
 pub use sitemap_rs::url::{ChangeFrequency, Link, Url};
 
 use std::collections::HashSet;
 
 use crate::core::{Dynamic, Store};
-use crate::engine::TypedCoarse;
+use crate::engine::{TrackerPtr, TypedCoarse};
+use crate::output::OutputHandle;
 use crate::{Blueprint, One, Output, TaskContext, engine::Tracking};
 
 const MAX_URLS: usize = 50_000;
@@ -68,6 +71,7 @@ enum SourceStrategy {
 
 struct SitemapSource {
     index: petgraph::graph::NodeIndex,
+    resolver: fn(&Dynamic) -> (Option<TrackerPtr>, Vec<&Output>),
     strategy: SourceStrategy,
 }
 
@@ -106,14 +110,13 @@ impl<'a, G: Send + Sync + 'static> SitemapBuilder<'a, G> {
 
     /// Registers a collection of pages for the sitemap, automatically deriving
     /// their URLs from their output file paths.
-    pub fn add(
-        mut self,
-        handle: One<Vec<Output>>,
-        frequency: ChangeFrequency,
-        priority: f32,
-    ) -> Self {
+    pub fn add<H>(mut self, handle: H, frequency: ChangeFrequency, priority: f32) -> Self
+    where
+        H: OutputHandle,
+    {
         self.deps.push(SitemapSource {
             index: handle.index(),
+            resolver: H::resolve_refs,
             strategy: SourceStrategy::Add {
                 frequency,
                 priority,
@@ -171,18 +174,18 @@ impl<G: Send + Sync> TypedCoarse<G> for SitemapTask {
         _: &mut Store,
         dependencies: &[Dynamic],
     ) -> anyhow::Result<(Tracking, Self::Output)> {
+        let mut tracking = Tracking::default();
         let mut entries = Vec::new();
 
         for (source, input) in self.sources.iter().zip(dependencies.iter()) {
-            // in practice this can only be Vec<Output>
-            if let Some(list) = input.downcast_ref::<Vec<Output>>() {
-                for page in list {
-                    let res = source.map_to_url(&self.base_url, page)?;
-                    entries.push(res);
-                }
-            } else {
-                unreachable!()
-            };
+            let (tracker, items) = (source.resolver)(input);
+
+            tracking.edges.push(tracker);
+
+            for page in items {
+                let res = source.map_to_url(&self.base_url, page)?;
+                entries.push(res);
+            }
         }
 
         entries.sort_by(|a, b| a.location.cmp(&b.location));

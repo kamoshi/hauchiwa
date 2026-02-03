@@ -7,7 +7,8 @@ use petgraph::Graph;
 
 use crate::core::{Environment, Mode, Store};
 use crate::engine::{
-    Dependencies, Many, One, Task, TaskNode, TypedCoarse, TypedFine, run_once_parallel,
+    Dependencies, Many, One, Task, TaskNodeCoarse, TaskNodeFine, TypedCoarse, TypedFine,
+    run_once_parallel,
 };
 use crate::{Diagnostics, TaskContext};
 
@@ -162,10 +163,30 @@ impl<'a, G: Send + Sync + 'static> TaskDef<'a, G> {
         F: Fn(&TaskContext<'_, G>) -> anyhow::Result<R> + Send + Sync + 'static,
         R: Send + Sync + 'static,
     {
-        self.blueprint.add_task_coarse(TaskNode {
+        self.blueprint.add_task_coarse(TaskNodeCoarse {
             name: self.name.unwrap_or(type_name::<F>().into()),
             dependencies: (),
             callback: move |ctx, _| callback(ctx),
+            _phantom: PhantomData,
+        })
+    }
+
+    /// Defines a fine-grained task that produces multiple named outputs.
+    ///
+    /// This acts as a "source" of fine-grained data, similar to how `source(glob)` works,
+    /// but using an arbitrary function instead of file watching.
+    pub fn run_many<F, R>(self, callback: F) -> Many<R>
+    where
+        F: Fn(&TaskContext<'_, G>) -> anyhow::Result<Vec<(String, R)>> + Send + Sync + 'static,
+        R: Send + Sync + std::hash::Hash + 'static,
+    {
+        // "Saibunka": We wrap the callback to adapt the signature, ignoring the empty dependencies.
+        let callback_wrapper = move |ctx: &TaskContext<'_, G>, _: ()| callback(ctx);
+
+        self.blueprint.add_task_fine(TaskNodeFine {
+            name: self.name.unwrap_or(type_name::<F>().into()),
+            dependencies: (),
+            callback: callback_wrapper,
             _phantom: PhantomData,
         })
     }
@@ -234,7 +255,23 @@ where
             + 'static,
         R: Send + Sync + 'static,
     {
-        self.blueprint.add_task_coarse(TaskNode {
+        self.blueprint.add_task_coarse(TaskNodeCoarse {
+            name: self.name.unwrap_or(type_name::<F>().into()),
+            dependencies: self.dependencies,
+            callback,
+            _phantom: PhantomData,
+        })
+    }
+
+    pub fn run_many<F, R>(self, callback: F) -> Many<R>
+    where
+        F: for<'b> Fn(&TaskContext<'b, G>, D::Output<'b>) -> anyhow::Result<Vec<(String, R)>>
+            + Send
+            + Sync
+            + 'static,
+        R: Send + Sync + std::hash::Hash + 'static,
+    {
+        self.blueprint.add_task_fine(TaskNodeFine {
             name: self.name.unwrap_or(type_name::<F>().into()),
             dependencies: self.dependencies,
             callback,

@@ -3,8 +3,19 @@
 //! This module contains the [`Output`] struct, which represents a final output file,
 //! and helper functions for path normalization and slugification.
 
+use std::fs;
+use std::io;
+use std::path::Path;
+
 use camino::Utf8Component;
 use camino::{Utf8Path, Utf8PathBuf};
+
+use crate::Many;
+use crate::One;
+use crate::core::Dynamic;
+use crate::engine::Handle;
+use crate::engine::Map;
+use crate::engine::TrackerPtr;
 
 /// Helper function to compute the bundle scope path.
 ///
@@ -142,7 +153,7 @@ fn normalize_path_html(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
 }
 
 /// The content of an [`Output`] file.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub enum OutputData {
     /// Text content (UTF-8).
     Utf8(String),
@@ -164,7 +175,7 @@ impl AsRef<[u8]> for OutputData {
 /// A `Output` is a common output type for tasks that generate HTML, TXT, or
 /// other static assets. The build system collects all `Output` instances and
 /// writes them to the filesystem.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub struct Output {
     /// The destination path of the file, relative to the `dist` directory.
     pub path: Utf8PathBuf,
@@ -264,9 +275,52 @@ impl OutputBuilder {
     }
 }
 
-use std::fs;
-use std::io;
-use std::path::Path;
+/// A trait for handles that can be flattened into a list of Output references.
+pub trait OutputHandle: Handle {
+    /// Extracts a list of `Output` references from the handle's resolved value.
+    fn resolve_refs(item: &Dynamic) -> (Option<TrackerPtr>, Vec<&Output>);
+}
+
+impl OutputHandle for One<Output> {
+    fn resolve_refs(item: &Dynamic) -> (Option<TrackerPtr>, Vec<&Output>) {
+        match item.downcast_ref::<Output>() {
+            Some(item) => (None, vec![item]),
+            None => unreachable!(),
+        }
+    }
+}
+
+impl OutputHandle for One<Vec<Output>> {
+    fn resolve_refs(item: &Dynamic) -> (Option<TrackerPtr>, Vec<&Output>) {
+        match item.downcast_ref::<Vec<Output>>() {
+            Some(item) => (None, item.iter().collect()),
+            None => unreachable!(),
+        }
+    }
+}
+
+impl OutputHandle for Many<Output> {
+    fn resolve_refs(item: &Dynamic) -> (Option<TrackerPtr>, Vec<&Output>) {
+        match item.downcast_ref::<Map<Output>>() {
+            Some(map) => {
+                let ptr = TrackerPtr::default();
+                let mut items = Vec::new();
+
+                {
+                    let mut tracker = ptr.ptr.lock().unwrap();
+
+                    for (key, (output, provenance)) in &map.map {
+                        tracker.accessed.insert(key.clone(), *provenance);
+                        items.push(output);
+                    }
+                }
+
+                (Some(ptr), items)
+            }
+            None => unreachable!(),
+        }
+    }
+}
 
 /// Saves all pages to the "dist" directory.
 pub(crate) fn save_pages_to_dist(pages: &[Output]) -> io::Result<()> {
