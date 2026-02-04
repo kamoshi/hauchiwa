@@ -7,9 +7,11 @@ use petgraph::Graph;
 
 use crate::core::{Environment, Mode, Store};
 use crate::engine::{
-    Dependencies, Many, NodeGather, NodeScatter, One, Task, TypedCoarse, TypedFine,
+    Dependencies, Many, NodeGather, NodeMap, NodeScatter, One, Task, TypedCoarse, TypedFine,
     run_once_parallel,
 };
+use crate::error::HauchiwaError;
+use crate::loader::Input;
 use crate::{Diagnostics, TaskContext};
 
 /// The blueprint for your static site.
@@ -35,21 +37,18 @@ pub struct Blueprint<G: Send + Sync = ()> {
 impl<G: Send + Sync + 'static> Blueprint<G> {
     /// Creates a new, empty configuration.
     pub fn new() -> Self {
-        Self {
-            graph: Graph::new(),
-        }
+        Self::default()
     }
 
-    pub fn finish(self) -> Website<G> {
-        Website { graph: self.graph }
-    }
-
-    /// The entry point. Starts in the "Empty" state.
     pub fn task(&mut self) -> TaskDef<'_, G> {
         TaskDef {
             blueprint: self,
             name: None,
         }
+    }
+
+    pub fn finish(self) -> Website<G> {
+        Website { graph: self.graph }
     }
 
     pub(crate) fn add_task_fine<O, T>(&mut self, task: T) -> Many<O>
@@ -83,9 +82,11 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
     }
 }
 
-impl<G: Send + Sync + 'static> Default for Blueprint<G> {
+impl<G: Send + Sync> Default for Blueprint<G> {
     fn default() -> Self {
-        Self::new()
+        Self {
+            graph: Graph::new(),
+        }
     }
 }
 
@@ -139,15 +140,27 @@ impl<'a, G: Send + Sync + 'static> TaskDef<'a, G> {
         self
     }
 
-    pub fn source(self, glob: impl Into<String>) -> TaskSourceBinder<'a, G> {
-        TaskSourceBinder {
+    /// Load assets from file system using glob pattern.
+    pub fn glob(self, glob: impl Into<String>) -> TaskBinderGlob<'a, G> {
+        TaskBinderGlob {
             blueprint: self.blueprint,
             name: self.name,
             sources: vec![glob.into()],
         }
     }
 
-    pub fn depends_on<D>(self, dependencies: D) -> TaskBinder<'a, G, D>
+    /// Perform a map on a collection.
+    pub fn each<T>(self, each: Many<T>) -> TaskBinderEach<'a, G, T, ()> {
+        TaskBinderEach {
+            blueprint: self.blueprint,
+            name: self.name,
+            primary: each,
+            secondary: (),
+        }
+    }
+
+    /// Set task dependencies.
+    pub fn using<D>(self, dependencies: D) -> TaskBinder<'a, G, D>
     where
         D: Dependencies,
     {
@@ -158,6 +171,7 @@ impl<'a, G: Send + Sync + 'static> TaskDef<'a, G> {
         }
     }
 
+    /// Immediately run a task with no dependencies.
     pub fn run<F, R>(self, callback: F) -> One<R>
     where
         F: Fn(&TaskContext<'_, G>) -> anyhow::Result<R> + Send + Sync + 'static,
@@ -166,55 +180,32 @@ impl<'a, G: Send + Sync + 'static> TaskDef<'a, G> {
         self.blueprint.add_task_coarse(NodeGather {
             name: self.name.unwrap_or(type_name::<F>().into()),
             dependencies: (),
-            callback: move |ctx, _| callback(ctx),
-            _phantom: PhantomData,
-        })
-    }
-
-    /// Defines a fine-grained task that produces multiple named outputs.
-    ///
-    /// This acts as a "source" of fine-grained data, similar to how `source(glob)` works,
-    /// but using an arbitrary function instead of file watching.
-    pub fn run_many<F, R>(self, callback: F) -> Many<R>
-    where
-        F: Fn(&TaskContext<'_, G>) -> anyhow::Result<Vec<(String, R)>> + Send + Sync + 'static,
-        R: Send + Sync + std::hash::Hash + 'static,
-    {
-        // "Saibunka": We wrap the callback to adapt the signature, ignoring the empty dependencies.
-        let callback_wrapper = move |ctx: &TaskContext<'_, G>, _: ()| callback(ctx);
-
-        self.blueprint.add_task_fine(NodeScatter {
-            name: self.name.unwrap_or(type_name::<F>().into()),
-            dependencies: (),
-            callback: callback_wrapper,
+            callback: move |ctx, ()| callback(ctx),
             _phantom: PhantomData,
         })
     }
 }
 
-pub struct TaskSourceBinder<'a, G: Send + Sync> {
+pub struct TaskBinderGlob<'a, G: Send + Sync> {
     blueprint: &'a mut Blueprint<G>,
     name: Option<Cow<'static, str>>,
     sources: Vec<String>,
 }
 
-impl<'a, G: Send + Sync + 'static> TaskSourceBinder<'a, G> {
+impl<'a, G: Send + Sync + 'static> TaskBinderGlob<'a, G> {
     pub fn name(mut self, name: impl Into<Cow<'static, str>>) -> Self {
         self.name = Some(name.into());
         self
     }
 
-    pub fn source(mut self, glob: impl Into<String>) -> Self {
+    pub fn glob(mut self, glob: impl Into<String>) -> Self {
         self.sources.push(glob.into());
         self
     }
 
-    pub fn run<F, R>(self, callback: F) -> Result<Many<R>, crate::error::HauchiwaError>
+    pub fn map<F, R>(self, callback: F) -> Result<Many<R>, HauchiwaError>
     where
-        F: Fn(&TaskContext<G>, &mut Store, crate::loader::Input) -> anyhow::Result<R>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(&TaskContext<G>, &mut Store, Input) -> anyhow::Result<R> + Send + Sync + 'static,
         R: Send + Sync + 'static,
     {
         let task = crate::loader::GlobFiles::new(
@@ -228,6 +219,61 @@ impl<'a, G: Send + Sync + 'static> TaskSourceBinder<'a, G> {
         )?;
 
         Ok(self.blueprint.add_task_fine(task))
+    }
+}
+
+/// A binder for tasks that map over a collection with optional side dependencies.
+pub struct TaskBinderEach<'a, G, T, D>
+where
+    G: Send + Sync,
+{
+    blueprint: &'a mut Blueprint<G>,
+    name: Option<Cow<'static, str>>,
+    primary: Many<T>,
+    secondary: D,
+}
+
+impl<'a, G, T, D> TaskBinderEach<'a, G, T, D>
+where
+    G: Send + Sync + 'static,
+    T: Send + Sync + 'static,
+    D: Dependencies + Send + Sync + 'static,
+{
+    pub fn name(mut self, name: impl Into<Cow<'static, str>>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Add secondary dependencies (context) that are needed for every item mapping.
+    pub fn using<D2>(self, dependencies: D2) -> TaskBinderEach<'a, G, T, D2>
+    where
+        D2: Dependencies,
+    {
+        TaskBinderEach {
+            blueprint: self.blueprint,
+            name: self.name,
+            primary: self.primary,
+            secondary: dependencies,
+        }
+    }
+
+    /// Execute the mapping function.
+    /// The callback receives the context, the individual item `&T`, and the resolved secondary dependencies.
+    pub fn map<F, R>(self, callback: F) -> Many<R>
+    where
+        F: for<'b> Fn(&TaskContext<'b, G>, &T, D::Output<'b>) -> anyhow::Result<R>
+            + Send
+            + Sync
+            + 'static,
+        R: Send + Sync + Clone + 'static,
+    {
+        self.blueprint.add_task_fine(NodeMap {
+            name: self.name.unwrap_or(type_name::<F>().into()),
+            dep_primary: self.primary,
+            dep_secondary: self.secondary,
+            callback,
+            _phantom: PhantomData,
+        })
     }
 }
 
@@ -247,7 +293,7 @@ where
         self
     }
 
-    pub fn run<F, R>(self, callback: F) -> One<R>
+    pub fn merge<F, R>(self, callback: F) -> One<R>
     where
         F: for<'b> Fn(&TaskContext<'b, G>, D::Output<'b>) -> anyhow::Result<R>
             + Send
@@ -263,7 +309,7 @@ where
         })
     }
 
-    pub fn run_many<F, R>(self, callback: F) -> Many<R>
+    pub fn spread<F, R>(self, callback: F) -> Many<R>
     where
         F: for<'b> Fn(&TaskContext<'b, G>, D::Output<'b>) -> anyhow::Result<Vec<(String, R)>>
             + Send
