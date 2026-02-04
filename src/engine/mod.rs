@@ -31,6 +31,8 @@ pub struct Provenance(pub(crate) Hash32);
 #[derive(Debug)]
 pub(crate) struct Map<T> {
     pub(crate) map: BTreeMap<ArcStr, (T, Provenance)>,
+    // force downstream rebuild
+    pub(crate) dirty: bool,
 }
 
 // Things that can be used as dependency Handle

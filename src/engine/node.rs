@@ -118,6 +118,8 @@ where
         context: &TaskContext<G>,
         _: &mut Store,
         dependencies: &[Dynamic],
+        _old_output: Option<&Dynamic>,
+        _updated_nodes: &HashSet<NodeIndex>,
     ) -> anyhow::Result<Map<Self::Output>> {
         let (_, inputs) = self.dependencies.resolve(dependencies);
 
@@ -137,7 +139,21 @@ where
             map.insert(key.into(), (item, provenance));
         }
 
-        Ok(Map { map })
+        Ok(Map { map, dirty: false })
+    }
+
+    fn is_valid(
+        &self,
+        _old_tracking: &[Option<TrackerState>],
+        _new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool {
+        for dep in self.dependencies.dependencies() {
+            if updated_nodes.contains(&dep) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -147,7 +163,7 @@ pub(crate) struct NodeMap<T, G, R, D, F>
 where
     T: Send + Sync + 'static,
     G: Send + Sync + 'static,
-    R: Send + Sync + 'static,
+    R: Send + Sync + Clone + 'static,
     D: Dependencies,
     F: for<'a> Fn(&TaskContext<'a, G>, &T, D::Output<'a>) -> anyhow::Result<R> + Send + Sync,
 {
@@ -162,7 +178,7 @@ impl<T, G, R, D, F> TypedFine<G> for NodeMap<T, G, R, D, F>
 where
     T: Send + Sync + 'static,
     G: Send + Sync + 'static,
-    R: Send + Sync + 'static,
+    R: Send + Sync + Clone + 'static,
     D: Dependencies + Send + Sync,
     F: for<'a> Fn(&TaskContext<'a, G>, &T, D::Output<'a>) -> anyhow::Result<R> + Send + Sync,
 {
@@ -188,17 +204,65 @@ where
         context: &TaskContext<G>,
         _: &mut Store,
         dependencies: &[Dynamic],
+        old_output: Option<&Dynamic>,
+        updated_nodes: &HashSet<NodeIndex>,
     ) -> anyhow::Result<Map<Self::Output>> {
         // We assume the first dependency is the primary Many<T>
         let input_map = dependencies[0].downcast_ref::<Map<T>>().unwrap();
 
-        let mut result_map = BTreeMap::new();
-        for (key, (input, provenance)) in &input_map.map {
-            let (_, deps) = self.dep_secondary.resolve(&dependencies[1..]);
-            let output = (self.callback)(context, input, deps)?;
-            result_map.insert(key.clone(), (output, *provenance));
+        let mut forced_dirty = false;
+        for dep_idx in self.dep_secondary.dependencies() {
+            if updated_nodes.contains(&dep_idx) {
+                forced_dirty = true;
+                break;
+            }
         }
 
-        Ok(Map { map: result_map })
+        let old_map = if !forced_dirty {
+            old_output.and_then(|d| d.downcast_ref::<Map<Self::Output>>())
+        } else {
+            None
+        };
+
+        let mut result_map = BTreeMap::new();
+        for (key, (input, provenance)) in &input_map.map {
+            // If not forced dirty, and we have old output, and provenance matches
+            if let Some(old_map) = old_map
+                && let Some((old_item, old_provenance)) = old_map.map.get(key)
+                && old_provenance == provenance
+            {
+                result_map.insert(key.clone(), (old_item.clone(), *provenance));
+            } else {
+                let (_, deps) = self.dep_secondary.resolve(&dependencies[1..]);
+                let output = (self.callback)(context, input, deps)?;
+                result_map.insert(key.clone(), (output, *provenance));
+            }
+        }
+
+        Ok(Map {
+            map: result_map,
+            dirty: forced_dirty,
+        })
+    }
+
+    fn is_valid(
+        &self,
+        _old_tracking: &[Option<TrackerState>],
+        _new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool {
+        for dep in self.dep_primary.dependencies() {
+            if updated_nodes.contains(&dep) {
+                return false;
+            }
+        }
+
+        for dep in self.dep_secondary.dependencies() {
+            if updated_nodes.contains(&dep) {
+                return false;
+            }
+        }
+
+        true
     }
 }

@@ -173,6 +173,9 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
             let sender = result_sender.clone();
             let pb_style = pb_style.clone();
 
+            let old_output = old_data.map(|d| d.output);
+            let updated_nodes = updated_nodes.clone();
+
             // Spawn on Rayon pool
             s.spawn(move |_| {
                 // Tracing span
@@ -210,16 +213,22 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
                             },
                         ),
                         Task::F(task) => {
-                            task.execute(&context, &mut rt, &dependencies)
-                                .map(|output| {
-                                    let mut imports = importmap.clone();
-                                    imports.merge(rt.imports);
-                                    NodeData {
-                                        output,
-                                        tracking: vec![], // TODO
-                                        importmap: imports,
-                                    }
-                                })
+                            task.execute(
+                                &context,
+                                &mut rt,
+                                &dependencies,
+                                old_output.as_ref(),
+                                &updated_nodes,
+                            )
+                            .map(|output| {
+                                let mut imports = importmap.clone();
+                                imports.merge(rt.imports);
+                                NodeData {
+                                    output,
+                                    tracking: vec![], // TODO
+                                    importmap: imports,
+                                }
+                            })
                         }
                     }
                 })) {
