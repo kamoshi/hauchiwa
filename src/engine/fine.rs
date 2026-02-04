@@ -97,7 +97,7 @@ where
             match current.map.get(key) {
                 Some((_, new_prov)) => {
                     if old_prov != new_prov {
-                        tracing::info!(
+                        tracing::debug!(
                             "Hash changed for key {} from {:?} to {:?}",
                             key,
                             old_prov,
@@ -107,7 +107,7 @@ where
                     }
                 }
                 None => {
-                    tracing::info!("Key {} no longer exists", key);
+                    tracing::debug!("Key {} no longer exists", key);
                     return false;
                 }
             }
@@ -124,14 +124,14 @@ where
                         // inserted in the middle of our iteration range, effectively shifting/changing
                         // the sequence we saw.
                         if !state.accessed.contains_key(key) {
-                            tracing::info!("Iteration encountered new item: {}", key);
+                            tracing::debug!("Iteration encountered new item: {}", key);
                             return false;
                         }
                     }
                     None => {
                         // Iterator exhausted earlier than expected.
                         // We expected 'count' items, but found fewer.
-                        tracing::info!("Iteration exhausted early");
+                        tracing::debug!("Iteration exhausted early");
                         return false;
                     }
                 }
@@ -142,7 +142,7 @@ where
             if state.iterated.exhausted
                 && let Some((key, _)) = iter.next()
             {
-                tracing::info!("Iteration has new item at end: {}", key);
+                tracing::debug!("Iteration has new item at end: {}", key);
                 return false;
             }
         }
@@ -165,12 +165,12 @@ where
                     match iter.next() {
                         Some((key, _)) => {
                             if !state.accessed.contains_key(key) {
-                                tracing::info!("Glob {} encountered new item: {}", pattern, key);
+                                tracing::debug!("Glob {} encountered new item: {}", pattern, key);
                                 return false;
                             }
                         }
                         None => {
-                            tracing::info!("Glob {} exhausted early", pattern);
+                            tracing::debug!("Glob {} exhausted early", pattern);
                             return false;
                         }
                     }
@@ -179,7 +179,7 @@ where
                 if glob_state.exhausted
                     && let Some((key, _)) = iter.next()
                 {
-                    tracing::info!("Glob {} has new item at end: {}", pattern, key);
+                    tracing::debug!("Glob {} has new item at end: {}", pattern, key);
                     return false;
                 }
             }
@@ -321,9 +321,11 @@ mod tests {
 
     fn make_map(items: Vec<(&str, i32)>) -> Dynamic {
         let mut map = BTreeMap::new();
+
         for (k, v) in items {
-            map.insert(k.to_string(), (v, Provenance(Hash32::default())));
+            map.insert(k.into(), (v, Provenance(Hash32::default())));
         }
+
         Arc::new(Map { map })
     }
 
@@ -331,7 +333,7 @@ mod tests {
     fn test_valid_access() {
         let handle = make_handle();
         let mut accessed = std::collections::HashMap::new();
-        accessed.insert("a".to_string(), Provenance(Hash32::default()));
+        accessed.insert("a".into(), Provenance(Hash32::default()));
 
         let state = TrackerState {
             accessed,
@@ -348,7 +350,7 @@ mod tests {
     fn test_invalid_access_missing() {
         let handle = make_handle();
         let mut accessed = std::collections::HashMap::new();
-        accessed.insert("c".to_string(), Provenance(Hash32::default())); // 'c' missing
+        accessed.insert("c".into(), Provenance(Hash32::default())); // 'c' missing
 
         let state = TrackerState {
             accessed,
@@ -365,8 +367,8 @@ mod tests {
     fn test_iter_valid() {
         let handle = make_handle();
         let mut accessed = std::collections::HashMap::new();
-        accessed.insert("a".to_string(), Provenance(Hash32::default()));
-        accessed.insert("b".to_string(), Provenance(Hash32::default()));
+        accessed.insert("a".into(), Provenance(Hash32::default()));
+        accessed.insert("b".into(), Provenance(Hash32::default()));
 
         let state = TrackerState {
             accessed,
@@ -388,8 +390,8 @@ mod tests {
     fn test_iter_invalid_order() {
         let handle = make_handle();
         let mut accessed = std::collections::HashMap::new();
-        accessed.insert("a".to_string(), Provenance(Hash32::default()));
-        accessed.insert("b".to_string(), Provenance(Hash32::default()));
+        accessed.insert("a".into(), Provenance(Hash32::default()));
+        accessed.insert("b".into(), Provenance(Hash32::default()));
 
         let state = TrackerState {
             accessed,
@@ -412,7 +414,7 @@ mod tests {
     fn test_iter_exhausted_check() {
         let handle = make_handle();
         let mut accessed = std::collections::HashMap::new();
-        accessed.insert("a".to_string(), Provenance(Hash32::default()));
+        accessed.insert("a".into(), Provenance(Hash32::default()));
 
         let state = TrackerState {
             accessed,

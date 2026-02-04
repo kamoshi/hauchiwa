@@ -126,7 +126,7 @@ where
 
             let provenance = Provenance(hash);
 
-            map.insert(key, (item, provenance));
+            map.insert(key.into(), (item, provenance));
         }
 
         Ok(Map { map })

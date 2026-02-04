@@ -178,13 +178,13 @@ where
             })
             .collect();
 
-        let mut registry = BTreeMap::new();
+        let mut map = BTreeMap::new();
         for (provenance, path, res, imports) in results? {
-            registry.insert(path.into_string(), (res, provenance));
+            map.insert(path.as_str().into(), (res, provenance));
             runtime.imports.merge(imports);
         }
 
-        Ok(Map { map: registry })
+        Ok(Map { map })
     }
 
     fn is_dirty(&self, path: &Utf8Path) -> bool {
@@ -305,13 +305,13 @@ where
             })
             .collect();
 
-        let mut registry = BTreeMap::new();
+        let mut map = BTreeMap::new();
         for (provenance, path, res, imports) in results? {
-            registry.insert(path.into_string(), (res, provenance));
+            map.insert(path.as_str().into(), (res, provenance));
             runtime.imports.merge(imports);
         }
 
-        Ok(Map { map: registry })
+        Ok(Map { map })
     }
 
     fn is_dirty(&self, path: &Utf8Path) -> bool {

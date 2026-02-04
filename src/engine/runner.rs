@@ -5,9 +5,9 @@ mod http;
 mod watch;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::channel;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::unbounded;
 use indicatif::ProgressStyle;
 use petgraph::graph::NodeIndex;
 use tracing::Level;
@@ -118,11 +118,6 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
     root_span.pb_set_message("Building tasks...");
     let _enter = root_span.enter();
 
-    // We only need a channel for results and tasks are distributed by Rayon.
-    // (index, result, start, duration, ran_was_executed)
-    let (result_sender, result_receiver) =
-        unbounded::<(NodeIndex, anyhow::Result<NodeData>, Instant, Duration, bool)>();
-
     let mut execution_times = HashMap::new();
     let mut updated_nodes = HashSet::new();
 
@@ -130,6 +125,11 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
     let pb_style = crate::utils::get_style_task()?;
 
     rayon::scope(|s| -> anyhow::Result<()> {
+        // We only need a channel for results and tasks are distributed by Rayon.
+        // (index, result, start, duration, ran_was_executed)
+        let (result_sender, result_receiver) =
+            channel::<(NodeIndex, anyhow::Result<NodeData>, Instant, Duration, bool)>();
+
         // A helper closure to spawn a task
         let spawn_task = |cache: &HashMap<NodeIndex, NodeData>,
                           index: NodeIndex,

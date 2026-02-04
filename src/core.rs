@@ -10,6 +10,9 @@ use crate::error::BuildError;
 /// A type-erased, thread-safe container.
 pub(crate) type Dynamic = Arc<dyn Any + Send + Sync>;
 
+/// Atomic reference-counted string type used for identifiers.
+pub(crate) type ArcStr = std::sync::Arc<str>;
+
 /// A 32-byte BLAKE3 hash used for content-addressing and change detection.
 ///
 /// In `hauchiwa`, this serves two primary purposes:

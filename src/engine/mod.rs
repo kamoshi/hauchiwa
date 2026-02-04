@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use petgraph::graph::NodeIndex;
 
-use crate::core::{Dynamic, Hash32};
+use crate::core::{ArcStr, Dynamic, Hash32};
 
 pub(crate) use coarse::TypedCoarse;
 pub(crate) use fine::TypedFine;
@@ -30,7 +30,7 @@ pub struct Provenance(pub(crate) Hash32);
 /// A collection of processed assets, indexed by unique identifier.
 #[derive(Debug)]
 pub(crate) struct Map<T> {
-    pub(crate) map: BTreeMap<String, (T, Provenance)>,
+    pub(crate) map: BTreeMap<ArcStr, (T, Provenance)>,
 }
 
 // Things that can be used as dependency Handle

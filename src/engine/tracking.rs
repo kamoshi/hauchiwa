@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use glob::Pattern;
 
+use crate::core::ArcStr;
 use crate::engine::{Map, Provenance};
 use crate::error::HauchiwaError;
 
@@ -14,7 +15,7 @@ pub struct IterationState {
 
 #[derive(Clone, Default, Debug)]
 pub struct TrackerState {
-    pub accessed: HashMap<String, Provenance>,
+    pub accessed: HashMap<ArcStr, Provenance>,
     pub globs: HashMap<String, IterationState>,
     pub iterated: IterationState,
 }
@@ -63,18 +64,16 @@ impl<'a, T> Tracker<'a, T> {
     where
         K: AsRef<str>,
     {
-        match self.map.map.get(key.as_ref()) {
-            Some((item, provenance)) => {
-                let mut tracker = self.tracker.ptr.lock().unwrap();
-                tracker
-                    .accessed
-                    .insert(key.as_ref().to_string(), *provenance);
+        let key = key.as_ref();
+
+        match self.map.map.get_key_value(key) {
+            Some((key, (item, provenance))) => {
+                let mut inner = self.tracker.ptr.lock().unwrap();
+                inner.accessed.insert(key.clone(), *provenance);
 
                 Ok(item)
             }
-            None => Err(HauchiwaError::AssetNotFound(
-                key.as_ref().to_string().into(),
-            )),
+            None => Err(HauchiwaError::AssetNotFound(key.into())),
         }
     }
 
@@ -88,12 +87,13 @@ impl<'a, T> Tracker<'a, T> {
         let tracker = self.tracker.ptr.clone();
 
         // We box the iterator to simplify the type signature
-        let iter = Box::new(
-            self.map
-                .map
-                .iter()
-                .filter(move |(key, _)| matcher.matches(key)),
-        );
+        let iter = Box::new(self.map.map.iter().filter_map(move |(key, val)| {
+            if matcher.matches(key) {
+                Some((key, val))
+            } else {
+                None
+            }
+        }));
 
         Ok(TrackerGlobIter {
             iter,
@@ -108,7 +108,7 @@ impl<'a, T> Tracker<'a, T> {
     /// **Warning:** Iterating over the entire collection marks your task as dependent
     /// on the *entire set*. This means your task will re-run if *any* item is added,
     /// removed, or modified.
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &T)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &T)> {
         TrackerIter {
             iter: self.map.map.iter(),
             tracker: self.tracker.ptr.clone(),
@@ -132,13 +132,13 @@ impl<'a, T> Tracker<'a, T> {
 }
 
 pub struct TrackerIter<'a, T> {
-    iter: std::collections::btree_map::Iter<'a, String, (T, Provenance)>,
+    iter: std::collections::btree_map::Iter<'a, Arc<str>, (T, Provenance)>,
     tracker: Arc<Mutex<TrackerState>>,
     count: usize,
 }
 
 impl<'a, T> Iterator for TrackerIter<'a, T> {
-    type Item = (&'a String, &'a T);
+    type Item = (&'a str, &'a T);
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = self.iter.next();
@@ -149,7 +149,7 @@ impl<'a, T> Iterator for TrackerIter<'a, T> {
                 self.count += 1;
                 tracker.iterated.count = tracker.iterated.count.max(self.count);
                 tracker.accessed.insert(key.clone(), *provenance);
-                Some((key, item))
+                Some((key.as_ref(), item))
             }
             None => {
                 tracker.iterated.exhausted = true;
@@ -160,7 +160,7 @@ impl<'a, T> Iterator for TrackerIter<'a, T> {
 }
 
 pub struct TrackerGlobIter<'a, T> {
-    iter: Box<dyn Iterator<Item = (&'a String, &'a (T, Provenance))> + 'a>,
+    iter: Box<dyn Iterator<Item = (&'a ArcStr, &'a (T, Provenance))> + 'a>,
     tracker: Arc<Mutex<TrackerState>>,
     pattern: String,
     count: usize,
@@ -178,8 +178,8 @@ impl<'a, T> Iterator for TrackerGlobIter<'a, T> {
                 self.count += 1;
                 let state = tracker.globs.entry(self.pattern.clone()).or_default();
                 state.count = state.count.max(self.count);
-                tracker.accessed.insert(key.clone(), *provenance);
-                Some((key.as_str(), item))
+                tracker.accessed.insert(Arc::clone(key), *provenance);
+                Some((key.as_ref(), item))
             }
             None => {
                 let state = tracker.globs.entry(self.pattern.clone()).or_default();
