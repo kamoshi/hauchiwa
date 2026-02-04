@@ -41,18 +41,18 @@
 //!     // 2. Use it in a task to render HTML
 //!     config
 //!         .task()
-//!         .depends_on(buttons)
-//!         .run(|ctx, buttons| {
-//!         let component = buttons.get("components/Counter.svelte").unwrap();
+//!         .using(buttons)
+//!         .merge(|ctx, buttons| {
+//!             let component = buttons.get("components/Counter.svelte").unwrap();
 //!
-//!         // SSR happens here (Rust -> JS -> HTML)
-//!         let props = ButtonProps { label: "Click me".into(), count: 0 };
-//!         let html = (component.prerender)(&props)?;
+//!             // SSR happens here (Rust -> JS -> HTML)
+//!             let props = ButtonProps { label: "Click me".into(), count: 0 };
+//!             let html = (component.prerender)(&props)?;
 //!
-//!         // The `component.hydration` field contains the path to the client-side JS
-//!         println!("Rendered: {}", html);
-//!         Ok(())
-//!     });
+//!             // The `component.hydration` field contains the path to the client-side JS
+//!             println!("Rendered: {}", html);
+//!             Ok(())
+//!         });
 //!
 //!     Ok(())
 //! }

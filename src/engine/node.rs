@@ -266,3 +266,317 @@ where
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::Environment;
+    use crate::core::{Dynamic, Hash32, ImportMap, Store, TaskContext};
+    use crate::engine::{
+        Many, Map, One, Provenance, TrackerState, Tracking, TypedCoarse, TypedFine,
+    };
+
+    use std::borrow::Cow;
+    use std::collections::{BTreeMap, HashSet};
+    use std::marker::PhantomData;
+    use std::sync::Arc;
+
+    use petgraph::graph::NodeIndex;
+
+    const ENV: Environment = Environment {
+        generator: "test",
+        mode: crate::core::Mode::Build,
+        port: None,
+        data: (),
+    };
+
+    // --- Helpers ---
+
+    fn make_ctx() -> TaskContext<'static, ()> {
+        TaskContext {
+            env: &ENV,
+            importmap: Box::leak(Box::new(ImportMap::new())),
+            span: tracing::Span::none(),
+        }
+    }
+
+    fn make_fine_output(items: Vec<(&str, i32, u32)>) -> Dynamic {
+        let mut map = BTreeMap::new();
+        for (k, v, hash) in items {
+            map.insert(k.into(), (v, Provenance(Hash32::hash(hash.to_ne_bytes()))));
+        }
+        Arc::new(Map { map, dirty: false })
+    }
+
+    fn make_coarse_output(val: i32) -> Dynamic {
+        Arc::new(val)
+    }
+
+    fn extract_state(tracking: Tracking) -> Option<TrackerState> {
+        // Tracking::unwrap returns Vec<Option<TrackerState>>
+        match tracking.unwrap().as_slice() {
+            [Some(state)] => Some(state.clone()),
+            _ => None,
+        }
+    }
+
+    // --- NodeGather Tests ---
+
+    #[test]
+    fn test_gather_selective_access() {
+        let dep_idx = NodeIndex::new(1);
+        let node = NodeGather {
+            name: Cow::Borrowed("reader"),
+            dependencies: Many::<i32>::new(dep_idx),
+            _phantom: PhantomData::<()>,
+            callback: |_, tracker| {
+                let _ = tracker.get("file_a").ok();
+                Ok(())
+            },
+        };
+
+        let input_v1 = make_fine_output(vec![("file_a", 100, 1), ("file_b", 200, 1)]);
+        let (tracking, _) = node
+            .execute(&make_ctx(), &mut Store::new(), &[input_v1])
+            .unwrap();
+        let state = extract_state(tracking).expect("Should have tracking state");
+
+        // 1. Unread file changes -> Valid
+        let input_v2 = make_fine_output(vec![("file_a", 100, 1), ("file_b", 999, 2)]);
+        let updated_nodes: HashSet<_> = vec![dep_idx].into_iter().collect();
+        assert!(
+            node.is_valid(&[Some(state.clone())], &[input_v2], &updated_nodes),
+            "Should be valid if unread file changes"
+        );
+
+        // 2. Read file changes -> Invalid
+        let input_v3 = make_fine_output(vec![("file_a", 100, 2), ("file_b", 200, 1)]);
+        assert!(
+            !node.is_valid(&[Some(state)], &[input_v3], &updated_nodes),
+            "Should be invalid if read file changes"
+        );
+    }
+
+    #[test]
+    fn test_gather_iteration() {
+        let dep_idx = NodeIndex::new(1);
+        let node = NodeGather {
+            name: Cow::Borrowed("iter"),
+            dependencies: Many::<i32>::new(dep_idx),
+            _phantom: PhantomData::<()>,
+            callback: |_, tracker| {
+                for _ in tracker.iter() {}
+                Ok(())
+            },
+        };
+
+        let input_v1 = make_fine_output(vec![("a", 1, 1)]);
+        let (tracking, _) = node
+            .execute(&make_ctx(), &mut Store::new(), &[input_v1])
+            .unwrap();
+        let state = extract_state(tracking).unwrap();
+        let updated_nodes: HashSet<_> = vec![dep_idx].into_iter().collect();
+
+        // New file added -> Invalid
+        let input_v2 = make_fine_output(vec![("a", 1, 1), ("b", 2, 1)]);
+        assert!(
+            !node.is_valid(&[Some(state)], &[input_v2], &updated_nodes),
+            "Should be invalid if new file added"
+        );
+    }
+
+    #[test]
+    fn test_gather_globs() {
+        let dep_idx = NodeIndex::new(1);
+        let node = NodeGather {
+            name: Cow::Borrowed("glob"),
+            dependencies: Many::<i32>::new(dep_idx),
+            _phantom: PhantomData::<()>,
+            callback: |_, tracker| {
+                for _ in tracker.glob("*.txt").unwrap() {}
+                Ok(())
+            },
+        };
+
+        let input_v1 = make_fine_output(vec![("a.txt", 1, 1), ("b.png", 2, 1)]);
+        let (tracking, _) = node
+            .execute(&make_ctx(), &mut Store::new(), &[input_v1])
+            .unwrap();
+        let state = extract_state(tracking).unwrap();
+        let updated_nodes: HashSet<_> = vec![dep_idx].into_iter().collect();
+
+        // 1. Non-matching file changes -> Valid
+        let input_v2 = make_fine_output(vec![("a.txt", 1, 1), ("b.png", 99, 2)]);
+        assert!(
+            node.is_valid(&[Some(state.clone())], &[input_v2], &updated_nodes),
+            "Should be valid if non-matching file changes"
+        );
+
+        // 2. Matching file changes -> Invalid
+        let input_v3 = make_fine_output(vec![("a.txt", 1, 2), ("b.png", 2, 1)]);
+        assert!(
+            !node.is_valid(&[Some(state)], &[input_v3], &updated_nodes),
+            "Should be invalid if matching file changes"
+        );
+    }
+
+    #[test]
+    fn test_gather_coarse_dep() {
+        let dep_idx = NodeIndex::new(1);
+        let node = NodeGather {
+            name: Cow::Borrowed("coarse"),
+            dependencies: One::<i32>::new(dep_idx),
+            _phantom: PhantomData::<()>,
+            callback: |_, _| Ok(()),
+        };
+
+        let input = make_coarse_output(1);
+        let (tracking, _) = node
+            .execute(&make_ctx(), &mut Store::new(), std::slice::from_ref(&input))
+            .unwrap();
+        let state = extract_state(tracking); // Should be None for One dependency
+
+        let updated_nodes: HashSet<_> = vec![dep_idx].into_iter().collect();
+        // Upstream changed -> Invalid
+        assert!(
+            !node.is_valid(&[state], &[input], &updated_nodes),
+            "Should be invalid if upstream coarse node changed"
+        );
+    }
+
+    // --- NodeScatter Tests ---
+
+    #[test]
+    fn test_scatter_invalidation() {
+        let dep_idx = NodeIndex::new(1);
+        let node = NodeScatter {
+            name: Cow::Borrowed("scatter"),
+            dependencies: One::<i32>::new(dep_idx),
+            _phantom: PhantomData::<()>,
+            callback: |_, input| Ok(vec![("key".into(), *input)]),
+        };
+
+        let input = make_coarse_output(10);
+        let updated_nodes: HashSet<_> = vec![dep_idx].into_iter().collect();
+        // Always invalid if dependency updated
+        assert!(
+            !node.is_valid(&[], &[input], &updated_nodes),
+            "Scatter should be invalid if dependency changed"
+        );
+    }
+
+    // --- NodeMap Tests ---
+
+    #[test]
+    fn test_map_reuse() {
+        let prim_idx = NodeIndex::new(1);
+        let sec_idx = NodeIndex::new(2);
+
+        // NodeMap: Primary (Many<i32>) + Secondary (One<i32>)
+        // Callback adds secondary val to primary val
+        let node = NodeMap {
+            name: Cow::Borrowed("map"),
+            dep_primary: Many::<i32>::new(prim_idx),
+            dep_secondary: One::<i32>::new(sec_idx),
+            _phantom: PhantomData::<()>,
+            callback: |_, prim, sec| Ok(*prim + *sec),
+        };
+
+        let input_prim = make_fine_output(vec![("a", 10, 1), ("b", 20, 1)]);
+        let input_sec = make_coarse_output(5);
+        let inputs = vec![input_prim.clone(), input_sec.clone()];
+
+        // 1. First Execution
+        let out_v1 = node
+            .execute(
+                &make_ctx(),
+                &mut Store::new(),
+                &inputs,
+                None,
+                &HashSet::new(),
+            )
+            .unwrap();
+
+        let val_a = out_v1.map.get("a").unwrap().0;
+        assert_eq!(val_a, 15); // 10 + 5
+
+        // 2. Incremental Reuse: "a" unchanged, "b" changed
+        let input_prim_v2 = make_fine_output(vec![("a", 10, 1), ("b", 30, 2)]);
+        let inputs_v2 = vec![input_prim_v2, input_sec];
+
+        // We pass out_v1 as old_output
+        let old_dynamic: Dynamic = Arc::new(out_v1);
+        let out_v2 = node
+            .execute(
+                &make_ctx(),
+                &mut Store::new(),
+                &inputs_v2,
+                Some(&old_dynamic),
+                &HashSet::new(),
+            )
+            .unwrap();
+
+        assert!(!out_v2.dirty);
+        assert_eq!(out_v2.map.get("a").unwrap().0, 15);
+        assert_eq!(out_v2.map.get("b").unwrap().0, 35); // 30 + 5
+    }
+
+    #[test]
+    fn test_map_secondary_forced_dirty() {
+        let prim_idx = NodeIndex::new(1);
+        let sec_idx = NodeIndex::new(2);
+
+        let node = NodeMap {
+            name: Cow::Borrowed("map_dirty"),
+            dep_primary: Many::<i32>::new(prim_idx),
+            dep_secondary: One::<i32>::new(sec_idx),
+            _phantom: PhantomData::<()>,
+            callback: |_, prim, sec| Ok(*prim + *sec),
+        };
+
+        // Initial Run
+        let input_prim = make_fine_output(vec![("a", 10, 1)]);
+        let input_sec_v1 = make_coarse_output(5);
+        let inputs_v1 = vec![input_prim.clone(), input_sec_v1];
+
+        let out_v1 = node
+            .execute(
+                &make_ctx(),
+                &mut Store::new(),
+                &inputs_v1,
+                None,
+                &HashSet::new(),
+            )
+            .unwrap();
+        let old_dynamic: Dynamic = Arc::new(out_v1);
+
+        // Secondary dependency changes -> 10
+        let input_sec_v2 = make_coarse_output(10);
+        let inputs_v2 = vec![input_prim, input_sec_v2];
+        let updated_nodes: HashSet<_> = vec![sec_idx].into_iter().collect();
+
+        // 1. is_valid should return false because secondary updated
+        assert!(
+            !node.is_valid(&[], &[], &updated_nodes),
+            "NodeMap should be invalid if secondary dependency updated"
+        );
+
+        // 2. execute should force dirty and recompute EVERYTHING
+        let out_v2 = node
+            .execute(
+                &make_ctx(),
+                &mut Store::new(),
+                &inputs_v2,
+                Some(&old_dynamic),
+                &updated_nodes,
+            )
+            .unwrap();
+
+        assert!(
+            out_v2.dirty,
+            "Map should be marked dirty due to forced update"
+        );
+        assert_eq!(out_v2.map.get("a").unwrap().0, 20); // 10 + 10 (recomputed)
+    }
+}
