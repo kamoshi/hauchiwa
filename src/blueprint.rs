@@ -7,7 +7,7 @@ use petgraph::Graph;
 
 use crate::core::{Environment, Mode, Store};
 use crate::engine::{
-    Dependencies, Many, One, Task, TaskNodeCoarse, TaskNodeFine, TypedCoarse, TypedFine,
+    Dependencies, Many, NodeGather, NodeScatter, One, Task, TypedCoarse, TypedFine,
     run_once_parallel,
 };
 use crate::{Diagnostics, TaskContext};
@@ -163,7 +163,7 @@ impl<'a, G: Send + Sync + 'static> TaskDef<'a, G> {
         F: Fn(&TaskContext<'_, G>) -> anyhow::Result<R> + Send + Sync + 'static,
         R: Send + Sync + 'static,
     {
-        self.blueprint.add_task_coarse(TaskNodeCoarse {
+        self.blueprint.add_task_coarse(NodeGather {
             name: self.name.unwrap_or(type_name::<F>().into()),
             dependencies: (),
             callback: move |ctx, _| callback(ctx),
@@ -183,7 +183,7 @@ impl<'a, G: Send + Sync + 'static> TaskDef<'a, G> {
         // "Saibunka": We wrap the callback to adapt the signature, ignoring the empty dependencies.
         let callback_wrapper = move |ctx: &TaskContext<'_, G>, _: ()| callback(ctx);
 
-        self.blueprint.add_task_fine(TaskNodeFine {
+        self.blueprint.add_task_fine(NodeScatter {
             name: self.name.unwrap_or(type_name::<F>().into()),
             dependencies: (),
             callback: callback_wrapper,
@@ -255,7 +255,7 @@ where
             + 'static,
         R: Send + Sync + 'static,
     {
-        self.blueprint.add_task_coarse(TaskNodeCoarse {
+        self.blueprint.add_task_coarse(NodeGather {
             name: self.name.unwrap_or(type_name::<F>().into()),
             dependencies: self.dependencies,
             callback,
@@ -271,7 +271,7 @@ where
             + 'static,
         R: Send + Sync + std::hash::Hash + 'static,
     {
-        self.blueprint.add_task_fine(TaskNodeFine {
+        self.blueprint.add_task_fine(NodeScatter {
             name: self.name.unwrap_or(type_name::<F>().into()),
             dependencies: self.dependencies,
             callback,
