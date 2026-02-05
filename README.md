@@ -107,22 +107,17 @@ fn main() -> anyhow::Result<()> {
 
     // 4. Define a task to render pages
     // We declare that this task depends on `posts`.
-    config.task()
-        .depends_on(posts)
-        .run(|_, posts| {
-        let mut pages = Vec::new();
-
+    config
+        .task()
+        .each(posts)
         // Iterate over loaded posts
-        for post in posts.values() {
+        .map(|_, post, ()| {
             let html_content = format!("<h1>{}</h1>", post.matter.title);
             
             // Create a page structure
             // Output::html creates pretty URLs (e.g., /foo/index.html)
-            pages.push(Output::html(&post.meta.path, html_content));
-        }
-
-        Ok(pages)
-    });
+            Ok(Output::html(&post.meta.path, html_content))
+        });
 
     // 5. Build the website
     let mut website = config.finish();

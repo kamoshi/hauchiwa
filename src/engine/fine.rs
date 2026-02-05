@@ -92,6 +92,11 @@ where
             .downcast_ref::<Map<T>>()
             .expect("Type mismatch in validation");
 
+        if current.dirty {
+            tracing::debug!("Dependency forced dirty");
+            return false;
+        }
+
         // 1. Check specific accessed items (random access or iteration)
         for (key, old_prov) in &state.accessed {
             match current.map.get(key) {
@@ -205,6 +210,8 @@ pub(crate) trait TypedFine<G: Send + Sync = ()>: Send + Sync {
         context: &TaskContext<G>,
         runtime: &mut Store,
         dependencies: &[Dynamic],
+        old_output: Option<&Dynamic>,
+        updated_nodes: &HashSet<NodeIndex>,
     ) -> anyhow::Result<Map<Self::Output>>;
 
     fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
@@ -237,6 +244,8 @@ pub(crate) trait Fine<G: Send + Sync = ()>: Send + Sync {
         context: &TaskContext<G>,
         runtime: &mut Store,
         dependencies: &[Dynamic],
+        old_output: Option<&Dynamic>,
+        updated_nodes: &HashSet<NodeIndex>,
     ) -> anyhow::Result<Dynamic>;
 
     #[inline]
@@ -287,9 +296,18 @@ where
         context: &TaskContext<G>,
         runtime: &mut Store,
         dependencies: &[Dynamic],
+        old_output: Option<&Dynamic>,
+        updated_nodes: &HashSet<NodeIndex>,
     ) -> anyhow::Result<Dynamic> {
         // Call the typed method, then erase the result.
-        Ok(Arc::new(T::execute(self, context, runtime, dependencies)?))
+        Ok(Arc::new(T::execute(
+            self,
+            context,
+            runtime,
+            dependencies,
+            old_output,
+            updated_nodes,
+        )?))
     }
 
     fn is_dirty(&self, path: &camino::Utf8Path) -> bool {
@@ -326,7 +344,35 @@ mod tests {
             map.insert(k.into(), (v, Provenance(Hash32::default())));
         }
 
-        Arc::new(Map { map })
+        Arc::new(Map { map, dirty: false })
+    }
+
+    fn make_dirty_map(items: Vec<(&str, i32)>) -> Dynamic {
+        let mut map = BTreeMap::new();
+
+        for (k, v) in items {
+            map.insert(k.into(), (v, Provenance(Hash32::default())));
+        }
+
+        Arc::new(Map { map, dirty: true })
+    }
+
+    #[test]
+    fn test_forced_dirty() {
+        let handle = make_handle();
+        let mut accessed = std::collections::HashMap::new();
+        accessed.insert("a".into(), Provenance(Hash32::default()));
+
+        let state = TrackerState {
+            accessed,
+            ..Default::default()
+        };
+
+        // Even though provenance matches, forced_dirty should invalidate
+        let current = make_dirty_map(vec![("a", 1)]);
+        let updated: HashSet<NodeIndex> = vec![NodeIndex::new(0)].into_iter().collect();
+
+        assert!(!handle.is_valid(&Some(state), &current, &updated));
     }
 
     #[test]

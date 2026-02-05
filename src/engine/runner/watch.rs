@@ -89,7 +89,7 @@ pub fn watch<G: Send + Sync>(site: &mut Website<G>, data: G) -> anyhow::Result<(
     loop {
         match rx.recv() {
             Ok(Ok(events)) => {
-                tracing::info!("{:?} events received", events);
+                tracing::debug!("{:?} events received", events);
 
                 let mut dirty_nodes = HashSet::new();
                 for de in events {

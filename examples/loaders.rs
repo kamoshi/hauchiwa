@@ -85,10 +85,8 @@ fn main() -> anyhow::Result<()> {
     //
     // Inside the closure, these variables are "resolved". They are no longer
     // handles, but the actual data (Maps of file paths to content).
-    config
-        .task()
-        .depends_on((posts, styles, scripts, images))
-        .run(|_, (posts, styles, scripts, images)| {
+    config.task().using((posts, styles, scripts, images)).merge(
+        |_, (posts, styles, scripts, images)| {
             // Start building the HTML string.
             let mut html = String::from("<html><head>");
 
@@ -135,7 +133,8 @@ fn main() -> anyhow::Result<()> {
                 path: "index.html".into(),
                 data: OutputData::Utf8(html),
             })
-        });
+        },
+    );
 
     // -----------------------------------------------------------------------
     // 5. Execute the build

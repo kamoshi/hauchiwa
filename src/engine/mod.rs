@@ -13,7 +13,7 @@ use crate::core::{ArcStr, Dynamic, Hash32};
 
 pub(crate) use coarse::TypedCoarse;
 pub(crate) use fine::TypedFine;
-pub(crate) use node::{TaskNodeCoarse, TaskNodeFine};
+pub(crate) use node::{NodeGather, NodeMap, NodeScatter};
 #[cfg(feature = "live")]
 pub(crate) use runner::watch;
 pub(crate) use runner::{TaskExecution, run_once_parallel, run_tasks_parallel};
@@ -31,6 +31,8 @@ pub struct Provenance(pub(crate) Hash32);
 #[derive(Debug)]
 pub(crate) struct Map<T> {
     pub(crate) map: BTreeMap<ArcStr, (T, Provenance)>,
+    // force downstream rebuild
+    pub(crate) dirty: bool,
 }
 
 // Things that can be used as dependency Handle

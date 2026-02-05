@@ -1,16 +1,19 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::hash::Hash;
 use std::marker::PhantomData;
 
 use petgraph::graph::NodeIndex;
 
+use crate::Many;
 use crate::core::{Blake3Hasher, Dynamic, Store, TaskContext};
 use crate::engine::{
     Dependencies, Map, Provenance, TrackerState, Tracking, TypedCoarse, TypedFine,
 };
 
-pub(crate) struct TaskNodeCoarse<G, R, D, F>
+/// Squash dependencies into one output
+/// Dependencies -> One<R>
+pub(crate) struct NodeGather<G, R, D, F>
 where
     G: Send + Sync,
     R: Send + Sync + 'static,
@@ -23,7 +26,7 @@ where
     pub _phantom: PhantomData<G>,
 }
 
-impl<G, R, D, F> TypedCoarse<G> for TaskNodeCoarse<G, R, D, F>
+impl<G, R, D, F> TypedCoarse<G> for NodeGather<G, R, D, F>
 where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
@@ -66,10 +69,15 @@ where
     }
 }
 
-pub(crate) struct TaskNodeFine<G, R, D, F>
+/// Explode dependencies into multiple outputs
+/// Dependencies -> Many<R>
+///
+/// Constraints:
+/// - R must be Hash, because it will be used for tracking
+pub(crate) struct NodeScatter<G, R, D, F>
 where
     G: Send + Sync,
-    R: Send + Sync + Hash + 'static,
+    R: Send + Sync + std::hash::Hash + 'static,
     D: Dependencies,
     F: for<'a> Fn(&TaskContext<'a, G>, D::Output<'a>) -> anyhow::Result<Vec<(String, R)>>
         + Send
@@ -81,7 +89,7 @@ where
     pub _phantom: PhantomData<G>,
 }
 
-impl<G, R, D, F> TypedFine<G> for TaskNodeFine<G, R, D, F>
+impl<G, R, D, F> TypedFine<G> for NodeScatter<G, R, D, F>
 where
     G: Send + Sync + 'static,
     R: Send + Sync + Hash + 'static,
@@ -110,6 +118,8 @@ where
         context: &TaskContext<G>,
         _: &mut Store,
         dependencies: &[Dynamic],
+        _old_output: Option<&Dynamic>,
+        _updated_nodes: &HashSet<NodeIndex>,
     ) -> anyhow::Result<Map<Self::Output>> {
         let (_, inputs) = self.dependencies.resolve(dependencies);
 
@@ -129,6 +139,447 @@ where
             map.insert(key.into(), (item, provenance));
         }
 
-        Ok(Map { map })
+        Ok(Map { map, dirty: false })
+    }
+
+    fn is_valid(
+        &self,
+        _old_tracking: &[Option<TrackerState>],
+        _new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool {
+        for dep in self.dependencies.dependencies() {
+            if updated_nodes.contains(&dep) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Map each input to a single output, with additional (side) dependencies
+/// Many<T> -> Many<R>
+pub(crate) struct NodeMap<T, G, R, D, F>
+where
+    T: Send + Sync + 'static,
+    G: Send + Sync + 'static,
+    R: Send + Sync + Clone + 'static,
+    D: Dependencies,
+    F: for<'a> Fn(&TaskContext<'a, G>, &T, D::Output<'a>) -> anyhow::Result<R> + Send + Sync,
+{
+    pub name: Cow<'static, str>,
+    pub dep_primary: Many<T>,
+    pub dep_secondary: D,
+    pub callback: F,
+    pub _phantom: PhantomData<G>,
+}
+
+impl<T, G, R, D, F> TypedFine<G> for NodeMap<T, G, R, D, F>
+where
+    T: Send + Sync + 'static,
+    G: Send + Sync + 'static,
+    R: Send + Sync + Clone + 'static,
+    D: Dependencies + Send + Sync,
+    F: for<'a> Fn(&TaskContext<'a, G>, &T, D::Output<'a>) -> anyhow::Result<R> + Send + Sync,
+{
+    type Output = R;
+
+    fn get_name(&self) -> String {
+        self.name.to_string()
+    }
+
+    fn dependencies(&self) -> Vec<NodeIndex> {
+        let mut deps = Vec::new();
+        deps.extend(self.dep_primary.dependencies());
+        deps.extend(self.dep_secondary.dependencies());
+        deps
+    }
+
+    fn get_watched(&self) -> Vec<camino::Utf8PathBuf> {
+        vec![]
+    }
+
+    fn execute(
+        &self,
+        context: &TaskContext<G>,
+        _: &mut Store,
+        dependencies: &[Dynamic],
+        old_output: Option<&Dynamic>,
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> anyhow::Result<Map<Self::Output>> {
+        // We assume the first dependency is the primary Many<T>
+        let input_map = dependencies[0].downcast_ref::<Map<T>>().unwrap();
+
+        let mut forced_dirty = false;
+        for dep_idx in self.dep_secondary.dependencies() {
+            if updated_nodes.contains(&dep_idx) {
+                forced_dirty = true;
+                break;
+            }
+        }
+
+        let old_map = if !forced_dirty {
+            old_output.and_then(|d| d.downcast_ref::<Map<Self::Output>>())
+        } else {
+            None
+        };
+
+        let mut result_map = BTreeMap::new();
+        for (key, (input, provenance)) in &input_map.map {
+            // If not forced dirty, and we have old output, and provenance matches
+            if let Some(old_map) = old_map
+                && let Some((old_item, old_provenance)) = old_map.map.get(key)
+                && old_provenance == provenance
+            {
+                result_map.insert(key.clone(), (old_item.clone(), *provenance));
+            } else {
+                let (_, deps) = self.dep_secondary.resolve(&dependencies[1..]);
+                let output = (self.callback)(context, input, deps)?;
+                result_map.insert(key.clone(), (output, *provenance));
+            }
+        }
+
+        Ok(Map {
+            map: result_map,
+            dirty: forced_dirty,
+        })
+    }
+
+    fn is_valid(
+        &self,
+        _old_tracking: &[Option<TrackerState>],
+        _new_outputs: &[Dynamic],
+        updated_nodes: &HashSet<NodeIndex>,
+    ) -> bool {
+        for dep in self.dep_primary.dependencies() {
+            if updated_nodes.contains(&dep) {
+                return false;
+            }
+        }
+
+        for dep in self.dep_secondary.dependencies() {
+            if updated_nodes.contains(&dep) {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::Environment;
+    use crate::core::{Dynamic, Hash32, ImportMap, Store, TaskContext};
+    use crate::engine::{
+        Many, Map, One, Provenance, TrackerState, Tracking, TypedCoarse, TypedFine,
+    };
+
+    use std::collections::HashSet;
+    use std::marker::PhantomData;
+    use std::sync::Arc;
+
+    use petgraph::graph::NodeIndex;
+
+    const ENV: Environment = Environment {
+        generator: "test",
+        mode: crate::core::Mode::Build,
+        port: None,
+        data: (),
+    };
+
+    // --- Helpers ---
+
+    fn make_ctx() -> TaskContext<'static, ()> {
+        TaskContext {
+            env: &ENV,
+            importmap: Box::leak(Box::new(ImportMap::new())),
+            span: tracing::Span::none(),
+        }
+    }
+
+    fn make_coarse_output(val: i32) -> Dynamic {
+        Arc::new(val)
+    }
+
+    fn extract_state(tracking: Tracking) -> Option<TrackerState> {
+        // Tracking::unwrap returns Vec<Option<TrackerState>>
+        match tracking.unwrap().as_slice() {
+            [Some(state)] => Some(state.clone()),
+            _ => None,
+        }
+    }
+
+    macro_rules! map {
+        ( $( $key:expr => $val:expr, $hash:expr );* $(;)? ) => {{
+            let mut map = std::collections::BTreeMap::new();
+
+            $(
+                let val: i32 = $val;
+                let hash: u32 = $hash;
+                let hash = Hash32::hash(hash.to_ne_bytes());
+
+                map.insert(
+                    $key.into(),
+                    (val, Provenance(hash))
+                );
+            )*
+
+            std::sync::Arc::new(Map { map, dirty: false })
+        }};
+    }
+
+    // --- NodeGather Tests ---
+
+    #[test]
+    fn test_gather_selective_access() -> anyhow::Result<()> {
+        let dep_ref = NodeIndex::new(1);
+        let node = NodeGather {
+            name: "reader".into(),
+            dependencies: Many::<i32>::new(dep_ref),
+            _phantom: PhantomData::<()>,
+            callback: |_, tracker| {
+                let _ = tracker.get("file_a")?;
+                Ok(())
+            },
+        };
+
+        let updated = HashSet::from_iter([dep_ref]);
+
+        let input_1 = map! { "file_a" => 100, 1; "file_b" => 200, 1 };
+        let input_2 = map! { "file_a" => 100, 1; "file_b" => 999, 2 };
+        let input_3 = map! { "file_a" => 999, 2; "file_b" => 200, 1 };
+
+        let (tracking, _) = node.execute(&make_ctx(), &mut Store::new(), &[input_1])?;
+        let state = extract_state(tracking).unwrap();
+
+        // Unread dependency changed
+        let is_valid = node.is_valid(&[Some(state.clone())], &[input_2], &updated);
+        assert!(is_valid, "Should be valid if unread file changes");
+
+        // Read dependency changed
+        let is_not_valid = !node.is_valid(&[Some(state)], &[input_3], &updated);
+        assert!(is_not_valid, "Should be invalid if read file changes");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gather_iteration() -> anyhow::Result<()> {
+        let dep_ref = NodeIndex::new(1);
+        let node = NodeGather {
+            name: "iter".into(),
+            dependencies: Many::<i32>::new(dep_ref),
+            _phantom: PhantomData::<()>,
+            callback: |_, tracker| {
+                for _ in tracker {}
+                Ok(())
+            },
+        };
+
+        let updated = HashSet::from_iter([dep_ref]);
+
+        let input_1 = map! { "a" => 1, 1 };
+        let input_2 = map! { "a" => 1, 1; "b" => 2, 1 };
+
+        let (tracking, _) = node.execute(&make_ctx(), &mut Store::new(), &[input_1])?;
+        let state = extract_state(tracking).unwrap();
+
+        // New file added
+        // We previously iterated to the end so this would be included
+        let is_not_valid = !node.is_valid(&[Some(state)], &[input_2], &updated);
+        assert!(is_not_valid, "Should be invalid if new file added");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gather_globs() -> anyhow::Result<()> {
+        let dep_ref = NodeIndex::new(1);
+        let node = NodeGather {
+            name: "glob".into(),
+            dependencies: Many::<i32>::new(dep_ref),
+            _phantom: PhantomData::<()>,
+            callback: |_, tracker| {
+                for _ in tracker.glob("*.txt")? {}
+                Ok(())
+            },
+        };
+
+        let updated = HashSet::from_iter([dep_ref]);
+
+        let input_1 = map! { "a.txt" => 1, 1; "b.png" => 2, 1 };
+        let input_2 = map! { "a.txt" => 1, 1; "b.png" => 99, 2 };
+        let input_3 = map! { "a.txt" => 1, 2; "b.png" => 2, 1 };
+
+        let (tracking, _) = node.execute(&make_ctx(), &mut Store::new(), &[input_1])?;
+        let state = extract_state(tracking).unwrap();
+
+        // Non-matching file changes
+        let is_valid = node.is_valid(&[Some(state.clone())], &[input_2], &updated);
+        assert!(is_valid, "Should be valid if non-matching file changes");
+
+        // Matching file changes
+        let is_not_valid = !node.is_valid(&[Some(state)], &[input_3], &updated);
+        assert!(is_not_valid, "Should be invalid if matching file changes");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gather_coarse_dep() -> anyhow::Result<()> {
+        let dep_ref = NodeIndex::new(1);
+        let node = NodeGather {
+            name: "coarse".into(),
+            dependencies: One::<i32>::new(dep_ref),
+            _phantom: PhantomData::<()>,
+            callback: |_, _| Ok(()),
+        };
+
+        let updated = HashSet::from_iter([dep_ref]);
+
+        let input = make_coarse_output(1);
+        let input = std::slice::from_ref(&input);
+
+        let (tracking, _) = node.execute(&make_ctx(), &mut Store::new(), input)?;
+        let state = extract_state(tracking);
+
+        // Should be None for One dependency
+        assert!(state.is_none(), "Should be None for One<T> dependency");
+
+        // Upstream changed
+        let is_not_valid = !node.is_valid(&[state], input, &updated);
+        assert!(is_not_valid, "Should be invalid if coarse node changed");
+
+        Ok(())
+    }
+
+    // --- NodeScatter Tests ---
+
+    #[test]
+    fn test_scatter_invalidation() {
+        let dep_ref = NodeIndex::new(1);
+        let node = NodeScatter {
+            name: "scatter".into(),
+            dependencies: One::<i32>::new(dep_ref),
+            _phantom: PhantomData::<()>,
+            callback: |_, input| Ok(vec![("key".into(), *input)]),
+        };
+
+        let updated = HashSet::from_iter([dep_ref]);
+
+        let input = make_coarse_output(10);
+
+        // Always invalid if dependency updated
+        let is_not_invalid = !node.is_valid(&[], &[input], &updated);
+        assert!(is_not_invalid, "Scatter should be invalid if dep changed");
+    }
+
+    // --- NodeMap Tests ---
+
+    #[test]
+    fn test_map_reuse() -> anyhow::Result<()> {
+        let ref_1 = NodeIndex::new(1);
+        let ref_2 = NodeIndex::new(2);
+
+        // NodeMap: Primary (Many<i32>) + Secondary (One<i32>)
+        // Callback adds secondary val to primary val
+        let node = NodeMap {
+            name: "map".into(),
+            dep_primary: Many::<i32>::new(ref_1),
+            dep_secondary: One::<i32>::new(ref_2),
+            _phantom: PhantomData::<()>,
+            callback: |_, prim, sec| Ok(*prim + *sec),
+        };
+
+        let input_p = map! { "a" => 10, 1; "b" => 20, 1 };
+        let input_s = make_coarse_output(5);
+        let inputs = vec![input_p.clone(), input_s.clone()];
+
+        let out_1 = node.execute(
+            &make_ctx(),
+            &mut Store::new(),
+            &inputs,
+            None,
+            &HashSet::new(),
+        )?;
+
+        assert_eq!(out_1.map.get("a").unwrap().0, 15); // 10 + 5
+
+        // "a" unchanged, "b" changed
+        let input_p = map! { "a" => 10, 1; "b" => 30, 2 };
+        let inputs = vec![input_p, input_s];
+
+        // We pass out_1 as old_output
+        let old_dynamic: Dynamic = Arc::new(out_1);
+        let out_2 = node.execute(
+            &make_ctx(),
+            &mut Store::new(),
+            &inputs,
+            Some(&old_dynamic),
+            &HashSet::new(),
+        )?;
+
+        assert!(!out_2.dirty);
+        assert_eq!(out_2.map.get("a").unwrap().0, 15);
+        assert_eq!(out_2.map.get("b").unwrap().0, 35); // 30 + 5
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_secondary_forced_dirty() -> anyhow::Result<()> {
+        let ref_1 = NodeIndex::new(1);
+        let ref_2 = NodeIndex::new(2);
+
+        let node = NodeMap {
+            name: "map_dirty".into(),
+            dep_primary: Many::<i32>::new(ref_1),
+            dep_secondary: One::<i32>::new(ref_2),
+            _phantom: PhantomData::<()>,
+            callback: |_, prim, sec| Ok(*prim + *sec),
+        };
+
+        // Initial Run
+        let input_p = map! { "a" => 10, 1 };
+        let input_s = make_coarse_output(5);
+        let inputs = vec![input_p.clone(), input_s];
+
+        let out_1 = node.execute(
+            &make_ctx(),
+            &mut Store::new(),
+            &inputs,
+            None,
+            &HashSet::new(),
+        )?;
+
+        let old_dynamic: Dynamic = Arc::new(out_1);
+
+        // secondary dependency changes -> 10
+        let input_s = make_coarse_output(10);
+        let inputs = vec![input_p, input_s];
+
+        let updated = HashSet::from_iter([ref_2]);
+
+        // is_valid should return false because secondary updated
+        let is_not_valid = !node.is_valid(&[], &[], &updated);
+        assert!(is_not_valid, "Should be invalid if secondary dep updated");
+
+        // execute should force dirty and recompute EVERYTHING
+        let out_2 = node.execute(
+            &make_ctx(),
+            &mut Store::new(),
+            &inputs,
+            Some(&old_dynamic),
+            &updated,
+        )?;
+
+        let is_dirty = out_2.dirty;
+        assert!(is_dirty, "Map should be marked dirty due to forced update");
+        assert_eq!(out_2.map.get("a").unwrap().0, 20); // 10 + 10 (recomputed)
+
+        Ok(())
     }
 }

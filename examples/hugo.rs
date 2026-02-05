@@ -79,8 +79,8 @@ fn main() -> anyhow::Result<()> {
     // correct layout, and generates the final output.
     config
         .task()
-        .depends_on((content, css))
-        .run(|_, (content, css)| {
+        .using((content, css))
+        .merge(|_, (content, css)| {
             let mut outputs = Vec::new();
 
             // Resolve the hashed filename of the CSS (e.g., "main.a1b2c3.css")

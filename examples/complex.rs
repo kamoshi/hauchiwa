@@ -56,7 +56,7 @@ fn main() -> anyhow::Result<()> {
     // This task acts as a bridge. It consumes `posts` to calculate statistics.
     // Crucially, it returns `Taxonomy`, NOT `Output`. This means it does not
     // write a file to disk; it only passes data in memory to the next tasks.
-    let taxonomy = config.task().depends_on(posts).run(|_, posts| {
+    let taxonomy = config.task().using(posts).merge(|_, posts| {
         let mut tags = HashMap::new();
 
         for post in posts {
@@ -79,8 +79,8 @@ fn main() -> anyhow::Result<()> {
     // 2. `taxonomy` (to look up how popular the tags on this page are)
     config
         .task()
-        .depends_on((posts, taxonomy))
-        .run(|_, (posts, taxonomy)| {
+        .using((posts, taxonomy))
+        .merge(|_, (posts, taxonomy)| {
             let mut pages = Vec::new();
 
             for post in posts {
@@ -119,8 +119,8 @@ fn main() -> anyhow::Result<()> {
     // the taxonomy is only calculated once.
     config
         .task()
-        .depends_on((posts, taxonomy))
-        .run(|_, (posts, taxonomy)| {
+        .using((posts, taxonomy))
+        .merge(|_, (posts, taxonomy)| {
             let mut xml =
                 String::from(r#"<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">"#);
 

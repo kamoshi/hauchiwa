@@ -38,7 +38,8 @@ pub mod pagefind;
 #[cfg(feature = "sitemap")]
 pub mod sitemap;
 
-use std::{collections::BTreeMap, fs};
+use std::collections::{BTreeMap, HashSet};
+use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use glob::{Pattern, glob};
@@ -146,6 +147,8 @@ where
         context: &TaskContext<G>,
         runtime: &mut Store,
         _: &[Dynamic],
+        _: Option<&Dynamic>,
+        _: &HashSet<NodeIndex>,
     ) -> anyhow::Result<Map<Self::Output>> {
         let mut paths = Vec::new();
         for glob_entry in &self.glob_entry {
@@ -184,7 +187,7 @@ where
             runtime.imports.merge(imports);
         }
 
-        Ok(Map { map })
+        Ok(Map { map, dirty: false })
     }
 
     fn is_dirty(&self, path: &Utf8Path) -> bool {
@@ -273,6 +276,8 @@ where
         context: &TaskContext<G>,
         runtime: &mut Store,
         _: &[Dynamic],
+        _: Option<&Dynamic>,
+        _: &HashSet<NodeIndex>,
     ) -> anyhow::Result<Map<Self::Output>> {
         let mut paths = Vec::new();
         for glob_entry in &self.glob_entry {
@@ -311,7 +316,7 @@ where
             runtime.imports.merge(imports);
         }
 
-        Ok(Map { map })
+        Ok(Map { map, dirty: false })
     }
 
     fn is_dirty(&self, path: &Utf8Path) -> bool {
