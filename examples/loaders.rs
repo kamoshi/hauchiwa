@@ -73,7 +73,7 @@ fn main() -> anyhow::Result<()> {
     let images = config
         .load_images()
         .format(hauchiwa::loader::image::ImageFormat::WebP)
-        .source("examples/assets/images/*.ppm")
+        .glob("examples/assets/images/*.ppm")
         .register()?;
 
     // -----------------------------------------------------------------------

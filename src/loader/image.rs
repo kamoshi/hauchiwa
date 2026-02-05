@@ -155,7 +155,7 @@ where
     }
 
     /// Adds a glob pattern to find images.
-    pub fn source(mut self, glob: impl Into<String>) -> Self {
+    pub fn glob(mut self, glob: impl Into<String>) -> Self {
         self.globs.push(glob.into());
         self
     }
