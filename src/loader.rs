@@ -48,7 +48,7 @@ use petgraph::graph::NodeIndex;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::core::{Dynamic, Hash32, Store, TaskContext};
-use crate::engine::{Map, Provenance, TypedFine};
+use crate::engine::{Map, Provenance, Tracking, TypedFine};
 use crate::error::HauchiwaError;
 
 /// A raw file read from the filesystem.
@@ -149,7 +149,7 @@ where
         _: &[Dynamic],
         _: Option<&Dynamic>,
         _: &HashSet<NodeIndex>,
-    ) -> anyhow::Result<Map<Self::Output>> {
+    ) -> anyhow::Result<(Tracking, Map<Self::Output>)> {
         let mut paths = Vec::new();
         for glob_entry in &self.glob_entry {
             for path in glob(glob_entry)? {
@@ -187,7 +187,7 @@ where
             runtime.imports.merge(imports);
         }
 
-        Ok(Map { map, dirty: false })
+        Ok((Tracking::default(), Map { map, dirty: false }))
     }
 
     fn is_dirty(&self, path: &Utf8Path) -> bool {
@@ -278,7 +278,7 @@ where
         _: &[Dynamic],
         _: Option<&Dynamic>,
         _: &HashSet<NodeIndex>,
-    ) -> anyhow::Result<Map<Self::Output>> {
+    ) -> anyhow::Result<(Tracking, Map<Self::Output>)> {
         let mut paths = Vec::new();
         for glob_entry in &self.glob_entry {
             for path in glob(glob_entry)? {
@@ -316,7 +316,7 @@ where
             runtime.imports.merge(imports);
         }
 
-        Ok(Map { map, dirty: false })
+        Ok((Tracking::default(), Map { map, dirty: false }))
     }
 
     fn is_dirty(&self, path: &Utf8Path) -> bool {

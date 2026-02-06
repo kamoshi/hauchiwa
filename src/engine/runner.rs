@@ -220,12 +220,13 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
                                 old_output.as_ref(),
                                 &updated_nodes,
                             )
-                            .map(|output| {
+                            .map(|(tracking, output)| {
+                                let tracking = tracking.unwrap();
                                 let mut imports = importmap.clone();
                                 imports.merge(rt.imports);
                                 NodeData {
                                     output,
-                                    tracking: vec![], // TODO
+                                    tracking,
                                     importmap: imports,
                                 }
                             })

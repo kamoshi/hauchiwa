@@ -27,7 +27,7 @@
 //! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<Many<Image>> {
 //!     // Process images
 //!     let images = config.load_images()
-//!         .source("assets/photos/**/*.jpg")
+//!         .glob("assets/photos/**/*.jpg")
 //!         // Generate AVIF for modern browsers (smaller, better quality)
 //!         .format(ImageFormat::Avif(Quality::Lossy(75)))
 //!         // Generate WebP as a solid fallback
@@ -204,7 +204,7 @@ where
     /// ```rust,no_run
     /// # let mut config = hauchiwa::Blueprint::<()>::new();
     /// config.load_images()
-    ///     .source("assets/images/*.jpg")
+    ///     .glob("assets/images/*.jpg")
     ///     .format(hauchiwa::loader::image::ImageFormat::WebP)
     ///     .register()?;
     /// # Ok::<(), anyhow::Error>(())

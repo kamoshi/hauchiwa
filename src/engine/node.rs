@@ -120,8 +120,8 @@ where
         dependencies: &[Dynamic],
         _old_output: Option<&Dynamic>,
         _updated_nodes: &HashSet<NodeIndex>,
-    ) -> anyhow::Result<Map<Self::Output>> {
-        let (_, inputs) = self.dependencies.resolve(dependencies);
+    ) -> anyhow::Result<(Tracking, Map<Self::Output>)> {
+        let (tracking, inputs) = self.dependencies.resolve(dependencies);
 
         let items = (self.callback)(context, inputs)?;
 
@@ -139,21 +139,17 @@ where
             map.insert(key.into(), (item, provenance));
         }
 
-        Ok(Map { map, dirty: false })
+        Ok((tracking, Map { map, dirty: false }))
     }
 
     fn is_valid(
         &self,
-        _old_tracking: &[Option<TrackerState>],
-        _new_outputs: &[Dynamic],
+        old_tracking: &[Option<TrackerState>],
+        new_outputs: &[Dynamic],
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool {
-        for dep in self.dependencies.dependencies() {
-            if updated_nodes.contains(&dep) {
-                return false;
-            }
-        }
-        true
+        self.dependencies
+            .is_valid(old_tracking, new_outputs, updated_nodes)
     }
 }
 
@@ -206,7 +202,7 @@ where
         dependencies: &[Dynamic],
         old_output: Option<&Dynamic>,
         updated_nodes: &HashSet<NodeIndex>,
-    ) -> anyhow::Result<Map<Self::Output>> {
+    ) -> anyhow::Result<(Tracking, Map<Self::Output>)> {
         // We assume the first dependency is the primary Many<T>
         let input_map = dependencies[0].downcast_ref::<Map<T>>().unwrap();
 
@@ -239,10 +235,13 @@ where
             }
         }
 
-        Ok(Map {
-            map: result_map,
-            dirty: forced_dirty,
-        })
+        Ok((
+            Tracking::default(),
+            Map {
+                map: result_map,
+                dirty: forced_dirty,
+            },
+        ))
     }
 
     fn is_valid(
@@ -473,8 +472,48 @@ mod tests {
         let input = make_coarse_output(10);
 
         // Always invalid if dependency updated
-        let is_not_invalid = !node.is_valid(&[], &[input], &updated);
+        let is_not_invalid = !node.is_valid(&[None], &[input], &updated);
         assert!(is_not_invalid, "Scatter should be invalid if dep changed");
+    }
+
+    #[test]
+    fn test_scatter_fine_invalidation() -> anyhow::Result<()> {
+        let dep_ref = NodeIndex::new(1);
+        let node = NodeScatter {
+            name: "scatter".into(),
+            dependencies: Many::<i32>::new(dep_ref),
+            _phantom: PhantomData::<()>,
+            callback: |_, tracker| {
+                // Access only "a"
+                let val = tracker.get("a")?;
+                Ok(vec![("key".into(), *val)])
+            },
+        };
+
+        let updated = HashSet::from_iter([dep_ref]);
+
+        let input_1 = map! { "a" => 1, 1; "b" => 2, 1 };
+        let input_2 = map! { "a" => 1, 1; "b" => 99, 2 }; // Unread "b" changed
+        let input_3 = map! { "a" => 2, 2; "b" => 2, 1 }; // Read "a" changed
+
+        let (tracking, _) = node.execute(
+            &make_ctx(),
+            &mut Store::new(),
+            &[input_1],
+            None,
+            &HashSet::new(),
+        )?;
+        let state = extract_state(tracking).unwrap();
+
+        // Valid if unread changed
+        let is_valid = node.is_valid(&[Some(state.clone())], &[input_2], &updated);
+        assert!(is_valid, "Scatter should be valid if unread dep changed");
+
+        // Invalid if read changed
+        let is_not_valid = !node.is_valid(&[Some(state)], &[input_3], &updated);
+        assert!(is_not_valid, "Scatter should be invalid if read dep changed");
+
+        Ok(())
     }
 
     // --- NodeMap Tests ---
@@ -498,7 +537,7 @@ mod tests {
         let input_s = make_coarse_output(5);
         let inputs = vec![input_p.clone(), input_s.clone()];
 
-        let out_1 = node.execute(
+        let (_, out_1) = node.execute(
             &make_ctx(),
             &mut Store::new(),
             &inputs,
@@ -514,7 +553,7 @@ mod tests {
 
         // We pass out_1 as old_output
         let old_dynamic: Dynamic = Arc::new(out_1);
-        let out_2 = node.execute(
+        let (_, out_2) = node.execute(
             &make_ctx(),
             &mut Store::new(),
             &inputs,
@@ -547,7 +586,7 @@ mod tests {
         let input_s = make_coarse_output(5);
         let inputs = vec![input_p.clone(), input_s];
 
-        let out_1 = node.execute(
+        let (_, out_1) = node.execute(
             &make_ctx(),
             &mut Store::new(),
             &inputs,
@@ -568,7 +607,7 @@ mod tests {
         assert!(is_not_valid, "Should be invalid if secondary dep updated");
 
         // execute should force dirty and recompute EVERYTHING
-        let out_2 = node.execute(
+        let (_, out_2) = node.execute(
             &make_ctx(),
             &mut Store::new(),
             &inputs,

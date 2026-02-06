@@ -6,7 +6,7 @@ use petgraph::graph::NodeIndex;
 
 use crate::core::{Dynamic, Store, TaskContext};
 use crate::engine::Map;
-use crate::engine::tracking::{Tracker, TrackerPtr, TrackerState};
+use crate::engine::tracking::{Tracker, TrackerPtr, TrackerState, Tracking};
 
 /// A "fine" type-safe reference to a task in the build graph.
 ///
@@ -212,7 +212,7 @@ pub(crate) trait TypedFine<G: Send + Sync = ()>: Send + Sync {
         dependencies: &[Dynamic],
         old_output: Option<&Dynamic>,
         updated_nodes: &HashSet<NodeIndex>,
-    ) -> anyhow::Result<Map<Self::Output>>;
+    ) -> anyhow::Result<(Tracking, Map<Self::Output>)>;
 
     fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
         false
@@ -246,7 +246,7 @@ pub(crate) trait Fine<G: Send + Sync = ()>: Send + Sync {
         dependencies: &[Dynamic],
         old_output: Option<&Dynamic>,
         updated_nodes: &HashSet<NodeIndex>,
-    ) -> anyhow::Result<Dynamic>;
+    ) -> anyhow::Result<(Tracking, Dynamic)>;
 
     #[inline]
     fn is_dirty(&self, _: &camino::Utf8Path) -> bool {
@@ -298,16 +298,18 @@ where
         dependencies: &[Dynamic],
         old_output: Option<&Dynamic>,
         updated_nodes: &HashSet<NodeIndex>,
-    ) -> anyhow::Result<Dynamic> {
+    ) -> anyhow::Result<(Tracking, Dynamic)> {
         // Call the typed method, then erase the result.
-        Ok(Arc::new(T::execute(
+        let (tracking, output) = T::execute(
             self,
             context,
             runtime,
             dependencies,
             old_output,
             updated_nodes,
-        )?))
+        )?;
+
+        Ok((tracking, Arc::new(output)))
     }
 
     fn is_dirty(&self, path: &camino::Utf8Path) -> bool {
