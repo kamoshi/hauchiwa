@@ -43,7 +43,7 @@ Hauchiwa strictly types these handles to ensure your graph is valid:
 
 ### Wiring dependencies
 
-You use `.depends_on()` to connect tasks. This is where the magic happens. The
+You use `.using()` to connect tasks. This is where the magic happens. The
 type system ensures that the data produced by the upstream task matches what the
 downstream task expects.
 
@@ -52,8 +52,8 @@ downstream task expects.
 let pages = config.load_documents::<Frontmatter>().source("*.md").register()?;
 
 config.task()
-    .depends_on(pages) // We pass the handle here
-    .run(|ctx, pages| {
+    .using(pages) // We pass the handle here
+    .merge(|ctx, pages| {
         // 'pages' is now resolved to the actual data (Tracker<Document>)
         Ok(())
     });

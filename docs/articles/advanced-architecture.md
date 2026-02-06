@@ -1,6 +1,6 @@
 ---
 title: Advanced architecture
-order: 5
+order: 6
 ---
 
 # Advanced architecture

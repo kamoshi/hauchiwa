@@ -1,9 +1,9 @@
 ---
-title: The asset pipeline
-order: 4
+title: Asset pipeline
+order: 5
 ---
 
-# The asset pipeline
+# Asset pipeline
 
 Hauchiwa comes batteries-included with a powerful asset pipeline. It treats
 assets as first-class citizens in the graph.
@@ -72,7 +72,7 @@ let counters = config.load_svelte::<CounterProps>()
     .register()?;
 
 // 2. Render in Task
-config.task().depends_on(counters).run(|ctx, counters| {
+config.task().using(counters).merge(|ctx, counters| {
     let component = counters.get("components/Counter.svelte").unwrap();
     
     // Render static HTML
@@ -88,7 +88,7 @@ config.task().depends_on(counters).run(|ctx, counters| {
 
 Hauchiwa automatically generates an Import Map, resolving bare specifiers like
 `"svelte"` or to their correct, hashed locations in the final build. It just
-needs to be included in your the HTML `<head>`.
+needs to be included in your HTML `<head>`.
 
 ## Search
 

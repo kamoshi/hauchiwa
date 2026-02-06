@@ -55,8 +55,8 @@ fn main() -> anyhow::Result<()> {
 
     // 4. Define a Task (Processing)
     config.task()
-        .depends_on(pages)
-        .run(|_ctx, pages| {
+        .using(pages)
+        .merge(|_ctx, pages| {
             // "pages" is a Tracker containing all your markdown files
             for (_path, doc) in pages {
                 hauchiwa::tracing::info!("Found page: {}", doc.matter.title);
