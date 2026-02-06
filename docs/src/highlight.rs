@@ -117,13 +117,22 @@ macro_rules! language {
 
 // The configuration map, strictly for Rust
 static CONFIGS: LazyLock<HashMap<&'static str, HighlightConfiguration>> = LazyLock::new(|| {
-    HashMap::from([language!(
-        "rust",
-        tree_sitter_rust::LANGUAGE,
-        tree_sitter_rust::HIGHLIGHTS_QUERY,
-        tree_sitter_rust::INJECTIONS_QUERY,
-        "",
-    )])
+    HashMap::from([
+        language!(
+            "rust",
+            tree_sitter_rust::LANGUAGE,
+            tree_sitter_rust::HIGHLIGHTS_QUERY,
+            tree_sitter_rust::INJECTIONS_QUERY,
+            "",
+        ),
+        language!(
+            "toml",
+            tree_sitter_toml_ng::LANGUAGE,
+            tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        ),
+    ])
 });
 
 pub fn get_config(name: &str) -> Option<&'static HighlightConfiguration> {

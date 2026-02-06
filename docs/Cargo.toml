@@ -16,6 +16,7 @@ camino = "1.2"
 tree-sitter = "0.26"
 tree-sitter-highlight = "0.26"
 tree-sitter-rust = "0.24"
+tree-sitter-toml-ng = "0.7"
 
 [dependencies.hauchiwa]
 path = ".."
