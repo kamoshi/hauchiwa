@@ -19,55 +19,6 @@ If you are tired of:
 
 Then Hauchiwa is for you.
 
-## Key Features
-
-* **Graph-based**: Define your build as a graph where tasks are wired together
-  using strictly typed handles rather than rigid file paths. This structure
-  automatically resolves complex dependencies, ensuring shared ancestor tasks
-  execute exactly once before efficiently distributing their results.
-* **Incremental**: The engine identifies the specific task responsible for a
-  changed file and marks only its dependent subgraph as "dirty". By re-executing
-  only this precise chain of tasks, the system avoids wasteful full rebuilds and
-  delivers near-instant updates.
-* **Parallel**: A threaded execution engine schedules tasks to run on a thread
-  pool the moment their dependencies are resolved. This saturates your CPU cores
-  automatically, processing heavy assets and content concurrently without manual
-  async orchestration.
-* **Type-safe**: Dependencies are passed as generic tokens, allowing the Rust
-  compiler to enforce that a producer's output type perfectly matches a
-  consumer's input. Advanced static verification prevents broken builds by
-  catching data flow errors at compile time rather than runtime.
-* **Asset pipeline**: Built-in support for:
-  * **[Images](crate::loader::image)**: Automatically generates multi-format
-    sources (WebP, AVIF) with content-addressed hashing for immutable caching
-    via the `image` crate.
-  * **[CSS/Sass](crate::loader::css)**: Integrates `grass` to compile and
-    minify stylesheets, outputting hashed CSS bundles that are ready for
-    aggressive browser caching.
-  * **[JavaScript](crate::loader::js)**: Bundling and minification via `esbuild`.
-  * **[Svelte](crate::loader::svelte)**: Orchestrates Deno to compile components
-    into separate SSR and hydration scripts, automatically propagating import
-    maps for seamless client-side interactivity.
-  * **[Search](crate::loader::pagefind)**: Static search indexing via `pagefind`.
-  * **[Sitemap](crate::loader::sitemap)**: Sitemap generation via `sitemap-rs`.
-  
-## Core Concepts
-
-- **[Blueprint](crate::Blueprint)**: The blueprint of your site. You use this to
-  register tasks and loaders.
-- **Task**: A single unit of work. Tasks can depend on other
-  tasks.
-  - **Coarse-grained**: Tasks that produce a single output.
-  - **Fine-grained**: Tasks that produce multiple outputs.
-- **Handle**: A reference to the future result of a task. You pass these to
-  other tasks to define dependencies.
-  - **[One](crate::One)**: A handle to a single (coarse-grained) output.
-  - **[Many](crate::Many)**: A handle to multiple (fine-grained) outputs.
-- **[Loader](crate::loader)**: A kind of a task that reads data from the
-  filesystem (e.g., markdown files, images).
-- **[Website](crate::Website)**: The engine that converts the graph defined in
-  `Blueprint` into a proper static website.
-
 ## Quick Start
 
 Add `hauchiwa` to your `Cargo.toml`:
@@ -104,17 +55,26 @@ fn main() -> anyhow::Result<()> {
     let posts = config.load_documents::<Post>()
         .source("content/**/*.md")
         .register()?;
+    
+    let css = config.load_css()
+        .entry("styles/**/*.scss")
+        .register()?;
 
     // 4. Define a task to render pages
     // We declare that this task depends on `posts`.
     config
         .task()
         .each(posts)
+        .using(css)
         // Iterate over loaded posts
-        .map(|_, post, ()| {
+        .map(|_, post, css| {
+            // retrieve css bundle
+            let css = css.get("styles/main.scss")?;
+            
+            // format html
             let html_content = format!("<h1>{}</h1>", post.matter.title);
             
-            // Create a page structure
+            // create a page structure
             // Output::html creates pretty URLs (e.g., /foo/index.html)
             Ok(Output::html(&post.meta.path, html_content))
         });
@@ -127,18 +87,50 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-## Feature flags
+## Key Features
 
-By default, Hauchiwa is built with the following features, but you can opt out
-of them by disabling them in your `Cargo.toml` file, if you don't need them.
+* **Graph-based**: Define your build as a graph where tasks are wired together
+  using strictly typed handles rather than rigid file paths. This structure
+  automatically resolves complex dependencies, ensuring shared ancestor tasks
+  execute exactly once before efficiently distributing their results.
+* **Incremental**: The engine identifies the specific task responsible for a
+  changed file and marks only its dependent subgraph as "dirty". By re-executing
+  only this precise chain of tasks, the system avoids wasteful full rebuilds and
+  delivers near-instant updates.
+* **Parallel**: A threaded execution engine schedules tasks to run on a thread
+  pool the moment their dependencies are resolved. This saturates your CPU cores
+  automatically, processing heavy assets and content concurrently without manual
+  async orchestration.
+* **Type-safe**: Dependencies are passed as generic tokens, allowing the Rust
+  compiler to enforce that the output type perfectly matches the input type.
+* **Asset pipeline**: Built-in support for:
+  * **[Images](crate::loader::image)**: Automatically generates multi-format
+    sources (WebP, AVIF) via the `image` crate.
+  * **[CSS/Sass](crate::loader::css)**: Integrates `grass` to compile and
+    minify stylesheets, outputting CSS bundles.
+  * **[JavaScript](crate::loader::js)**: Bundling and minification via `esbuild`.
+  * **[Svelte](crate::loader::svelte)**: Orchestrates Deno to compile components
+    into separate SSR and hydration scripts, automatically propagating import
+    maps for seamless client-side interactivity.
+  * **[Search](crate::loader::pagefind)**: Static search indexing via `pagefind`.
+  * **[Sitemap](crate::loader::sitemap)**: Sitemap generation via `sitemap-rs`.
+  
+## Core Concepts
 
-- `grass`: Enables SCSS/Sass compilation.
-- `image`: Enables image optimization (WebP, resizing).
-- `tokio`: Enables the Tokio runtime for async tasks.
-- `live`: Enables live-reload during development.
-- `server`: Enables the built-in development server.
-- `pagefind`: Enables static search indexing.
-- `sitemap`: Enables `sitemap.xml` generation.
+- **[Blueprint](crate::Blueprint)**: The blueprint of your site. You use this to
+  register tasks and loaders.
+- **Task**: A single unit of work. Tasks can depend on other
+  tasks.
+  - **Coarse-grained**: Tasks that produce a single output.
+  - **Fine-grained**: Tasks that produce multiple outputs.
+- **Handle**: A reference to the future result of a task. You pass these to
+  other tasks to define dependencies.
+  - **[One](crate::One)**: A handle to a single (coarse-grained) output.
+  - **[Many](crate::Many)**: A handle to multiple (fine-grained) outputs.
+- **[Loader](crate::loader)**: A kind of a task that reads data from the
+  filesystem (e.g., markdown files, images).
+- **[Website](crate::Website)**: The engine that converts the graph defined in
+  `Blueprint` into a proper static website.
 
 ## Documentation
 
@@ -154,6 +146,19 @@ Some examples are available in the `examples/` directory.
 In addition, there are also some real-world examples:
 - [hauchiwa.kamoshi.org](https://github.com/kamoshi/hauchiwa/tree/main/docs)
 - [kamoshi.org](https://github.com/kamoshi/kamoshi.org)
+
+## Feature flags
+
+By default, Hauchiwa is built with the following features, but you can opt out
+of them by disabling them in your `Cargo.toml` file, if you don't need them.
+
+- `grass`: Enables SCSS/Sass compilation.
+- `image`: Enables image optimization (WebP, resizing).
+- `tokio`: Enables the Tokio runtime for async tasks.
+- `live`: Enables live-reload during development.
+- `server`: Enables the built-in development server.
+- `pagefind`: Enables static search indexing.
+- `sitemap`: Enables `sitemap.xml` generation.
 
 ## License
 

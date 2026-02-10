@@ -15,7 +15,27 @@ folder layout (`_posts`, `layouts`, etc.), Hauchiwa gives you a set of building
 blocks to construct your own build pipeline. You write a Rust binary that
 defines exactly how your site is built.
 
-### The core philosophy: "task graph"
+
+## Why use this over X
+
+If you are looking for a static site generator, you have likely encountered
+**Zola**, **Hugo**, or **Jekyll**. These are excellent tools, but they share a
+common philosophy: **Configuration over Code**.
+
+Hauchiwa takes the opposite approach: **Code over Configuration**.
+
+In tools like Zola, you build your site by editing a `config.toml` file. This is
+great for standard blogs, but it falls apart when you have custom needs.
+
+Hauchiwa is not a CLI tool, it is a **Rust library**. You write a standard Rust
+program (`main.rs`) that defines your build pipeline. Because your configuration
+is just Rust code, you can do anything Rust can do.
+* Need to fetch data from the GitHub API? Just call `reqwest`.
+* Need to read from a Postgres DB? Just use `sqlx`.
+* Need to generate pages from a CSV file? Just use `csv`.
+
+
+## The core philosophy: "task graph"
 
 At the heart of Hauchiwa is the **task graph**. Instead of implicitly guessing
 relationships between files, Hauchiwa requires you to map dependencies
@@ -28,8 +48,6 @@ explicitly using a Directed Acyclic Graph (DAG).
 This explicit mapping allows Hauchiwa to understand exactly how data flows
 through your build process.
 
-## Why "graph-based"?
-
 By defining your build as a graph, you unlock two massive benefits:
 
 1. **Massive parallelism**: Since the dependencies are known upfront, Hauchiwa
@@ -41,6 +59,7 @@ By defining your build as a graph, you unlock two massive benefits:
    subgraph. It only rebuilds the tasks that depend on that specific change. If
    you change a CSS file, we don't re-render your HTML unless you explicitly
    wired them together.
+
 
 ## Audience
 

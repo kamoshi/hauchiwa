@@ -4,7 +4,6 @@ use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Instant;
 
-use camino::Utf8Path;
 use console::Style;
 use indicatif::ProgressStyle;
 use tracing::{Level, info, span};
@@ -73,13 +72,17 @@ pub fn clear_dist() -> Result<(), StepClearError> {
 }
 
 pub fn clone_static() -> Result<(), StepCopyStatic> {
+    if fs::metadata("public").is_err() {
+        fs::create_dir_all("public")?;
+    }
+
     let span = span!(Level::INFO, "copy_static", indicatif.pb_show = true);
     span.pb_set_message("Copying static files...");
     span.pb_set_style(&PROGRESS_STYLE);
     let _enter = span.enter();
 
     let s = Instant::now();
-    copy_rec(Utf8Path::new("public"), Utf8Path::new("dist"), &span)?;
+    copy_rec("public", "dist", &span)?;
 
     // We can just log the finish message, the span exit handles the bar cleanup/persistence depending on config
     // But typically we want to update the message one last time.

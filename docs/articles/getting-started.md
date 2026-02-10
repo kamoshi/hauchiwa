@@ -28,16 +28,17 @@ serde = { version = "1.0", features = ["derive"] }
 
 ## Quick start
 
-This minimal example sets up a graph that reads Markdown files and "renders"
-them (prints to log).
+This minimal example sets up a pipeline that reads Markdown files and converts
+them into HTML files.
 
 Open `src/main.rs` and paste the following:
 
 ```rust
-use hauchiwa::Blueprint;
+use hauchiwa::{Blueprint, Output};
 use serde::Deserialize;
 
 // 1. Define your Frontmatter
+// This matches the YAML at the top of your markdown files.
 #[derive(Clone, Deserialize, Debug)]
 struct Frontmatter {
     title: String,
@@ -48,24 +49,33 @@ fn main() -> anyhow::Result<()> {
     let mut config = Blueprint::<()>::new();
 
     // 3. Register a Loader (Input)
-    // This scans for .md files in the "content" directory
+    // This scans for .md files in the "content" directory.
+    // 'pages' is a Handle representing all future markdown files.
     let pages = config.load_documents::<Frontmatter>()
         .source("content/*.md")
         .register()?;
 
     // 4. Define a Task (Processing)
+    // We use .each().map() to process files one by one.
+    // This ensures that if you edit one file, only that file is rebuilt.
     config.task()
-        .using(pages)
-        .merge(|_ctx, pages| {
-            // "pages" is a Tracker containing all your markdown files
-            for (_path, doc) in pages {
-                hauchiwa::tracing::info!("Found page: {}", doc.matter.title);
-                // In a real site, you would render HTML here
-            }
-            Ok(())
+        .each(pages)
+        .map(|_ctx, doc, ()| {
+            // 'doc' is the single document being processed.
+            // We create a simple HTML string (in real apps, use a template engine).
+            let html = format!(
+                "<h1>{}</h1>\n{}", 
+                doc.matter.title, 
+                doc.content
+            );
+
+            // 5. Return Output
+            // We tell Hauchiwa to write this string to a file.
+            // .meta.path automatically handles clean URLs (e.g., /about/index.html).
+            Ok(Output::html(&doc.meta.path, html))
         });
 
-    // 5. Run the Website
+    // 6. Run the Website
     config.finish().build(())?;
 
     Ok(())
@@ -93,9 +103,12 @@ Now run your generator:
 cargo run
 ```
 
+See the result: Check the newly created `dist/` directory. You will see `dist/index.html`.
+
 You should see:
-```text
-Found page: Hello Hauchiwa
+```html
+<h1>Hello World</h1>
+This is my first **Hauchiwa** site.
 ```
 
 Congratulations! You have just built your first static site generator.
