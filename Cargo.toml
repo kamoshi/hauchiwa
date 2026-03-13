@@ -1,6 +1,6 @@
 [package]
 name        = "hauchiwa"
-version     = "0.14.0"
+version     = "0.15.0"
 edition     = "2024"
 authors     = ["Maciej Jur <maciej@kamoshi.org>"]
 keywords    = ["ssg"]
@@ -18,6 +18,7 @@ live        = ["dep:notify", "dep:notify-debouncer-full", "dep:tungstenite"]
 server      = ["tokio", "dep:axum", "dep:tower-http"]
 pagefind    = ["tokio", "dep:pagefind"]
 sitemap     = ["dep:sitemap-rs"]
+# rolldown    = ["dep:rolldown"]
 
 [dependencies]
 camino                  = "1.2"
@@ -53,6 +54,12 @@ features = ["random"]
 [dependencies.image]
 version = "0.25"
 optional = true
+
+# Feature = "rolldown"
+# [dependencies.rolldown]
+# git = "https://github.com/rolldown/rolldown"
+# rev = "edb8f69"
+# optional = true
 
 # Feature = "sitemap"
 [dependencies.sitemap-rs]

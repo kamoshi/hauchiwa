@@ -62,7 +62,7 @@ fn main() -> anyhow::Result<()> {
     // This uses `esbuild` (which must be installed in your environment) to
     // bundle modules starting from `main.js`.
     let scripts = config
-        .load_js()
+        .load_esbuild()
         .entry("examples/assets/scripts/main.ts")
         .watch("examples/assets/scripts/**/*.ts")
         .register()?;

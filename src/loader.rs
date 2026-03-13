@@ -22,8 +22,10 @@ pub mod css;
 #[cfg(feature = "grass")]
 pub use css::Stylesheet;
 
-pub mod js;
-pub use js::Script;
+#[cfg(feature = "rolldown")]
+pub mod rolldown;
+
+pub mod esbuild;
 
 pub mod svelte;
 pub use svelte::Svelte;
@@ -50,6 +52,13 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use crate::core::{Dynamic, Hash32, Store, TaskContext};
 use crate::engine::{Map, Provenance, Tracking, TypedFine};
 use crate::error::HauchiwaError;
+
+/// Represents a compiled JavaScript module.
+#[derive(Clone)]
+pub struct Script {
+    /// The path to the compiled JavaScript file (e.g., hashed path).
+    pub path: Utf8PathBuf,
+}
 
 /// A raw file read from the filesystem.
 ///

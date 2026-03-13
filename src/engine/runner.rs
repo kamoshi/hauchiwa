@@ -212,8 +212,8 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
                                 }
                             },
                         ),
-                        Task::F(task) => {
-                            task.execute(
+                        Task::F(task) => task
+                            .execute(
                                 &context,
                                 &mut rt,
                                 &dependencies,
@@ -229,8 +229,7 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
                                     tracking,
                                     importmap: imports,
                                 }
-                            })
-                        }
+                            }),
                     }
                 })) {
                     Ok(result) => result,

@@ -1,13 +1,11 @@
 //! # JavaScript/TypeScript bundling pipeline
 //!
-//! Blazingly fast compilation and bundling using [esbuild](https://esbuild.github.io/).
+//! Blazingly fast compilation and bundling natively in Rust using [Rolldown](https://rolldown.rs/).
 //!
-//! This module acts as a bridge to `esbuild`, allowing you to treat JavaScript
+//! This module integrates the `rolldown` crate, allowing you to treat JavaScript
 //! and TypeScript files as first-class citizens in your build graph. It
 //! automatically handles transpilation, dependency resolution, minification,
-//! and content-hashing.
-//!
-//! **Note**: Requires the `esbuild` binary to be available in your system PATH.
+//! and content-hashing natively without requiring external binaries on the system PATH.
 //!
 //! ## Capabilities
 //!
@@ -26,7 +24,7 @@
 //!
 //! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<Many<Script>> {
 //!     // Compile main.ts -> dist/hash/js/main.[hash].js
-//!     let app = config.load_js()
+//!     let app = config.load_rolldown()
 //!         .entry("src/client/main.ts")
 //!         .watch("src/client/**/*.ts") // Rebuild when any client file changes
 //!         .bundle(true)
@@ -36,9 +34,9 @@
 //!     Ok(app)
 //! }
 //! ```
-use std::process::{Command, Stdio};
 
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8Path;
+use rolldown::{BundlerOptions, CodeSplittingMode, InputItem, RawMinifyOptions};
 use thiserror::Error;
 
 use crate::core::Hash32;
@@ -47,28 +45,21 @@ use crate::{Blueprint, engine::Many, error::HauchiwaError, loader::GlobBundle};
 /// Errors that can occur when compiling JavaScript files.
 #[derive(Debug, Error)]
 pub enum ScriptError {
-    /// An I/O error occurred during process execution.
+    /// An I/O error occurred during processing.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// The Esbuild process returned a non-zero exit code.
-    #[error("Esbuild execution failed: {0}")]
-    Esbuild(String),
+    /// The Rolldown compilation failed.
+    #[error("Rolldown execution failed: {0}")]
+    Rolldown(String),
 
-    /// Failed to parse Esbuild output as UTF-8.
+    /// Failed to parse output as UTF-8.
     #[error("UTF-8 conversion error: {0}")]
     Utf8(#[from] std::string::FromUtf8Error),
 
     /// An internal build error (e.g., failed to store the artifact).
     #[error("Build error: {0}")]
     Build(#[from] crate::error::BuildError),
-}
-
-/// Represents a compiled JavaScript module.
-#[derive(Clone)]
-pub struct Script {
-    /// The path to the compiled JavaScript file (e.g., hashed path).
-    pub path: Utf8PathBuf,
 }
 
 /// A builder for configuring the Script loader task.
@@ -87,7 +78,7 @@ impl<'a, G> ScriptLoader<'a, G>
 where
     G: Send + Sync + 'static,
 {
-    fn new(blueprint: &'a mut Blueprint<G>) -> Self {
+    pub(crate) fn new(blueprint: &'a mut Blueprint<G>) -> Self {
         Self {
             blueprint,
             entry_globs: Vec::new(),
@@ -124,7 +115,7 @@ where
     }
 
     /// Registers the task with the Blueprint.
-    pub fn register(self) -> Result<Many<Script>, HauchiwaError> {
+    pub fn register(self) -> Result<Many<super::Script>, HauchiwaError> {
         let watch_globs = if self.watch_globs.is_empty() {
             self.entry_globs.clone()
         } else {
@@ -135,11 +126,11 @@ where
         let minify = self.minify;
 
         let task = GlobBundle::new(self.entry_globs, watch_globs, move |_, store, input| {
-            let data = compile_esbuild(&input.path, bundle, minify)?;
+            let data = compile_rolldown(&input.path, bundle, minify)?;
             let hash = Hash32::hash(&data);
             let path = store.save(&data, "js").map_err(ScriptError::Build)?;
 
-            Ok((hash, input.path, Script { path }))
+            Ok((hash, input.path, super::Script { path }))
         })?;
 
         Ok(self.blueprint.add_task_fine(task))
@@ -150,9 +141,7 @@ impl<G> Blueprint<G>
 where
     G: Send + Sync + 'static,
 {
-    /// Starts configuring a JavaScript loader task.
-    ///
-    /// This loader uses `esbuild` to compile, bundle, and minify JavaScript/TypeScript files.
+    /// Starts configuring a JavaScript loader task using Rolldown.
     ///
     /// # Example
     ///
@@ -166,31 +155,42 @@ where
     ///     .register()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn load_js(&mut self) -> ScriptLoader<'_, G> {
+    pub fn load_rolldown(&mut self) -> ScriptLoader<'_, G> {
         ScriptLoader::new(self)
     }
 }
 
-fn compile_esbuild(file: &Utf8Path, bundle: bool, minify: bool) -> Result<Vec<u8>, ScriptError> {
-    let mut cmd = Command::new("esbuild");
-    cmd.arg(file.as_str()).arg("--format=esm");
+fn compile_rolldown(file: &Utf8Path, _bundle: bool, minify: bool) -> Result<Vec<u8>, ScriptError> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
 
-    if bundle {
-        cmd.arg("--bundle");
-    }
+    rt.block_on(async {
+        let options = BundlerOptions {
+            // Define the entry point for the bundler
+            input: Some(vec![InputItem {
+                name: Some(file.to_string()),
+                import: file.to_string(),
+            }]),
+            minify: Some(RawMinifyOptions::Bool(minify)),
+            code_splitting: Some(CodeSplittingMode::Bool(false)),
 
-    if minify {
-        cmd.arg("--minify");
-    }
+            ..Default::default()
+        };
 
-    let output = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .output()?;
+        // Create the bundler and generate the output
+        let mut bundler =
+            rolldown::Bundler::new(options).map_err(|e| ScriptError::Rolldown(e.to_string()))?;
+        let output = bundler
+            .generate()
+            .await
+            .map_err(|e| ScriptError::Rolldown(e.to_string()))?;
 
-    if !output.status.success() {
-        return Err(ScriptError::Esbuild(String::from_utf8(output.stdout)?));
-    }
+        // Extract the bundled JavaScript code from the generated assets
+        if let Some(chunk) = output.assets.into_iter().next() {
+            return Ok(chunk.content_as_bytes().to_vec());
+        }
 
-    Ok(output.stdout)
+        Err(ScriptError::Rolldown("No output chunks generated".into()))
+    })
 }
