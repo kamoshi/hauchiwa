@@ -18,7 +18,7 @@ live        = ["dep:notify", "dep:notify-debouncer-full", "dep:tungstenite"]
 server      = ["tokio", "dep:axum", "dep:tower-http"]
 pagefind    = ["tokio", "dep:pagefind"]
 sitemap     = ["dep:sitemap-rs"]
-# rolldown    = ["dep:rolldown"]
+rolldown    = ["dep:rolldown"]
 
 [dependencies]
 camino                  = "1.2"
@@ -56,10 +56,10 @@ version = "0.25"
 optional = true
 
 # Feature = "rolldown"
-# [dependencies.rolldown]
-# git = "https://github.com/rolldown/rolldown"
-# rev = "edb8f69"
-# optional = true
+[dependencies.rolldown]
+git = "https://github.com/rolldown/rolldown"
+rev = "edb8f69"
+optional = true
 
 # Feature = "sitemap"
 [dependencies.sitemap-rs]
