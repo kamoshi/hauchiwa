@@ -25,6 +25,11 @@ pub use css::Stylesheet;
 #[cfg(feature = "rolldown")]
 pub mod rolldown;
 
+#[cfg(feature = "minijinja")]
+pub mod jinja;
+#[cfg(feature = "minijinja")]
+pub use jinja::TemplateEnv;
+
 pub mod esbuild;
 
 pub mod svelte;

@@ -249,9 +249,7 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
                 let elapsed = start_time.elapsed();
 
                 // Send result back to main thread
-                sender
-                    .send((index, output, start_time, elapsed, true))
-                    .unwrap();
+                let _ = sender.send((index, output, start_time, elapsed, true));
             });
         };
 

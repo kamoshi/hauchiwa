@@ -19,6 +19,7 @@ server      = ["tokio", "dep:axum", "dep:tower-http"]
 pagefind    = ["tokio", "dep:pagefind"]
 sitemap     = ["dep:sitemap-rs"]
 rolldown    = ["dep:rolldown"]
+minijinja   = ["dep:minijinja"]
 
 [dependencies]
 camino                  = "1.2"
@@ -103,3 +104,8 @@ version = "0.6"
 optional = true
 default-features = false
 features = ["fs"]
+
+# Feature = "minijinja"
+[dependencies.minijinja]
+version = "2"
+optional = true
