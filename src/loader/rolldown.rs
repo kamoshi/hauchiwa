@@ -20,7 +20,7 @@
 //!
 //! ```rust,no_run
 //! use hauchiwa::{Blueprint, Many};
-//! use hauchiwa::loader::js::Script;
+//! use hauchiwa::loader::Script;
 //!
 //! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<Many<Script>> {
 //!     // Compile main.ts -> dist/hash/js/main.[hash].js
@@ -147,7 +147,7 @@ where
     ///
     /// ```rust,no_run
     /// # let mut config = hauchiwa::Blueprint::<()>::new();
-    /// config.load_js()
+    /// config.load_rolldown()
     ///     .entry("scripts/main.ts")
     ///     .watch("scripts/**/*.ts")
     ///     .bundle(true)

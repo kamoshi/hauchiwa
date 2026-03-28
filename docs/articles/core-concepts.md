@@ -67,8 +67,9 @@ Graph. They ingest files and turn them into typed data structures.
 Common loaders include:
 * `load_documents`: For Markdown with Frontmatter.
 * `load_css`: For SCSS/CSS.
-* `load_js`: For TypeScript/JavaScript.
-* `load_image`: For optimizing images.
+* `load_esbuild`: For TypeScript/JavaScript bundling.
+* `load_images`: For optimizing images.
+* `load_minijinja`: For Jinja2-style templates (requires `minijinja` feature).
 
 ## Output
 

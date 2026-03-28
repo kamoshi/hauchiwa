@@ -18,7 +18,9 @@ pub use camino;
 pub use gitscan as git;
 
 #[cfg(feature = "minijinja")]
-pub use minijinja::context;
+pub mod minijinja {
+    pub use ::minijinja::context;
+}
 
 pub use crate::blueprint::{Blueprint, Website};
 pub use crate::core::{Environment, FileMetadata, ImportMap, Mode, Store, TaskContext};

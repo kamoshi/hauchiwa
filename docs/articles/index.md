@@ -63,4 +63,12 @@ By defining your build as a graph, you unlock two massive benefits:
 
 ## Audience
 
-Hauchiwa is for you!
+Hauchiwa is for Rust developers who want full control over their build pipeline.
+It is a good fit if you:
+
+* Have custom content sources that don't fit a standard file-based SSG.
+* Need repeatable, incremental builds without a heavyweight framework.
+* Are comfortable writing Rust and prefer code over configuration files.
+
+It is probably **not** the right tool if you want a ready-made blog engine with
+zero Rust experience, consider Zola or Hugo for that.

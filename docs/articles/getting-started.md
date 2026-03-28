@@ -88,7 +88,7 @@ Create a dummy content file to test it:
 
 ```bash
 mkdir content
-echo '---\ntitle: Hello Hauchiwa\n---\n# Content' > content/index.md
+printf -- '---\ntitle: Hello Hauchiwa\n---\n# Content\n' > content/index.md
 ```
 
 You also need a `public` directory for static assets (even if empty):
@@ -107,8 +107,8 @@ See the result: Check the newly created `dist/` directory. You will see `dist/in
 
 You should see:
 ```html
-<h1>Hello World</h1>
-This is my first **Hauchiwa** site.
+<h1>Hello Hauchiwa</h1>
+# Content
 ```
 
 Congratulations! You have just built your first static site generator.

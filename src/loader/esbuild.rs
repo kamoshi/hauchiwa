@@ -22,11 +22,11 @@
 //!
 //! ```rust,no_run
 //! use hauchiwa::{Blueprint, Many};
-//! use hauchiwa::loader::js::Script;
+//! use hauchiwa::loader::Script;
 //!
 //! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<Many<Script>> {
 //!     // Compile main.ts -> dist/hash/js/main.[hash].js
-//!     let app = config.load_js()
+//!     let app = config.load_esbuild()
 //!         .entry("src/client/main.ts")
 //!         .watch("src/client/**/*.ts") // Rebuild when any client file changes
 //!         .bundle(true)
@@ -151,7 +151,7 @@ where
     ///
     /// ```rust,no_run
     /// # let mut config = hauchiwa::Blueprint::<()>::new();
-    /// config.load_js()
+    /// config.load_esbuild()
     ///     .entry("scripts/main.ts")
     ///     .watch("scripts/**/*.ts")
     ///     .bundle(true)

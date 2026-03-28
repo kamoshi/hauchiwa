@@ -10,7 +10,7 @@ repository  = "https://github.com/kamoshi/hauchiwa"
 homepage    = "https://hauchiwa.kamoshi.org"
 
 [features]
-default     = ["grass", "image", "tokio", "live", "server", "pagefind", "sitemap"]
+default     = ["grass", "image", "tokio", "live", "server"]
 grass       = ["dep:grass"]
 image       = ["dep:image"]
 tokio       = ["dep:tokio"]
@@ -18,7 +18,7 @@ live        = ["dep:notify", "dep:notify-debouncer-full", "dep:tungstenite"]
 server      = ["tokio", "dep:axum", "dep:tower-http"]
 pagefind    = ["tokio", "dep:pagefind"]
 sitemap     = ["dep:sitemap-rs"]
-rolldown    = ["dep:rolldown"]
+rolldown    = []  # dep disabled until rolldown is published to crates.io
 minijinja   = ["dep:minijinja"]
 
 [dependencies]
@@ -56,11 +56,11 @@ features = ["random"]
 version = "0.25"
 optional = true
 
-# Feature = "rolldown"
-[dependencies.rolldown]
-git = "https://github.com/rolldown/rolldown"
-rev = "edb8f69"
-optional = true
+# Feature = "rolldown" (disabled: not yet published on crates.io)
+# [dependencies.rolldown]
+# git = "https://github.com/rolldown/rolldown"
+# rev = "edb8f69"
+# optional = true
 
 # Feature = "sitemap"
 [dependencies.sitemap-rs]

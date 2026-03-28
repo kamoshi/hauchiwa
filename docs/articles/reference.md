@@ -1,6 +1,6 @@
 ---
 title: Reference
-order: 6
+order: 8
 ---
 
 # Reference
@@ -19,7 +19,7 @@ To keep your build times low, you can disable features you don't need in `Cargo.
 
 ```toml
 [dependencies]
-hauchiwa = { version = "0.12.0", default-features = false, features = ["grass"] }
+hauchiwa = { version = "0.15.0", default-features = false, features = ["grass"] }
 ```
 
 ### Available Features
@@ -31,5 +31,6 @@ hauchiwa = { version = "0.12.0", default-features = false, features = ["grass"] 
 | `tokio`    | Yes     | Enables async runtime support (required for `server` and `pagefind`). |
 | `live`     | Yes     | Enables live reload functionality (WebSocket + File Watching). |
 | `server`   | Yes     | Enables the development http server (`axum`). |
-| `pagefind` | Yes     | Enables static search indexing via `pagefind`. |
-| `sitemap`  | Yes     | Enables sitemap generation via `sitemap-rs`. |
+| `pagefind` | No      | Enables static search indexing via `pagefind`. |
+| `sitemap`  | No      | Enables sitemap generation via `sitemap-rs`. |
+| `minijinja` | No     | Enables Jinja2-style template loading via `minijinja`. |

@@ -34,7 +34,7 @@ serde = { version = "1", features = ["derive"] }
 Create your generator in `src/main.rs`:
 
 ```rust,no_run
-use hauchiwa::{Blueprint, Website, Output};
+use hauchiwa::{Blueprint, Output};
 use serde::Deserialize;
 
 
@@ -68,13 +68,15 @@ fn main() -> anyhow::Result<()> {
         .using(css)
         // Iterate over loaded posts
         .map(|_, post, css| {
-            // retrieve css bundle
+            // retrieve css bundle path
             let css = css.get("styles/main.scss")?;
-            
+
             // format html
-            let html_content = format!("<h1>{}</h1>", post.matter.title);
-            
-            // create a page structure
+            let html_content = format!(
+                "<link rel=\"stylesheet\" href=\"/{}\"><h1>{}</h1>",
+                css.path, post.matter.title
+            );
+
             // Output::html creates pretty URLs (e.g., /foo/index.html)
             Ok(Output::html(&post.meta.path, html_content))
         });
@@ -104,33 +106,25 @@ fn main() -> anyhow::Result<()> {
 * **Type-safe**: Dependencies are passed as generic tokens, allowing the Rust
   compiler to enforce that the output type perfectly matches the input type.
 * **Asset pipeline**: Built-in support for:
-  * **[Images](crate::loader::image)**: Automatically generates multi-format
-    sources (WebP, AVIF) via the `image` crate.
-  * **[CSS/Sass](crate::loader::css)**: Integrates `grass` to compile and
-    minify stylesheets, outputting CSS bundles.
-  * **[JavaScript](crate::loader::js)**: Bundling and minification via `esbuild`.
-  * **[Svelte](crate::loader::svelte)**: Orchestrates Deno to compile components
-    into separate SSR and hydration scripts, automatically propagating import
-    maps for seamless client-side interactivity.
-  * **[Search](crate::loader::pagefind)**: Static search indexing via `pagefind`.
-  * **[Sitemap](crate::loader::sitemap)**: Sitemap generation via `sitemap-rs`.
+  * **Images**: Automatically generates multi-format sources (WebP, AVIF) via the `image` crate.
+  * **CSS/Sass**: Integrates `grass` to compile and minify stylesheets, outputting CSS bundles.
+  * **JavaScript**: Bundling and minification via `esbuild`.
+  * **Svelte**: Orchestrates Deno to compile components into separate SSR and hydration scripts,
+    automatically propagating import maps for seamless client-side interactivity.
+  * **Search**: Static search indexing via `pagefind`.
+  * **Sitemap**: Sitemap generation via `sitemap-rs`.
   
 ## Core Concepts
 
-- **[Blueprint](crate::Blueprint)**: The blueprint of your site. You use this to
-  register tasks and loaders.
-- **Task**: A single unit of work. Tasks can depend on other
-  tasks.
+- **Blueprint**: The blueprint of your site. You use this to register tasks and loaders.
+- **Task**: A single unit of work. Tasks can depend on other tasks.
   - **Coarse-grained**: Tasks that produce a single output.
   - **Fine-grained**: Tasks that produce multiple outputs.
-- **Handle**: A reference to the future result of a task. You pass these to
-  other tasks to define dependencies.
-  - **[One](crate::One)**: A handle to a single (coarse-grained) output.
-  - **[Many](crate::Many)**: A handle to multiple (fine-grained) outputs.
-- **[Loader](crate::loader)**: A kind of a task that reads data from the
-  filesystem (e.g., markdown files, images).
-- **[Website](crate::Website)**: The engine that converts the graph defined in
-  `Blueprint` into a proper static website.
+- **Handle**: A reference to the future result of a task. You pass these to other tasks to define dependencies.
+  - **One**: A handle to a single (coarse-grained) output.
+  - **Many**: A handle to multiple (fine-grained) outputs.
+- **Loader**: A kind of a task that reads data from the filesystem (e.g., markdown files, images).
+- **Website**: The engine that converts the graph defined in `Blueprint` into a proper static website.
 
 ## Documentation
 
@@ -149,16 +143,19 @@ In addition, there are also some real-world examples:
 
 ## Feature flags
 
-By default, Hauchiwa is built with the following features, but you can opt out
-of them by disabling them in your `Cargo.toml` file, if you don't need them.
+Default features (opt out if not needed):
 
 - `grass`: Enables SCSS/Sass compilation.
 - `image`: Enables image optimization (WebP, resizing).
 - `tokio`: Enables the Tokio runtime for async tasks.
 - `live`: Enables live-reload during development.
 - `server`: Enables the built-in development server.
+
+Opt-in features:
+
 - `pagefind`: Enables static search indexing.
 - `sitemap`: Enables `sitemap.xml` generation.
+- `minijinja`: Enables Jinja2-style template loading.
 
 ## License
 

@@ -1,6 +1,6 @@
 ---
 title: Advanced architecture
-order: 6
+order: 7
 ---
 
 # Advanced architecture
@@ -63,15 +63,14 @@ A loader is simply a task that:
 Here is a simplified example of a JSON loader:
 
 ```rust
-// The 'source' method creates a loader task.
-// The closure handles the file reading and parsing logic.
+// .glob().map() scans the filesystem and runs the closure for each matched file.
 let data_handle: Many<MyData> = config
     .task()
-    .source("data/*.json")
-    .run(|_ctx, _store, input| {
+    .glob("data/*.json")
+    .map(|_ctx, _store, input| {
         // 1. Read the file content
         let content = input.read()?;
-        
+
         // 2. Deserialize the JSON
         let data: MyData = serde_json::from_slice(&content)
             .map_err(|e| anyhow::anyhow!("Failed to parse {}: {}", input.path, e))?;

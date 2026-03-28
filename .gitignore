@@ -1,12 +1,36 @@
-# build output
-dist/
+# Ignore everything
+*
 
-# environment variables
-.env
-.env.production
+# This file
+!.gitignore
 
-# macOS-specific files
-.DS_Store
+# Zed config
+!.zed/
+!.zed/**
 
-# Rust
-target/
+# Root
+!README.md
+!DESIGN.md
+!CHANGELOG.md
+!LICENSE
+
+# Cargo
+!Cargo.lock
+!Cargo.toml
+
+# Source
+!src/
+!src/**
+
+# Examples
+!examples/
+!examples/**
+
+# Docs
+!docs/
+!docs/**
+!docs/.gitignore
+
+# Except docs build output
+docs/dist/
+docs/target/

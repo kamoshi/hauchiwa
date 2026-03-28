@@ -14,9 +14,9 @@ Hauchiwa can automatically resize and convert images to modern formats.
 
 ```rust
 // Returns Many<Image>
-let images = config.load_image()
-    .entry("assets/images/*.jpg")
-    .entry("assets/images/*.png")
+let images = config.load_images()
+    .glob("assets/images/*.jpg")
+    .glob("assets/images/*.png")
     .format(ImageFormat::WebP)
     .register()?;
 ```
@@ -43,7 +43,7 @@ Hauchiwa hashes the output filename (e.g., `a1b2c3d4e5f6.css`) for perfect long-
 Hauchiwa uses `esbuild` for blazingly fast bundling. It supports TypeScript out of the box.
 
 ```rust
-let js = config.load_js()
+let js = config.load_esbuild()
     .entry("src/client.ts")
     .bundle(true)
     .minify(true)
@@ -90,13 +90,38 @@ Hauchiwa automatically generates an Import Map, resolving bare specifiers like
 `"svelte"` or to their correct, hashed locations in the final build. It just
 needs to be included in your HTML `<head>`.
 
+## Templates (Minijinja)
+
+Enable the `minijinja` feature to load Jinja2-style templates as a coarse-grained dependency in your graph.
+
+```toml
+hauchiwa = { version = "*", features = ["minijinja"] }
+```
+
+```rust
+use hauchiwa::loader::TemplateEnv;
+
+// Returns One<TemplateEnv>
+let templates = config.load_minijinja()
+    .entry("templates/**/*.html")
+    .register()?;
+
+config.task().using(templates).merge(|ctx, env| {
+    let tmpl = env.get_template("base.html")?;
+    let html = tmpl.render(hauchiwa::minijinja::context! { title => "Hello" })?;
+    Ok(vec![Output::html("index", html)])
+});
+```
+
+Any change to a watched template file causes the loader to re-execute and all dependent tasks to re-run.
+
 ## Search
 
 Hauchiwa integrates with `pagefind` to generate static search indexes.
 
 ```rust
-config.load_pagefind()
+config.use_pagefind()
     .index(pages_a) // One<Vec<Page>>
     .index(pages_b) // One<Vec<Page>>
-    .register()?;
+    .register();
 ```
