@@ -34,10 +34,13 @@ impl TemplateEnv {
     }
 }
 
+type FilterFn = Box<dyn Fn(&mut minijinja::Environment<'static>) + Send + Sync>;
+
 pub(crate) struct GlobJinja {
     glob_entry: Vec<String>,
     glob_watch: Vec<Pattern>,
     offset: Option<String>,
+    filters: Vec<FilterFn>,
 }
 
 impl GlobJinja {
@@ -45,6 +48,7 @@ impl GlobJinja {
         glob_entry: Vec<String>,
         glob_watch: Vec<String>,
         offset: Option<String>,
+        filters: Vec<FilterFn>,
     ) -> Result<Self, HauchiwaError> {
         Ok(Self {
             glob_entry,
@@ -53,6 +57,7 @@ impl GlobJinja {
                 .map(|p| Pattern::new(p))
                 .collect::<Result<_, _>>()?,
             offset,
+            filters,
         })
     }
 }
@@ -101,6 +106,10 @@ where
             }
         }
 
+        for filter in &self.filters {
+            filter(&mut env);
+        }
+
         Ok((Tracking::default(), TemplateEnv(env)))
     }
 
@@ -108,12 +117,7 @@ where
         self.glob_watch.iter().any(|p| p.matches(path.as_str()))
     }
 
-    fn is_valid(
-        &self,
-        _: &[Option<TrackerState>],
-        _: &[Dynamic],
-        _: &HashSet<NodeIndex>,
-    ) -> bool {
+    fn is_valid(&self, _: &[Option<TrackerState>], _: &[Dynamic], _: &HashSet<NodeIndex>) -> bool {
         // No upstream dependencies — always valid unless explicitly dirtied by a file change.
         true
     }
@@ -127,6 +131,7 @@ where
     blueprint: &'a mut Blueprint<G>,
     globs: Vec<String>,
     root: Option<String>,
+    filters: Vec<FilterFn>,
 }
 
 impl<'a, G> JinjaLoader<'a, G>
@@ -138,6 +143,7 @@ where
             blueprint,
             globs: Vec::new(),
             root: None,
+            filters: Vec::new(),
         }
     }
 
@@ -157,9 +163,23 @@ where
         self
     }
 
+    /// Register a custom filter with the minijinja environment.
+    pub fn filter<N, F, Rv, Args>(mut self, name: N, f: F) -> Self
+    where
+        N: Into<String>,
+        F: minijinja::filters::Filter<Rv, Args> + Send + Sync + Clone + 'static,
+        Rv: minijinja::value::FunctionResult,
+        Args: for<'b> minijinja::value::FunctionArgs<'b>,
+    {
+        let name = name.into();
+        self.filters
+            .push(Box::new(move |env| env.add_filter(name.clone(), f.clone())));
+        self
+    }
+
     /// Register the task with the blueprint.
     pub fn register(self) -> Result<crate::One<TemplateEnv>, HauchiwaError> {
-        let task = GlobJinja::new(self.globs.clone(), self.globs, self.root)?;
+        let task = GlobJinja::new(self.globs.clone(), self.globs, self.root, self.filters)?;
         Ok(self.blueprint.add_task_coarse(task))
     }
 }
