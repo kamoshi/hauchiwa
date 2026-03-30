@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- `esbuild` loader: `.external()` builder method to bundle npm packages separately and register them in the import map
+- `minijinja` loader: `.filter()` builder method to register custom filters with the template environment
+
 ## [0.15.0] - 2026-03-28
 
 ### Added
