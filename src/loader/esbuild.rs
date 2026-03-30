@@ -25,17 +25,15 @@
 //! use hauchiwa::loader::Script;
 //!
 //! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<Many<Script>> {
-//!     // Compile main.ts -> dist/hash/js/main.[hash].js
 //!     let app = config.load_esbuild()
 //!         .entry("src/client/main.ts")
-//!         .watch("src/client/**/*.ts") // Rebuild when any client file changes
-//!         .bundle(true)
-//!         .minify(true)
+//!         .watch("src/client/**/*.ts")
 //!         .register()?;
 //!
 //!     Ok(app)
 //! }
 //! ```
+use std::io::Write;
 use std::process::{Command, Stdio};
 
 use camino::Utf8Path;
@@ -74,6 +72,7 @@ where
     watch_globs: Vec<String>,
     bundle: bool,
     minify: bool,
+    externals: Vec<String>,
 }
 
 impl<'a, G> ScriptLoader<'a, G>
@@ -87,6 +86,7 @@ where
             watch_globs: Vec::new(),
             bundle: true,
             minify: true,
+            externals: Vec::new(),
         }
     }
 
@@ -116,7 +116,21 @@ where
         self
     }
 
-    /// Registers the task with the Blueprint.
+    /// Marks a package as external.
+    ///
+    /// The package is bundled separately as a content-addressed file and
+    /// registered in the import map. The main entry point is compiled with
+    /// `--external:<package>` so the browser resolves it via the import map
+    /// at runtime.
+    pub fn external(mut self, package: impl Into<String>) -> Self {
+        self.externals.push(package.into());
+        self
+    }
+
+    /// Finalizes configuration and registers the task with the Blueprint.
+    ///
+    /// Returns a [`Many<Script>`] handle that resolves to one compiled output
+    /// per matched entry file.
     pub fn register(self) -> Result<Many<super::Script>, HauchiwaError> {
         let watch_globs = if self.watch_globs.is_empty() {
             self.entry_globs.clone()
@@ -126,9 +140,16 @@ where
 
         let bundle = self.bundle;
         let minify = self.minify;
+        let externals = self.externals;
 
         let task = GlobBundle::new(self.entry_globs, watch_globs, move |_, store, input| {
-            let data = compile_esbuild(&input.path, bundle, minify)?;
+            for package in &externals {
+                let data = bundle_package(package, minify)?;
+                let path = store.save(&data, "js").map_err(ScriptError::Build)?;
+                store.register(package.as_str(), path.as_str());
+            }
+
+            let data = compile_esbuild(&input.path, bundle, minify, &externals)?;
             let hash = Hash32::hash(&data);
             let path = store.save(&data, "js").map_err(ScriptError::Build)?;
 
@@ -154,8 +175,6 @@ where
     /// config.load_esbuild()
     ///     .entry("scripts/main.ts")
     ///     .watch("scripts/**/*.ts")
-    ///     .bundle(true)
-    ///     .minify(true)
     ///     .register()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
@@ -164,7 +183,12 @@ where
     }
 }
 
-fn compile_esbuild(file: &Utf8Path, bundle: bool, minify: bool) -> Result<Vec<u8>, ScriptError> {
+fn compile_esbuild(
+    file: &Utf8Path,
+    bundle: bool,
+    minify: bool,
+    externals: &[String],
+) -> Result<Vec<u8>, ScriptError> {
     let mut cmd = Command::new("esbuild");
     cmd.arg(file.as_str()).arg("--format=esm");
 
@@ -176,13 +200,47 @@ fn compile_esbuild(file: &Utf8Path, bundle: bool, minify: bool) -> Result<Vec<u8
         cmd.arg("--minify");
     }
 
-    let output = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .output()?;
+    for package in externals {
+        cmd.arg(format!("--external:{package}"));
+    }
+
+    let output = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).output()?;
 
     if !output.status.success() {
-        return Err(ScriptError::Esbuild(String::from_utf8(output.stdout)?));
+        return Err(ScriptError::Esbuild(String::from_utf8(output.stderr)?));
+    }
+
+    Ok(output.stdout)
+}
+
+fn bundle_package(package: &str, minify: bool) -> Result<Vec<u8>, ScriptError> {
+    let stdin_content = format!("export * from '{package}'");
+
+    let mut cmd = Command::new("esbuild");
+    cmd.arg("--bundle")
+        .arg("--format=esm")
+        .arg("--platform=browser")
+        .arg("--loader=js");
+
+    if minify {
+        cmd.arg("--minify");
+    }
+
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn()?;
+    child
+        .stdin
+        .take()
+        .expect("stdin was piped")
+        .write_all(stdin_content.as_bytes())?;
+
+    let output = child.wait_with_output()?;
+
+    if !output.status.success() {
+        return Err(ScriptError::Esbuild(String::from_utf8(output.stderr)?));
     }
 
     Ok(output.stdout)
