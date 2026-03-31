@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{ErrorKind, Write};
 use std::sync::Arc;
 use std::{any::Any, collections::BTreeMap};
 
@@ -259,18 +260,19 @@ impl Store {
         let path_dist = Utf8Path::new("dist/hash").join(&hash).with_extension(ext);
         let path_root = Utf8Path::new("/hash/").join(&hash).with_extension(ext);
 
-        if !path_temp.exists() {
-            fs::create_dir_all(".cache/hash")?;
-            fs::write(&path_temp, data)?;
+        fs::create_dir_all(".cache/hash")?;
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path_temp)
+        {
+            Ok(mut f) => f.write_all(data)?,
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.into()),
         }
 
         let dir = path_dist.parent().unwrap_or(&path_dist);
         fs::create_dir_all(dir)?;
-
-        if path_dist.exists() {
-            fs::remove_file(&path_dist)?;
-        }
-
         fs::copy(&path_temp, &path_dist)?;
 
         Ok(path_root)
