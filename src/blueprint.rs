@@ -32,12 +32,18 @@ use crate::{Diagnostics, TaskContext};
 /// ```
 pub struct Blueprint<G: Send + Sync = ()> {
     pub(crate) graph: Graph<Task<G>, ()>,
+    pub(crate) copied: Vec<(String, String)>,
 }
 
 impl<G: Send + Sync + 'static> Blueprint<G> {
     /// Creates a new, empty configuration.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn copy_static(mut self, into: impl Into<String>, from: impl Into<String>) -> Self {
+        self.copied.push((into.into(), from.into()));
+        self
     }
 
     pub fn task(&mut self) -> TaskDef<'_, G> {
@@ -48,7 +54,10 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
     }
 
     pub fn finish(self) -> Website<G> {
-        Website { graph: self.graph }
+        Website {
+            graph: self.graph,
+            copied: self.copied,
+        }
     }
 
     pub(crate) fn add_task_fine<O, T>(&mut self, task: T) -> Many<O>
@@ -85,7 +94,8 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
 impl<G: Send + Sync> Default for Blueprint<G> {
     fn default() -> Self {
         Self {
-            graph: Graph::new(),
+            copied: Vec::default(),
+            graph: Graph::default(),
         }
     }
 }
@@ -333,6 +343,7 @@ where
 /// for executing the build process.
 pub struct Website<G: Send + Sync = ()> {
     pub(crate) graph: Graph<Task<G>, ()>,
+    pub(crate) copied: Vec<(String, String)>,
 }
 
 impl<G> Website<G>
@@ -365,7 +376,7 @@ where
         };
 
         crate::utils::clear_dist()?;
-        crate::utils::clone_static()?;
+        crate::utils::clone_static(&self.copied)?;
 
         let (_, pages, diagnostics) = run_once_parallel(self, &globals)?;
 
@@ -387,7 +398,7 @@ where
         crate::utils::init_logging()?;
 
         crate::utils::clear_dist()?;
-        crate::utils::clone_static()?;
+        crate::utils::clone_static(&self.copied)?;
 
         crate::engine::watch(self, data)?;
 

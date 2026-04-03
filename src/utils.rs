@@ -71,9 +71,9 @@ pub fn clear_dist() -> Result<(), StepClearError> {
     Ok(())
 }
 
-pub fn clone_static() -> Result<(), StepCopyStatic> {
-    if fs::metadata("public").is_err() {
-        fs::create_dir_all("public")?;
+pub fn clone_static(copied: &[(String, String)]) -> Result<(), StepCopyStatic> {
+    if copied.is_empty() {
+        return Ok(());
     }
 
     let span = span!(Level::INFO, "copy_static", indicatif.pb_show = true);
@@ -82,14 +82,45 @@ pub fn clone_static() -> Result<(), StepCopyStatic> {
     let _enter = span.enter();
 
     let s = Instant::now();
-    copy_rec("public", "dist", &span)?;
 
-    // We can just log the finish message, the span exit handles the bar cleanup/persistence depending on config
-    // But typically we want to update the message one last time.
-    // tracing-indicatif doesn't strictly have "finish_with_message" equivalent on span exit automatically unless we set it.
-    // We can manually set message.
-    // Actually, span lifecycle manages the bar.
-    // We can log info!
+    for (into, from) in copied {
+        let path = std::path::Path::new(into);
+        let mut depth = 0;
+        let mut safe = true;
+
+        for component in path.components() {
+            match component {
+                std::path::Component::ParentDir => {
+                    depth -= 1;
+                    if depth < 0 {
+                        safe = false;
+                        break;
+                    }
+                }
+                std::path::Component::Normal(_) => {
+                    depth += 1;
+                }
+                std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                    safe = false;
+                    break;
+                }
+                std::path::Component::CurDir => {}
+            }
+        }
+
+        if !safe {
+            return Err(StepCopyStatic::UnsafeTarget(into.clone()));
+        }
+
+        let target = std::path::Path::new("dist").join(into);
+        
+        // If the source directory doesn't exist, ignore it or let it fail naturally.
+        // It's usually fine to let read_dir return an error if `from` is missing, 
+        // but for usability we can just let `copy_rec` handle it.
+        if fs::metadata(from).is_ok() {
+            copy_rec(from, target, &span)?;
+        }
+    }
 
     info!("Finished copying static files! {}", as_overhead(s));
 

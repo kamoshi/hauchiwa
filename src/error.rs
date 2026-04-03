@@ -83,8 +83,12 @@ pub enum LoaderError {
 pub struct StepClearError(#[from] std::io::Error);
 
 #[derive(Debug, Error)]
-#[error(transparent)]
-pub struct StepCopyStatic(#[from] std::io::Error);
+pub enum StepCopyStatic {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("Target path '{0}' is outside the allowed 'dist' directory")]
+    UnsafeTarget(String),
+}
 
 #[derive(Debug, Error)]
 pub enum BuildError {

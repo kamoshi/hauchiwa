@@ -7,8 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `Blueprint::copy_static` can now be used to copy arbitrary static assets to `dist/`.
+- Security validation for `copy_static` target paths to ensure they stay within the `dist` directory.
 - `esbuild` loader: `.external()` builder method to bundle npm packages separately and register them in the import map
 - `minijinja` loader: `.filter()` builder method to register custom filters with the template environment
+
+### Changed
+- `crate::utils::clone_static` no longer hardcodes "public" to "dist" and instead uses the paths configured in the blueprint.
+- `StepCopyStatic` error type updated to an enum to handle `UnsafeTarget` errors.
 
 ## [0.15.0] - 2026-03-28
 
