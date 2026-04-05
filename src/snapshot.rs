@@ -199,8 +199,13 @@ impl Snapshot {
             if !self.entries.contains_key(path) {
                 let abs = dist.join(path.as_std_path());
                 tracing::debug!("removing stale dist file: {}", path);
-                fs::remove_file(&abs)?;
-                removed += 1;
+                match fs::remove_file(&abs) {
+                    Ok(()) => removed += 1,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                        tracing::debug!("stale file already gone: {}", path);
+                    }
+                    Err(e) => return Err(e),
+                }
                 if let Some(parent) = abs.parent() {
                     dirs_to_prune.insert(parent.to_path_buf());
                 }
@@ -280,8 +285,13 @@ impl Snapshot {
             if !self.entries.contains_key(Utf8Path::new(path)) {
                 let abs = dist.join(path.as_str());
                 tracing::debug!("removing stale dist file: {}", path);
-                fs::remove_file(&abs)?;
-                removed += 1;
+                match fs::remove_file(&abs) {
+                    Ok(()) => removed += 1,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                        tracing::debug!("stale file already gone: {}", path);
+                    }
+                    Err(e) => return Err(e),
+                }
                 if let Some(parent) = abs.parent() {
                     dirs_to_prune.insert(parent.to_path_buf());
                 }

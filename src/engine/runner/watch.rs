@@ -55,8 +55,7 @@ pub fn watch<G: Send + Sync>(
 
     let prev_meta = crate::snapshot::SnapshotMeta::load().ok().flatten();
 
-    tracing::info!("running initial build...");
-    let (mut cache, mut snapshot, _diagnostics) = run_once_parallel(site, &globals)?;
+    let (mut cache, mut snapshot, _) = run_once_parallel(site, &globals)?;
     for (source, dist_rel) in &static_entries {
         snapshot.insert_static_file(dist_rel.clone(), source.clone());
     }
@@ -193,7 +192,8 @@ fn new_thread_ws_incoming(
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         for stream in server.incoming() {
-            #[allow(clippy::unwrap_used)] // IO errors from incoming streams are logged or skipped; accept errors abort the connection
+            #[allow(clippy::unwrap_used)]
+            // IO errors from incoming streams are logged or skipped; accept errors abort the connection
             let socket = tungstenite::accept(stream.unwrap()).unwrap();
             #[allow(clippy::unwrap_used)] // poisoned mutex means a thread panicked - unrecoverable
             client.lock().unwrap().push(socket);

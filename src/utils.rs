@@ -1,12 +1,14 @@
+use std::collections::HashSet;
 use std::fmt::Display;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Instant;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use console::Style;
 use indicatif::ProgressStyle;
+use rayon::prelude::*;
 use tracing::{Level, info, span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
@@ -36,6 +38,28 @@ pub fn as_overhead(s: Instant) -> impl Display {
     ANSI_BLUE.apply_to(f)
 }
 
+/// Returns `true` only when `dst` exists, has the same byte length as `src`,
+/// and their BLAKE3 digests match. Checking size first avoids reading either
+/// file when they obviously differ (size mismatch or missing destination).
+fn is_unchanged(src: &Path, dst: &Path) -> bool {
+    let Ok(src_meta) = fs::metadata(src) else { return false };
+    let Ok(dst_meta) = fs::metadata(dst) else { return false };
+    if src_meta.len() != dst_meta.len() {
+        return false;
+    }
+    crate::core::Hash32::hash_file(src)
+        .ok()
+        .zip(crate::core::Hash32::hash_file(dst).ok())
+        .map(|(s, d)| s == d)
+        .unwrap_or(false)
+}
+
+struct FileEntry {
+    src: PathBuf,
+    dst: PathBuf,
+    source_utf8: Utf8PathBuf,
+    dist_rel: Utf8PathBuf,
+}
 
 /// Copies all static file trees configured via `Blueprint::copy_static` into `dist/`.
 ///
@@ -55,7 +79,7 @@ pub fn clone_static(
     let _enter = span.enter();
 
     let s = Instant::now();
-    let mut entries = Vec::new();
+    let mut files: Vec<FileEntry> = Vec::new();
 
     for (into, from) in copied {
         let path = std::path::Path::new(into);
@@ -90,55 +114,71 @@ pub fn clone_static(
         let dist_rel = Utf8Path::new(into);
 
         if fs::metadata(from).is_ok() {
-            copy_rec(from, target, dist_rel, &span, &mut entries)?;
+            collect_files(from, &target, dist_rel, &mut files)?;
         }
     }
+
+    span.pb_set_length(files.len() as u64);
+
+    // Pre-create all destination directories before parallelising copies to
+    // avoid races between concurrent `fs::copy` calls on the same new path.
+    for dir in files
+        .iter()
+        .filter_map(|f| f.dst.parent())
+        .collect::<HashSet<&Path>>()
+    {
+        fs::create_dir_all(dir)?;
+    }
+
+    // Hash-check and copy files in parallel.
+    let entries: Vec<(Utf8PathBuf, Utf8PathBuf)> = files
+        .par_iter()
+        .map(|f| -> std::io::Result<(Utf8PathBuf, Utf8PathBuf)> {
+            if !is_unchanged(&f.src, &f.dst) {
+                fs::copy(&f.src, &f.dst)?;
+            }
+            span.pb_inc(1);
+            Ok((f.source_utf8.clone(), f.dist_rel.clone()))
+        })
+        .collect::<std::io::Result<_>>()?;
 
     info!("Finished copying static files! {}", as_overhead(s));
 
     Ok(entries)
 }
 
-fn copy_rec(
+/// Recursively walks `src`, appending one [`FileEntry`] per file to `files`.
+/// Directory creation is deferred to the caller.
+fn collect_files(
     src: impl AsRef<Path>,
     dst: impl AsRef<Path>,
     dist_rel: &Utf8Path,
-    span: &tracing::Span,
-    entries: &mut Vec<(Utf8PathBuf, Utf8PathBuf)>,
+    files: &mut Vec<FileEntry>,
 ) -> std::io::Result<()> {
-    fs::create_dir_all(&dst)?;
-
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let name = entry.file_name();
-        let name_str = name
-            .to_str()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "non-UTF-8 filename"))?;
+        let name_str = name.to_str().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "non-UTF-8 filename")
+        })?;
 
         if entry.file_type()?.is_dir() {
-            copy_rec(
+            collect_files(
                 entry.path(),
                 dst.as_ref().join(&name),
                 &dist_rel.join(name_str),
-                span,
-                entries,
+                files,
             )?;
         } else {
             let src_path = entry.path();
-            let dst_file = dst.as_ref().join(&name);
-            let unchanged = crate::core::Hash32::hash_file(&src_path)
-                .ok()
-                .zip(crate::core::Hash32::hash_file(&dst_file).ok())
-                .map(|(s, d)| s == d)
-                .unwrap_or(false);
-            if !unchanged {
-                fs::copy(&src_path, &dst_file)?;
-            }
-            span.pb_inc(1);
-
-            let source = Utf8PathBuf::try_from(src_path)
+            let source_utf8 = Utf8PathBuf::try_from(src_path.clone())
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            entries.push((source, dist_rel.join(name_str)));
+            files.push(FileEntry {
+                dst: dst.as_ref().join(&name),
+                src: src_path,
+                source_utf8,
+                dist_rel: dist_rel.join(name_str),
+            });
         }
     }
 
