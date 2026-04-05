@@ -1562,7 +1562,7 @@ dependencies = [
 
 [[package]]
 name = "hauchiwa"
-version = "0.16.0-unpublished"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "axum",
