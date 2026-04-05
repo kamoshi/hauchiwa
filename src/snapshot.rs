@@ -227,8 +227,9 @@ impl Snapshot {
                     Some((path, output, content_hash))
                 }
                 Some(SnapshotEntry::Page { content_hash: prev_hash, .. }) => {
-                    if prev_hash != content_hash {
-                        tracing::debug!("changed page: {}", path);
+                    let abs_path = dist.join(path.as_std_path());
+                    if prev_hash != content_hash || !abs_path.exists() {
+                        tracing::debug!("changed or missing page: {}", path);
                         Some((path, output, content_hash))
                     } else {
                         tracing::debug!("unchanged page, skipping: {}", path);
@@ -313,8 +314,9 @@ impl Snapshot {
                     Some((path, output, content_hash))
                 }
                 Some(MetaEntry::Page { content_hash: prev_hash }) => {
-                    if prev_hash != &content_hash.to_bytes() {
-                        tracing::debug!("changed page: {}", path);
+                    let abs_path = dist.join(path.as_std_path());
+                    if prev_hash != &content_hash.to_bytes() || !abs_path.exists() {
+                        tracing::debug!("changed or missing page: {}", path);
                         Some((path, output, content_hash))
                     } else {
                         tracing::debug!("unchanged page, skipping: {}", path);
