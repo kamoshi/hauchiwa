@@ -36,6 +36,20 @@ let css = config.load_css()
 
 Hauchiwa hashes the output filename (e.g., `a1b2c3d4e5f6.css`) for perfect long-term caching.
 
+## Static files
+
+Use `Blueprint::copy_static` to copy an entire directory tree into `dist/` as-is.
+Files whose content has not changed are skipped, so repeated builds stay fast.
+
+```rust
+let config = Blueprint::<()>::new()
+    .copy_static("fonts", "assets/fonts")   // dist/fonts/  ← assets/fonts/
+    .copy_static("icons", "assets/icons");  // dist/icons/  ← assets/icons/
+```
+
+The target path is validated to stay inside `dist/` - relative traversals like
+`../../etc` are rejected with an error.
+
 ## Scripts (JS & Svelte)
 
 ### JavaScript / TypeScript
@@ -47,6 +61,18 @@ let js = config.load_esbuild()
     .entry("src/client.ts")
     .bundle(true)
     .minify(true)
+    .register()?;
+```
+
+Use `.external()` to mark an npm package as external. Hauchiwa will bundle it
+separately and register it in the Import Map so the browser resolves it via a
+bare specifier:
+
+```rust
+let js = config.load_esbuild()
+    .entry("src/app.ts")
+    .external("react")
+    .external("react-dom")
     .register()?;
 ```
 
@@ -103,7 +129,7 @@ use hauchiwa::loader::TemplateEnv;
 
 // Returns One<TemplateEnv>
 let templates = config.load_minijinja()
-    .entry("templates/**/*.html")
+    .source("templates/**/*.html")
     .register()?;
 
 config.task().using(templates).merge(|ctx, env| {
@@ -111,6 +137,15 @@ config.task().using(templates).merge(|ctx, env| {
     let html = tmpl.render(hauchiwa::minijinja::context! { title => "Hello" })?;
     Ok(vec![Output::html("index", html)])
 });
+```
+
+Use `.filter()` to register custom Jinja filters before the environment is built:
+
+```rust
+let templates = config.load_minijinja()
+    .source("templates/**/*.html")
+    .filter("shout", |s: String| s.to_uppercase())
+    .register()?;
 ```
 
 Any change to a watched template file causes the loader to re-execute and all dependent tasks to re-run.

@@ -111,6 +111,8 @@ fn main() -> anyhow::Result<()> {
   * **JavaScript**: Bundling and minification via `esbuild`.
   * **Svelte**: Orchestrates Deno to compile components into separate SSR and hydration scripts,
     automatically propagating import maps for seamless client-side interactivity.
+  * **Static files**: `Blueprint::copy_static` copies arbitrary file trees into `dist/`, skipping
+    unchanged files via content hashing.
   * **Search**: Static search indexing via `pagefind`.
   * **Sitemap**: Sitemap generation via `sitemap-rs`.
   
@@ -156,6 +158,7 @@ Opt-in features:
 - `pagefind`: Enables static search indexing.
 - `sitemap`: Enables `sitemap.xml` generation.
 - `minijinja`: Enables Jinja2-style template loading.
+- `logging`: Enables `init_logging()`, which sets up a `tracing` subscriber with ANSI colours, uptime timestamps, and progress bar integration.
 
 ## License
 

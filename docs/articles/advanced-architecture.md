@@ -1,81 +1,92 @@
 ---
-title: Advanced architecture
+title: Development
 order: 7
 ---
 
-# Advanced architecture
+# Development
 
-This section is for those who want to understand what's happening under the hood.
+## Watch mode
 
-## Content-Addressable Storage (CAS)
-
-Hauchiwa eschews traditional file overwrites in favor of a Content-Addressable
-Storage system inspired by the Nix store.
-
-When a loader processes a file, it calculates a BLAKE3 hash of the content. The
-file is then stored in the cache using this hash as its identifier.
-
-```text
-.cache/hash/
-  ├── a1b2c3d4e5... (style.scss)
-  ├── f9e8d7c6b5... (script.js)
-```
-
-This guarantees:
-1. **Deduplication**: Identical inputs always produce the same output and are
-   stored once.
-2. **Correctness**: We never serve stale cache data because the key *is* the
-   content.
-
-## Execution model
-
-Hauchiwa uses a mostly static Directed Acyclic Graph (DAG) with some degree of
-dynamicism enabled by the fine-grained task system.
-
-### Diamond dependencies
-
-A common problem in build systems is the "Diamond Dependency" issue:
-
-```text
-    A
-   / \
-  B   C
-   \ /
-    D
-```
-
-If Task D depends on both B and C, and both B and C depend on A, we can ensure A
-runs exactly once. Hauchiwa's executor handles this automatically. Handles are
-simple tokens that point to future results. When the executor sees multiple
-tasks requesting the same Handle, it ensures the upstream task is executed only
-once and the result is shared afterwards.
-
-## Custom loaders
-
-You are not limited to the built-in loaders. You can write your own data ingestors.
-
-A loader is simply a task that:
-1. Scans the filesystem (using `glob`).
-2. Reads files.
-3. Parses them into a Rust type `T`.
-4. Returns a `Tracker<T>`.
-
-Here is a simplified example of a JSON loader:
+Call `website.watch(data)` instead of `website.build(data)` to start a
+file-watching loop. Hauchiwa runs an initial build, then re-runs affected tasks
+whenever a watched file changes.
 
 ```rust
-// .glob().map() scans the filesystem and runs the closure for each matched file.
-let data_handle: Many<MyData> = config
-    .task()
-    .glob("data/*.json")
-    .map(|_ctx, _store, input| {
-        // 1. Read the file content
-        let content = input.read()?;
+match args.mode {
+    Mode::Build => website.build(data)?,
+    Mode::Watch => website.watch(data)?,
+}
+```
 
-        // 2. Deserialize the JSON
-        let data: MyData = serde_json::from_slice(&content)
-            .map_err(|e| anyhow::anyhow!("Failed to parse {}: {}", input.path, e))?;
+Each loader and task declares which file patterns it watches. When a file
+changes, only the tasks that depend on that file - directly or transitively -
+are re-run. Everything else is served from cache.
 
-        // 3. Return the struct directly
-        Ok(data)
-    })?;
+Watch mode also starts a WebSocket server on a free port. Inject the live-reload
+script into your HTML to have the browser refresh automatically after each rebuild:
+
+```rust
+config.task().merge(|ctx, deps| {
+    let refresh = ctx.env.get_refresh_script();  // Some(...) in watch mode, None otherwise
+    let script_tag = refresh.unwrap_or_default();
+    // include script_tag in your <head>
+    Ok(output)
+});
+```
+
+The `server` feature flag must be enabled for the HTTP development server.
+The `live` feature flag must be enabled for the WebSocket live-reload.
+
+## Logging
+
+Enable the `logging` feature and call `hauchiwa::init_logging()` at the start of
+`main` to get structured log output with ANSI colours, uptime timestamps, and
+progress bars for parallel tasks:
+
+```toml
+[dependencies]
+hauchiwa = { version = "*", features = ["logging"] }
+```
+
+```rust
+fn main() -> anyhow::Result<()> {
+    hauchiwa::init_logging()?;
+
+    let mut site = Blueprint::<()>::new()
+        // ...
+        .finish();
+
+    site.build(())?;
+    Ok(())
+}
+```
+
+Without this feature, Hauchiwa emits `tracing` events but does not install a
+subscriber - you can bring your own if you have an existing logging setup.
+
+## Diagnostics
+
+`website.build()` returns a `Diagnostics` value containing per-task execution
+times. Two built-in renderers are available for visualising where time is spent.
+
+### Mermaid diagram
+
+`render_mermaid` returns a Mermaid graph string with nodes colour-coded by
+duration (green = fast, yellow = moderate, red = slow, blue = cached):
+
+```rust
+let diagnostics = website.build(data)?;
+println!("{}", diagnostics.render_mermaid(&website));
+```
+
+Paste the output into [mermaid.live](https://mermaid.live) to see the graph.
+
+### Waterfall chart
+
+`render_waterfall` returns an SVG timeline showing tasks laid out in parallel
+lanes with duration labels - useful for spotting bottlenecks in large graphs:
+
+```rust
+let diagnostics = website.build(data)?;
+diagnostics.render_waterfall_to_file(&website, "build-profile.svg")?;
 ```

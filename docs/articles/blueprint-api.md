@@ -129,3 +129,46 @@ config.task()
         Ok(processed_image)
     });
 ```
+
+## Static file copying
+
+Use `copy_static` to mirror a directory tree into `dist/` without processing it.
+This is suitable for fonts, favicons, robots.txt, and other files that should be
+served verbatim.
+
+```rust
+let config = Blueprint::<()>::new()
+    .copy_static("fonts", "assets/fonts")
+    .copy_static("images", "assets/images");
+```
+
+Arguments:
+- First: the destination path **inside** `dist/` (e.g. `"fonts"` → `dist/fonts/`).
+- Second: the source directory to copy from.
+
+Paths that would escape `dist/` (e.g. `"../../etc"`) are rejected at build time.
+Unchanged files are skipped via content hashing, so repeated builds stay fast.
+
+## Custom loaders
+
+The built-in loaders are just tasks. You can write your own by using `.glob().map()`,
+which scans the filesystem and runs a closure for each matched file:
+
+```rust
+let data: Many<MyData> = config
+    .task()
+    .glob("data/*.json")
+    .map(|_ctx, _store, input| {
+        let content = std::fs::read(&input.path)?;
+        let data: MyData = serde_json::from_slice(&content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse {}: {}", input.path, e))?;
+        Ok(data)
+    })?;
+```
+
+The `input` argument provides:
+- `input.path` - the matched file path
+- `input.hash` - BLAKE3 hash of the file content (for use as a cache key)
+
+The returned `Many<MyData>` handle can be wired into any downstream task just like
+a handle from a built-in loader.

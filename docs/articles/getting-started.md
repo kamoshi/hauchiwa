@@ -91,12 +91,6 @@ mkdir content
 printf -- '---\ntitle: Hello Hauchiwa\n---\n# Content\n' > content/index.md
 ```
 
-You also need a `public` directory for static assets (even if empty):
-
-```bash
-mkdir public
-```
-
 Now run your generator:
 
 ```bash
