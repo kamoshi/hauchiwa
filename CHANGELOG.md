@@ -11,10 +11,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Security validation for `copy_static` target paths to ensure they stay within the `dist` directory.
 - `esbuild` loader: `.external()` builder method to bundle npm packages separately and register them in the import map
 - `minijinja` loader: `.filter()` builder method to register custom filters with the template environment
+- `logging` feature flag: opt-in `init_logging()` sets up a tracing subscriber with ANSI colours, uptime timestamps, and progress bar integration via `tracing_indicatif`
+- `Snapshot`-based dist reconciliation replaces the previous `clear_dist` + full rewrite approach: stale files are deleted by diffing the snapshot against the current `dist` tree, and unchanged pages are skipped via blake3 content hashing
+- Watch mode now diffs successive snapshots in memory to avoid walking `dist` on disk; only new or changed pages are written per rebuild
+- Static file copying (`copy_static`) skips unchanged files via blake3 content comparison, reducing unnecessary I/O on incremental rebuilds
+- Hash assets (`Store::save`) and image loader outputs are now tracked in the snapshot, preventing them from being incorrectly deleted as stale files
 
 ### Changed
 - `crate::utils::clone_static` no longer hardcodes "public" to "dist" and instead uses the paths configured in the blueprint.
 - `StepCopyStatic` error type updated to an enum to handle `UnsafeTarget` errors.
+- `Store::save` is now `&mut self` (previously `&self`) to support tracking saved asset paths.
 
 ## [0.15.0] - 2026-03-28
 

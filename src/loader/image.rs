@@ -183,8 +183,9 @@ where
             self.globs.clone(),
             // watch the source globs
             self.globs,
-            move |_: &TaskContext<G>, _: &mut Store, input: Input| {
-                let image = process_image(&input, &formats)?;
+            move |_: &TaskContext<G>, store: &mut Store, input: Input| {
+                let (image, dist_paths) = process_image(&input, &formats)?;
+                store.store_paths.extend(dist_paths);
                 Ok((input.path, image))
             },
         )?;
@@ -214,7 +215,7 @@ where
     }
 }
 
-fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<Image, ImageError> {
+fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<(Image, Vec<Utf8PathBuf>), ImageError> {
     let source_hash = file.hash.to_hex();
 
     let meta_file_name = format!("{}.meta.cbor", source_hash);
@@ -265,6 +266,7 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<Image, ImageEr
     if cached && let Some(meta) = metadata {
         let mut sources = HashMap::new();
         let mut default_path = None;
+        let mut dist_paths = Vec::new();
 
         for (format, path_store, path_cache, path_dist) in outputs {
             // Ensure artifact is in dist
@@ -275,6 +277,7 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<Image, ImageEr
                 }
             }
 
+            dist_paths.push(Utf8Path::new("hash/img").join(path_dist.file_name().expect("path_dist must have a filename")));
             sources.insert(format, path_store.clone());
 
             if default_path.is_none() {
@@ -282,12 +285,15 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<Image, ImageEr
             }
         }
 
-        return Ok(Image {
-            default: default_path.expect("At least one format must be produced"),
-            sources,
-            width: meta.width,
-            height: meta.height,
-        });
+        return Ok((
+            Image {
+                default: default_path.expect("At least one format must be produced"),
+                sources,
+                width: meta.width,
+                height: meta.height,
+            },
+            dist_paths,
+        ));
     }
 
     // SLOW PATH: Decode source image
@@ -304,6 +310,7 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<Image, ImageEr
 
     let mut sources = HashMap::new();
     let mut default_path = None;
+    let mut dist_paths = Vec::new();
 
     for (format, path_store, path_cache, path_dist) in outputs {
         if !path_cache.exists() {
@@ -366,6 +373,7 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<Image, ImageEr
             }
         }
 
+        dist_paths.push(Utf8Path::new("hash/img").join(path_dist.file_name().expect("path_dist must have a filename")));
         sources.insert(format, path_store.clone());
 
         if default_path.is_none() {
@@ -373,10 +381,13 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<Image, ImageEr
         }
     }
 
-    Ok(Image {
-        default: default_path.expect("At least one format must be produced"),
-        sources,
-        width,
-        height,
-    })
+    Ok((
+        Image {
+            default: default_path.expect("At least one format must be produced"),
+            sources,
+            width,
+            height,
+        },
+        dist_paths,
+    ))
 }

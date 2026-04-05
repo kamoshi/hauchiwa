@@ -13,8 +13,13 @@ use petgraph::graph::NodeIndex;
 use tracing::Level;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
+use petgraph::Graph;
+
+use camino::Utf8PathBuf;
+
 use crate::core::{Dynamic, Store};
 use crate::engine::{Map, Task, TrackerState};
+use crate::snapshot::Snapshot;
 use crate::{Environment, ImportMap, Output, TaskContext, Website};
 
 #[cfg(feature = "live")]
@@ -29,18 +34,22 @@ pub struct TaskExecution {
 }
 
 /// Represents the data stored in the graph for each node.
-/// Includes the user's output and the concatenated import map.
+/// Includes the user's output, the concatenated import map, and any
+/// content-addressed assets saved to `dist/hash/` via [`Store::save`].
 #[derive(Clone, Debug)]
 pub(crate) struct NodeData {
     pub output: Dynamic,
     pub tracking: Vec<Option<TrackerState>>,
     pub importmap: ImportMap,
+    /// Dist-relative paths of hash assets produced by this node (e.g. `hash/abc123.png`).
+    /// Retained across cache hits so the Snapshot always has a complete picture.
+    pub store_paths: Vec<Utf8PathBuf>,
 }
 
 pub(crate) fn run_once_parallel<G: Send + Sync>(
     website: &mut Website<G>,
     globals: &Environment<G>,
-) -> anyhow::Result<(HashMap<NodeIndex, NodeData>, Vec<Output>, Diagnostics)> {
+) -> anyhow::Result<(HashMap<NodeIndex, NodeData>, Snapshot, Diagnostics)> {
     // We run toposort primarily to detect any cycles in the graph.
     petgraph::algo::toposort(&website.graph, None).expect("Cycle detected in task graph");
 
@@ -50,8 +59,8 @@ pub(crate) fn run_once_parallel<G: Send + Sync>(
 
     let diagnostics = run_tasks_parallel(website, globals, &mut cache, &pending, &dirty)?;
 
-    let pages = collect_pages(&cache);
-    Ok((cache, pages, diagnostics))
+    let manifest = collect_manifest(&cache, &website.graph);
+    Ok((cache, manifest, diagnostics))
 }
 
 /// This function executes the task graph using a thread pool. It performs a
@@ -209,6 +218,7 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
                                     output,
                                     tracking,
                                     importmap: imports,
+                                    store_paths: rt.store_paths,
                                 }
                             },
                         ),
@@ -228,6 +238,7 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
                                     output,
                                     tracking,
                                     importmap: imports,
+                                    store_paths: rt.store_paths,
                                 }
                             }),
                     }
@@ -298,17 +309,30 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
     Ok(Diagnostics { execution_times })
 }
 
-fn collect_pages(cache: &HashMap<NodeIndex, NodeData>) -> Vec<Output> {
-    let mut pages: Vec<Output> = Vec::new();
-    for node_data in cache.values() {
+pub(crate) fn collect_manifest<G: Send + Sync>(
+    cache: &HashMap<NodeIndex, NodeData>,
+    graph: &Graph<Task<G>, ()>,
+) -> Snapshot {
+    let mut manifest = Snapshot::new();
+    for (index, node_data) in cache {
+        let task_name = graph[*index].name();
         let value = &node_data.output;
+
         if let Some(page) = value.downcast_ref::<Output>() {
-            pages.push(page.clone());
+            manifest.insert_page(*index, &task_name, page.clone());
         } else if let Some(page_vec) = value.downcast_ref::<Vec<Output>>() {
-            pages.extend(page_vec.clone());
+            for page in page_vec {
+                manifest.insert_page(*index, &task_name, page.clone());
+            }
         } else if let Some(page_map) = value.downcast_ref::<Map<Output>>() {
-            pages.extend(page_map.map.values().map(|(item, _)| item).cloned());
+            for (item, _) in page_map.map.values() {
+                manifest.insert_page(*index, &task_name, item.clone());
+            }
+        }
+
+        for path in &node_data.store_paths {
+            manifest.insert_hash_asset(*index, &task_name, path.clone());
         }
     }
-    pages
+    manifest
 }

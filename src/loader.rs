@@ -191,14 +191,15 @@ where
                 // next iteration
                 context.span.pb_inc(1);
 
-                Ok((Provenance(hash), path, res, rt.imports))
+                Ok((Provenance(hash), path, res, rt.imports, rt.store_paths))
             })
             .collect();
 
         let mut map = BTreeMap::new();
-        for (provenance, path, res, imports) in results? {
+        for (provenance, path, res, imports, store_paths) in results? {
             map.insert(path.as_str().into(), (res, provenance));
             runtime.imports.merge(imports);
+            runtime.store_paths.extend(store_paths);
         }
 
         Ok((Tracking::default(), Map { map, dirty: false }))
@@ -320,14 +321,15 @@ where
                 // next iteration
                 context.span.pb_inc(1);
 
-                Ok((Provenance(hash), path, res, rt.imports))
+                Ok((Provenance(hash), path, res, rt.imports, rt.store_paths))
             })
             .collect();
 
         let mut map = BTreeMap::new();
-        for (provenance, path, res, imports) in results? {
+        for (provenance, path, res, imports, store_paths) in results? {
             map.insert(path.as_str().into(), (res, provenance));
             runtime.imports.merge(imports);
+            runtime.store_paths.extend(store_paths);
         }
 
         Ok((Tracking::default(), Map { map, dirty: false }))

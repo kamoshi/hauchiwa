@@ -19,7 +19,7 @@
 //! 3. The server broadcasts the reload command to all connected clients,
 //!    triggering an immediate browser refresh.
 
-use crate::engine::{run_once_parallel, run_tasks_parallel};
+use crate::engine::{collect_manifest, run_once_parallel, run_tasks_parallel};
 use crate::{Environment, Mode, Website};
 
 use std::collections::HashSet;
@@ -31,13 +31,18 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use camino::{Utf8Path, Utf8PathBuf};
+
 use glob::Pattern;
 use notify::RecursiveMode;
-use notify_debouncer_full::new_debouncer;
+use notify_debouncer_full::{DebounceEventResult, new_debouncer};
 use petgraph::visit::IntoNodeReferences;
 use tungstenite::WebSocket;
 
-pub fn watch<G: Send + Sync>(site: &mut Website<G>, data: G) -> anyhow::Result<()> {
+pub fn watch<G: Send + Sync>(
+    site: &mut Website<G>,
+    data: G,
+    static_entries: Vec<(Utf8PathBuf, Utf8PathBuf)>,
+) -> anyhow::Result<()> {
     let (tcp, port) = reserve_port().unwrap();
     let pwd = env::current_dir().unwrap();
 
@@ -49,9 +54,13 @@ pub fn watch<G: Send + Sync>(site: &mut Website<G>, data: G) -> anyhow::Result<(
     };
 
     tracing::info!("running initial build...");
-    let (mut cache, pages, _diagnostics) = run_once_parallel(site, &globals)?;
-    tracing::info!("collected {} pages", pages.len());
-    crate::output::save_pages_to_dist(&pages).expect("Failed to save pages");
+    let (mut cache, mut snapshot, _diagnostics) = run_once_parallel(site, &globals)?;
+    for (source, dist_rel) in &static_entries {
+        snapshot.insert_static_file(dist_rel.clone(), source.clone());
+    }
+    tracing::info!("collected {} pages", snapshot.page_count());
+    snapshot.commit().expect("Failed to save pages");
+    let mut prev_snapshot = snapshot;
 
     tracing::info!("initial build completed, now watching for changes...");
     let clients = Arc::new(Mutex::new(vec![]));
@@ -59,8 +68,12 @@ pub fn watch<G: Send + Sync>(site: &mut Website<G>, data: G) -> anyhow::Result<(
     let _thread_i = new_thread_ws_incoming(tcp, clients.clone());
     let (tx_reload, _thread_o) = new_thread_ws_reload(clients.clone());
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut debouncer = new_debouncer(Duration::from_millis(250), None, tx).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel::<DebounceEventResult>();
+    let mut debouncer =
+        new_debouncer(Duration::from_millis(250), None, move |result| {
+            tx.send(result).ok();
+        })
+        .unwrap();
 
     let mut watched = HashSet::new();
     let mut filters = HashSet::new();
@@ -134,9 +147,13 @@ pub fn watch<G: Send + Sync>(site: &mut Website<G>, data: G) -> anyhow::Result<(
                         }
                     };
 
-                    let pages = super::collect_pages(&cache);
-                    tracing::info!("collected {} pages", pages.len());
-                    crate::output::save_pages_to_dist(&pages).expect("Failed to save pages");
+                    let mut snapshot = collect_manifest(&cache, &site.graph);
+                    for (source, dist_rel) in &static_entries {
+                        snapshot.insert_static_file(dist_rel.clone(), source.clone());
+                    }
+                    tracing::info!("collected {} pages", snapshot.page_count());
+                    snapshot.commit_diff(&prev_snapshot).expect("Failed to save pages");
+                    prev_snapshot = snapshot;
                     tx_reload.send(()).unwrap();
                     tracing::info!("rebuild complete, watching for changes...");
                 }

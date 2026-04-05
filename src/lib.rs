@@ -11,7 +11,10 @@ mod core;
 mod engine;
 pub mod error;
 pub mod loader;
+#[cfg(feature = "logging")]
+mod logging;
 pub mod output;
+pub(crate) mod snapshot;
 mod utils;
 
 pub use camino;
@@ -37,3 +40,6 @@ pub mod prelude {
 pub mod tracing {
     pub use tracing::{debug, error, info, trace, warn};
 }
+
+#[cfg(feature = "logging")]
+pub use logging::init_logging;

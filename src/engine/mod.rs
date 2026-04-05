@@ -16,7 +16,7 @@ pub(crate) use fine::TypedFine;
 pub(crate) use node::{NodeGather, NodeMap, NodeScatter};
 #[cfg(feature = "live")]
 pub(crate) use runner::watch;
-pub(crate) use runner::{TaskExecution, run_once_parallel, run_tasks_parallel};
+pub(crate) use runner::{TaskExecution, collect_manifest, run_once_parallel, run_tasks_parallel};
 pub(crate) use tracking::{TrackerPtr, TrackerState, Tracking};
 
 pub use coarse::One;

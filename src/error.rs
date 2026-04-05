@@ -39,9 +39,6 @@ pub enum HauchiwaError {
     #[error("Loader '{0}': {1}")]
     Loader(String, LoaderError),
 
-    #[error("Error while clearing the dist directory:\n{0}")]
-    StepClear(#[from] StepClearError),
-
     #[error("Error while copying static content:\n{0}")]
     StepStatic(#[from] StepCopyStatic),
 
@@ -77,10 +74,6 @@ pub enum LoaderError {
     #[error("An error occured while loading asset.\n{0}")]
     Userland(#[from] anyhow::Error),
 }
-
-#[derive(Debug, Error)]
-#[error(transparent)]
-pub struct StepClearError(#[from] std::io::Error);
 
 #[derive(Debug, Error)]
 pub enum StepCopyStatic {

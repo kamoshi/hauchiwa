@@ -366,8 +366,6 @@ where
     ///
     /// * `data` - The global user data to pass to all tasks.
     pub fn build(&mut self, data: G) -> anyhow::Result<Diagnostics> {
-        crate::utils::init_logging()?;
-
         let globals = Environment {
             generator: "hauchiwa",
             mode: Mode::Build,
@@ -375,12 +373,15 @@ where
             data,
         };
 
-        crate::utils::clear_dist()?;
-        crate::utils::clone_static(&self.copied)?;
+        let static_entries = crate::utils::clone_static(&self.copied)?;
 
-        let (_, pages, diagnostics) = run_once_parallel(self, &globals)?;
+        let (_, mut manifest, diagnostics) = run_once_parallel(self, &globals)?;
 
-        crate::output::save_pages_to_dist(&pages)?;
+        for (source, dist_rel) in static_entries {
+            manifest.insert_static_file(dist_rel, source);
+        }
+
+        manifest.commit()?;
 
         Ok(diagnostics)
     }
@@ -395,12 +396,9 @@ where
     /// * `data` - The global user data to pass to all tasks.
     #[cfg(feature = "live")]
     pub fn watch(&mut self, data: G) -> anyhow::Result<()> {
-        crate::utils::init_logging()?;
+        let static_entries = crate::utils::clone_static(&self.copied)?;
 
-        crate::utils::clear_dist()?;
-        crate::utils::clone_static(&self.copied)?;
-
-        crate::engine::watch(self, data)?;
+        crate::engine::watch(self, data, static_entries)?;
 
         Ok(())
     }

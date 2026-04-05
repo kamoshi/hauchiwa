@@ -3,10 +3,6 @@
 //! This module contains the [`Output`] struct, which represents a final output file,
 //! and helper functions for path normalization and slugification.
 
-use std::fs;
-use std::io;
-use std::path::Path;
-
 use camino::Utf8Component;
 use camino::{Utf8Path, Utf8PathBuf};
 
@@ -320,25 +316,6 @@ impl OutputHandle for Many<Output> {
             None => unreachable!(),
         }
     }
-}
-
-/// Saves all pages to the "dist" directory.
-pub(crate) fn save_pages_to_dist(pages: &[Output]) -> io::Result<()> {
-    let output_dir = Path::new("dist");
-
-    fs::create_dir_all(output_dir)?;
-
-    for page in pages {
-        let file_path = output_dir.join(&page.path);
-
-        if let Some(parent_dir) = file_path.parent() {
-            fs::create_dir_all(parent_dir)?;
-        }
-
-        fs::write(&file_path, &page.data)?;
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

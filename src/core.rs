@@ -230,6 +230,9 @@ pub struct TaskContext<'a, G: Send + Sync = ()> {
 #[derive(Clone)]
 pub struct Store {
     pub(crate) imports: ImportMap,
+    /// Dist-relative paths of all hash assets saved by this store during a task execution.
+    /// Collected into `NodeData` after the task completes so the `Snapshot` can track them.
+    pub(crate) store_paths: Vec<Utf8PathBuf>,
 }
 
 impl Store {
@@ -237,6 +240,7 @@ impl Store {
     pub fn new() -> Self {
         Self {
             imports: ImportMap::new(),
+            store_paths: Vec::new(),
         }
     }
 
@@ -252,12 +256,13 @@ impl Store {
     /// # Returns
     ///
     /// The logical path to the file (e.g., `/hash/abcdef123.png`), suitable for use in HTML `src` attributes.
-    pub fn save(&self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuildError> {
+    pub fn save(&mut self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuildError> {
         let hash = Hash32::hash(data);
         let hash = hash.to_hex();
 
         let path_temp = Utf8Path::new(".cache/hash").join(&hash);
         let path_dist = Utf8Path::new("dist/hash").join(&hash).with_extension(ext);
+        let path_rel = Utf8Path::new("hash").join(&hash).with_extension(ext);
         let path_root = Utf8Path::new("/hash/").join(&hash).with_extension(ext);
 
         fs::create_dir_all(".cache/hash")?;
@@ -275,6 +280,7 @@ impl Store {
         fs::create_dir_all(dir)?;
         fs::copy(&path_temp, &path_dist)?;
 
+        self.store_paths.push(path_rel);
         Ok(path_root)
     }
 

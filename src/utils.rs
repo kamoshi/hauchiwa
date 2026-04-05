@@ -4,13 +4,13 @@ use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Instant;
 
+use camino::{Utf8Path, Utf8PathBuf};
 use console::Style;
 use indicatif::ProgressStyle;
 use tracing::{Level, info, span};
-use tracing_indicatif::{IndicatifLayer, span_ext::IndicatifSpanExt};
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_indicatif::span_ext::IndicatifSpanExt;
 
-use crate::error::{StepClearError, StepCopyStatic};
+use crate::error::StepCopyStatic;
 
 const ANSI_BLUE: Style = Style::new().blue();
 
@@ -29,51 +29,23 @@ pub fn get_style_task_progress() -> Result<ProgressStyle, indicatif::style::Temp
     ProgressStyle::default_spinner().template("{spinner:.blue} {msg} {pos}/{len} ")
 }
 
-pub fn init_logging() -> Result<(), tracing_subscriber::util::TryInitError> {
-    let indicatif_layer = IndicatifLayer::new();
-
-    // Default to INFO, but allow RUST_LOG to override
-    let filter = EnvFilter::builder()
-        .with_default_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
-        .from_env_lossy();
-
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(indicatif_layer.get_stderr_writer())
-                .with_timer(tracing_subscriber::fmt::time::uptime())
-                // Hides the module path like hauchiwa::utils
-                .with_target(false)
-                .compact(),
-        )
-        .with(indicatif_layer)
-        .with(filter)
-        .try_init()
-}
-
 pub fn as_overhead(s: Instant) -> impl Display {
     let e = Instant::now();
     let f = format!("(+{}ms)", e.duration_since(s).as_millis());
     ANSI_BLUE.apply_to(f)
 }
 
-/// Delete the entire `dist` directory if it exists.
-pub fn clear_dist() -> Result<(), StepClearError> {
-    let s = Instant::now();
 
-    if fs::metadata("dist").is_ok() {
-        fs::remove_dir_all("dist")?;
-    }
-
-    fs::create_dir("dist")?;
-    info!("Cleaned the dist directory {}", as_overhead(s));
-
-    Ok(())
-}
-
-pub fn clone_static(copied: &[(String, String)]) -> Result<(), StepCopyStatic> {
+/// Copies all static file trees configured via `Blueprint::copy_static` into `dist/`.
+///
+/// Returns the list of `(source_path, dist_relative_path)` pairs for every file
+/// that was copied. These are inserted into the [`Snapshot`](crate::output::Snapshot)
+/// by the caller so that step 4 can reconcile `dist` without `clear_dist()`.
+pub fn clone_static(
+    copied: &[(String, String)],
+) -> Result<Vec<(Utf8PathBuf, Utf8PathBuf)>, StepCopyStatic> {
     if copied.is_empty() {
-        return Ok(());
+        return Ok(vec![]);
     }
 
     let span = span!(Level::INFO, "copy_static", indicatif.pb_show = true);
@@ -82,6 +54,7 @@ pub fn clone_static(copied: &[(String, String)]) -> Result<(), StepCopyStatic> {
     let _enter = span.enter();
 
     let s = Instant::now();
+    let mut entries = Vec::new();
 
     for (into, from) in copied {
         let path = std::path::Path::new(into);
@@ -113,36 +86,60 @@ pub fn clone_static(copied: &[(String, String)]) -> Result<(), StepCopyStatic> {
         }
 
         let target = std::path::Path::new("dist").join(into);
-        
-        // If the source directory doesn't exist, ignore it or let it fail naturally.
-        // It's usually fine to let read_dir return an error if `from` is missing, 
-        // but for usability we can just let `copy_rec` handle it.
+        let dist_rel = Utf8Path::new(into);
+
         if fs::metadata(from).is_ok() {
-            copy_rec(from, target, &span)?;
+            copy_rec(from, target, dist_rel, &span, &mut entries)?;
         }
     }
 
     info!("Finished copying static files! {}", as_overhead(s));
 
-    Ok(())
+    Ok(entries)
 }
 
 fn copy_rec(
     src: impl AsRef<Path>,
     dst: impl AsRef<Path>,
+    dist_rel: &Utf8Path,
     span: &tracing::Span,
+    entries: &mut Vec<(Utf8PathBuf, Utf8PathBuf)>,
 ) -> std::io::Result<()> {
     fs::create_dir_all(&dst)?;
 
     for entry in fs::read_dir(src)? {
         let entry = entry?;
-        let filetype = entry.file_type()?;
-        if filetype.is_dir() {
-            copy_rec(entry.path(), dst.as_ref().join(entry.file_name()), span)?;
+        let name = entry.file_name();
+        let name_str = name
+            .to_str()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "non-UTF-8 filename"))?;
+
+        if entry.file_type()?.is_dir() {
+            copy_rec(
+                entry.path(),
+                dst.as_ref().join(&name),
+                &dist_rel.join(name_str),
+                span,
+                entries,
+            )?;
         } else {
-            fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
+            let src_path = entry.path();
+            let dst_file = dst.as_ref().join(&name);
+            let unchanged = crate::core::Hash32::hash_file(&src_path)
+                .ok()
+                .zip(crate::core::Hash32::hash_file(&dst_file).ok())
+                .map(|(s, d)| s == d)
+                .unwrap_or(false);
+            if !unchanged {
+                fs::copy(&src_path, &dst_file)?;
+            }
             span.pb_inc(1);
+
+            let source = Utf8PathBuf::try_from(src_path)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            entries.push((source, dist_rel.join(name_str)));
         }
     }
+
     Ok(())
 }

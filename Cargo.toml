@@ -20,6 +20,7 @@ pagefind    = ["tokio", "dep:pagefind"]
 sitemap     = ["dep:sitemap-rs"]
 rolldown    = []  # dep disabled until rolldown is published to crates.io
 minijinja   = ["dep:minijinja"]
+logging     = ["dep:tracing-subscriber"]
 
 [dependencies]
 camino                  = "1.2"
@@ -41,7 +42,6 @@ thiserror               = "2.0"
 console                 = { version = "0.16", default-features = false }
 indicatif               = { version = "0.18", features = ["rayon"] }
 tracing                 = "0.1"
-tracing-subscriber      = { version = "0.3", features = ["env-filter", "fmt", "registry", "ansi"] }
 tracing-indicatif       = "0.3"
 
 # Feature = "styles"
@@ -109,3 +109,9 @@ features = ["fs"]
 [dependencies.minijinja]
 version = "2"
 optional = true
+
+# Feature = "logging"
+[dependencies.tracing-subscriber]
+version = "0.3"
+optional = true
+features = ["env-filter", "fmt", "registry", "ansi"]
