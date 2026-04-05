@@ -43,8 +43,8 @@ pub fn watch<G: Send + Sync>(
     data: G,
     static_entries: Vec<(Utf8PathBuf, Utf8PathBuf)>,
 ) -> anyhow::Result<()> {
-    let (tcp, port) = reserve_port().unwrap();
-    let pwd = env::current_dir().unwrap();
+    let (tcp, port) = reserve_port()?;
+    let pwd = env::current_dir()?;
 
     let globals = Environment {
         generator: "hauchiwa",
@@ -62,10 +62,10 @@ pub fn watch<G: Send + Sync>(
     }
     tracing::info!("collected {} pages", snapshot.page_count());
     match prev_meta {
-        Some(ref prev) => snapshot.commit_diff_meta(prev).expect("Failed to save pages"),
-        None => snapshot.commit().expect("Failed to save pages"),
+        Some(ref prev) => snapshot.commit_diff_meta(prev)?,
+        None => snapshot.commit()?,
     }
-    snapshot.to_meta().save().expect("Failed to save snapshot meta");
+    snapshot.to_meta().save()?;
     let mut prev_snapshot = snapshot;
 
     tracing::info!("initial build completed, now watching for changes...");
@@ -75,11 +75,9 @@ pub fn watch<G: Send + Sync>(
     let (tx_reload, _thread_o) = new_thread_ws_reload(clients.clone());
 
     let (tx, rx) = std::sync::mpsc::channel::<DebounceEventResult>();
-    let mut debouncer =
-        new_debouncer(Duration::from_millis(250), None, move |result| {
-            tx.send(result).ok();
-        })
-        .unwrap();
+    let mut debouncer = new_debouncer(Duration::from_millis(250), None, move |result| {
+        tx.send(result).ok();
+    })?;
 
     let mut watched = HashSet::new();
     let mut filters = HashSet::new();
@@ -118,7 +116,9 @@ pub fn watch<G: Send + Sync>(
                         }
 
                         if let Some(path) = Utf8Path::from_path(path) {
-                            let path = path.strip_prefix(&pwd).unwrap();
+                            let Ok(path) = path.strip_prefix(&pwd) else {
+                                continue;
+                            };
                             for index in site.graph.node_indices() {
                                 let task = &site.graph[index];
                                 if task.is_dirty(path) {
@@ -158,10 +158,15 @@ pub fn watch<G: Send + Sync>(
                         snapshot.insert_static_file(dist_rel.clone(), source.clone());
                     }
                     tracing::info!("collected {} pages", snapshot.page_count());
-                    snapshot.commit_diff(&prev_snapshot).expect("Failed to save pages");
-                    snapshot.to_meta().save().expect("Failed to save snapshot meta");
+                    if let Err(e) = snapshot.commit_diff(&prev_snapshot) {
+                        tracing::error!("failed to write pages to dist: {}", e);
+                        continue;
+                    }
+                    if let Err(e) = snapshot.to_meta().save() {
+                        tracing::warn!("failed to save snapshot meta: {}", e);
+                    }
                     prev_snapshot = snapshot;
-                    tx_reload.send(()).unwrap();
+                    tx_reload.send(()).ok();
                     tracing::info!("rebuild complete, watching for changes...");
                 }
             }
@@ -188,7 +193,9 @@ fn new_thread_ws_incoming(
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         for stream in server.incoming() {
+            #[allow(clippy::unwrap_used)] // IO errors from incoming streams are logged or skipped; accept errors abort the connection
             let socket = tungstenite::accept(stream.unwrap()).unwrap();
+            #[allow(clippy::unwrap_used)] // poisoned mutex means a thread panicked - unrecoverable
             client.lock().unwrap().push(socket);
         }
     })
@@ -201,6 +208,7 @@ fn new_thread_ws_reload(
 
     let thread = std::thread::spawn(move || {
         while rx.recv().is_ok() {
+            #[allow(clippy::unwrap_used)] // poisoned mutex means a thread panicked - unrecoverable
             let mut clients = client.lock().unwrap();
             let mut broken = vec![];
 
@@ -299,6 +307,7 @@ fn collapse_watch_paths(paths: HashSet<Utf8PathBuf>) -> Vec<Utf8PathBuf> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 

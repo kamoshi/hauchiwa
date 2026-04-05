@@ -1,10 +1,5 @@
 #![doc = include_str!("../README.md")]
-#![deny(
-    unsafe_code,
-    // clippy::unwrap_used,
-    // clippy::expect_used,
-    clippy::panic,
-)]
+#![deny(unsafe_code, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod blueprint;
 mod core;

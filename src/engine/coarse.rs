@@ -65,6 +65,7 @@ where
     }
 
     fn downcast<'a>(&self, output: &'a Dynamic) -> (Option<TrackerPtr>, Self::Output<'a>) {
+        #[allow(clippy::expect_used)] // type invariant enforced by the task graph builder
         let output = output
             .downcast_ref::<T>()
             .expect("Type mismatch in dependency resolution");

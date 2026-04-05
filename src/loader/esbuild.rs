@@ -234,7 +234,7 @@ fn bundle_package(package: &str, minify: bool) -> Result<Vec<u8>, ScriptError> {
     child
         .stdin
         .take()
-        .expect("stdin was piped")
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdin was not piped"))?
         .write_all(stdin_content.as_bytes())?;
 
     let output = child.wait_with_output()?;

@@ -69,6 +69,10 @@ pub enum ImageError {
     /// An internal build error.
     #[error("Build error: {0}")]
     Build(#[from] BuildError),
+
+    /// An image processing invariant was violated (e.g. no output formats produced).
+    #[error("Invalid output: {0}")]
+    InvalidOutput(&'static str),
 }
 
 /// Configuration for image compression.
@@ -277,7 +281,9 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<(Image, Vec<Ut
                 }
             }
 
-            dist_paths.push(Utf8Path::new("hash/img").join(path_dist.file_name().expect("path_dist must have a filename")));
+            dist_paths.push(Utf8Path::new("hash/img").join(
+    path_dist.file_name().ok_or(ImageError::InvalidOutput("path_dist has no filename"))?,
+));
             sources.insert(format, path_store.clone());
 
             if default_path.is_none() {
@@ -287,7 +293,7 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<(Image, Vec<Ut
 
         return Ok((
             Image {
-                default: default_path.expect("At least one format must be produced"),
+                default: default_path.ok_or(ImageError::InvalidOutput("at least one image format must be produced"))?,
                 sources,
                 width: meta.width,
                 height: meta.height,
@@ -373,7 +379,9 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<(Image, Vec<Ut
             }
         }
 
-        dist_paths.push(Utf8Path::new("hash/img").join(path_dist.file_name().expect("path_dist must have a filename")));
+        dist_paths.push(Utf8Path::new("hash/img").join(
+    path_dist.file_name().ok_or(ImageError::InvalidOutput("path_dist has no filename"))?,
+));
         sources.insert(format, path_store.clone());
 
         if default_path.is_none() {
@@ -383,7 +391,8 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<(Image, Vec<Ut
 
     Ok((
         Image {
-            default: default_path.expect("At least one format must be produced"),
+            default: default_path
+                .ok_or(ImageError::InvalidOutput("at least one image format must be produced"))?,
             sources,
             width,
             height,

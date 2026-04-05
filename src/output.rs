@@ -303,6 +303,7 @@ impl OutputHandle for Many<Output> {
                 let mut items = Vec::new();
 
                 {
+                    #[allow(clippy::unwrap_used)] // poisoned mutex means a thread panicked - unrecoverable
                     let mut tracker = ptr.ptr.lock().unwrap();
 
                     for (key, (output, provenance)) in &map.map {

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // writeln! on String is infallible; edge_endpoints on valid indices; from_tasks after is_empty check
+
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Write};
 

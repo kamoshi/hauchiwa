@@ -51,7 +51,8 @@ pub(crate) fn run_once_parallel<G: Send + Sync>(
     globals: &Environment<G>,
 ) -> anyhow::Result<(HashMap<NodeIndex, NodeData>, Snapshot, Diagnostics)> {
     // We run toposort primarily to detect any cycles in the graph.
-    petgraph::algo::toposort(&website.graph, None).expect("Cycle detected in task graph");
+    petgraph::algo::toposort(&website.graph, None)
+        .map_err(|_| anyhow::anyhow!("cycle detected in task graph"))?;
 
     let mut cache = HashMap::new();
     let pending = website.graph.node_indices().collect();
@@ -118,12 +119,12 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
 
     let root_span = tracing::span!(Level::INFO, "building_tasks");
     root_span.pb_set_length(total_tasks);
-    root_span.pb_set_style(
-        &ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
-            .unwrap()
-            .progress_chars("=>-"),
-    );
+    #[allow(clippy::unwrap_used)] // hardcoded template, cannot fail
+    let pb_style_root = ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
+        .unwrap()
+        .progress_chars("=>-");
+    root_span.pb_set_style(&pb_style_root);
     root_span.pb_set_message("Building tasks...");
     let _enter = root_span.enter();
 
@@ -148,6 +149,7 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
             let mut importmap = ImportMap::new();
 
             for dep_index in site.graph[index].dependencies() {
+                #[allow(clippy::unwrap_used)] // graph invariant: dependencies always in cache before this node runs
                 let node_data = cache.get(&dep_index).unwrap();
                 dependencies.push(node_data.output.clone());
                 importmap.merge(node_data.importmap.clone());
@@ -169,7 +171,9 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
             if !should_run {
                 // Task is skipped
                 let sender = result_sender.clone();
+                #[allow(clippy::unwrap_used)] // old_data is Some when should_run is false (set above)
                 let output = old_data.unwrap();
+                #[allow(clippy::unwrap_used)] // receiver lives for the duration of the rayon scope
                 sender
                     .send((index, Ok(output), Instant::now(), Duration::ZERO, false))
                     .unwrap();
@@ -275,6 +279,7 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
         // The main thread sits here while Rayon workers execute tasks.
         while completed_tasks < total_tasks {
             // Wait for any task to finish
+            #[allow(clippy::unwrap_used)] // senders live in the rayon scope above; recv only fails if all senders dropped
             let (completed_index, output, start, duration, executed) =
                 result_receiver.recv().unwrap();
 

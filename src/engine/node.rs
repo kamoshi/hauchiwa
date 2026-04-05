@@ -204,6 +204,7 @@ where
         updated_nodes: &HashSet<NodeIndex>,
     ) -> anyhow::Result<(Tracking, Map<Self::Output>)> {
         // We assume the first dependency is the primary Many<T>
+        #[allow(clippy::unwrap_used)] // type invariant enforced by the task graph builder
         let input_map = dependencies[0].downcast_ref::<Map<T>>().unwrap();
 
         let mut forced_dirty = false;
@@ -267,6 +268,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

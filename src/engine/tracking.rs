@@ -34,7 +34,14 @@ impl Tracking {
     pub(crate) fn unwrap(self) -> Vec<Option<TrackerState>> {
         self.edges
             .into_iter()
-            .map(|edge| edge.map(|item| Arc::try_unwrap(item.ptr).unwrap().into_inner().unwrap()))
+            .map(|edge| {
+                edge.map(|item| {
+                    // Arc refcount invariant: the task executor holds the only clone;
+                    // after the task returns, this is the sole owner.
+                    #[allow(clippy::unwrap_used)]
+                    Arc::try_unwrap(item.ptr).unwrap().into_inner().unwrap()
+                })
+            })
             .collect()
     }
 }
@@ -68,6 +75,7 @@ impl<'a, T> Tracker<'a, T> {
 
         match self.map.map.get_key_value(key) {
             Some((key, (item, provenance))) => {
+                #[allow(clippy::unwrap_used)] // poisoned mutex means a thread panicked - unrecoverable
                 let mut inner = self.tracker.ptr.lock().unwrap();
                 inner.accessed.insert(key.clone(), *provenance);
 
@@ -142,6 +150,7 @@ impl<'a, T> Iterator for TrackerIter<'a, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = self.iter.next();
+        #[allow(clippy::unwrap_used)] // poisoned mutex means a thread panicked - unrecoverable
         let mut tracker = self.tracker.lock().unwrap();
 
         match next {
@@ -171,6 +180,7 @@ impl<'a, T> Iterator for TrackerGlobIter<'a, T> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = self.iter.next();
+        #[allow(clippy::unwrap_used)] // poisoned mutex means a thread panicked - unrecoverable
         let mut tracker = self.tracker.lock().unwrap();
 
         match next {

@@ -120,6 +120,7 @@ where
         writeln!(f, "    Output[Output]")?;
 
         for edge in self.graph.edge_indices() {
+            #[allow(clippy::unwrap_used)] // edge_indices() only returns valid indices
             let (source, target) = self.graph.edge_endpoints(edge).unwrap();
             let source_task = &self.graph[source];
             let type_name = source_task

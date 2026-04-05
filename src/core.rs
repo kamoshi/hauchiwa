@@ -58,6 +58,7 @@ impl Hash32 {
             acc[i * 2 + 1] = HEX[(byte & 0xF) as usize];
         }
 
+        #[allow(clippy::unwrap_used)] // acc contains only ASCII hex chars, always valid UTF-8
         String::from_utf8(acc).unwrap()
     }
 }
@@ -322,6 +323,7 @@ pub struct FileMetadata {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod test {
     use super::*;
 

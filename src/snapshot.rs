@@ -400,7 +400,7 @@ fn prune_empty_dirs(
     dirs: HashSet<std::path::PathBuf>,
 ) -> io::Result<()> {
     let mut dirs: Vec<_> = dirs.into_iter().collect();
-    dirs.sort_by(|a, b| b.components().count().cmp(&a.components().count()));
+    dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
     for dir in dirs {
         if dir == dist {
             continue;

@@ -61,6 +61,7 @@ where
     fn downcast<'a>(&self, output: &'a Dynamic) -> (Option<TrackerPtr>, Self::Output<'a>) {
         let ptr = TrackerPtr::default();
 
+        #[allow(clippy::expect_used)] // type invariant enforced by the task graph builder
         let map = output
             .downcast_ref::<Map<T>>()
             .expect("Type mismatch in dependency resolution");
@@ -88,6 +89,7 @@ where
         };
 
         // If we have previous tracking information
+        #[allow(clippy::expect_used)] // type invariant enforced by the task graph builder
         let current = current
             .downcast_ref::<Map<T>>()
             .expect("Type mismatch in validation");
