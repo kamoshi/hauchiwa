@@ -12,6 +12,7 @@ use rayon::prelude::*;
 use tracing::{Level, info, span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
+use crate::core::Hash32;
 use crate::error::StepCopyStatic;
 
 const ANSI_BLUE: Style = Style::new().blue();
@@ -38,20 +39,35 @@ pub fn as_overhead(s: Instant) -> impl Display {
     ANSI_BLUE.apply_to(f)
 }
 
-/// Returns `true` only when `dst` exists, has the same byte length as `src`,
-/// and their BLAKE3 digests match. Checking size first avoids reading either
-/// file when they obviously differ (size mismatch or missing destination).
+/// Returns `true` if the `dst` file is considered identical to `src`.
+///
+/// The check proceeds in increasing order of cost:
+/// 1. **Metadata**: Fails early if `dst` is missing or file sizes differ.
+/// 2. **Mtime**: Returns `true` immediately if modification times match.
+/// 3. **Content**: Performs a full BLAKE3 hash comparison as a final fallback.
+#[rustfmt::skip]
 fn is_unchanged(src: &Path, dst: &Path) -> bool {
     let Ok(src_meta) = fs::metadata(src) else { return false };
     let Ok(dst_meta) = fs::metadata(dst) else { return false };
+
+    // different file size
     if src_meta.len() != dst_meta.len() {
         return false;
     }
-    crate::core::Hash32::hash_file(src)
-        .ok()
-        .zip(crate::core::Hash32::hash_file(dst).ok())
-        .map(|(s, d)| s == d)
-        .unwrap_or(false)
+
+    let Ok(src_mod) = src_meta.modified() else { return false };
+    let Ok(dst_mod) = dst_meta.modified() else { return false };
+
+    // same mtime
+    if src_mod == dst_mod {
+        return true;
+    }
+
+    let Ok(src) = Hash32::hash_file(src) else { return false };
+    let Ok(dst) = Hash32::hash_file(dst) else { return false };
+
+    // same hash
+    src == dst
 }
 
 struct FileEntry {
