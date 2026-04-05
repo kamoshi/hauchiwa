@@ -6,6 +6,7 @@ use std::path::Path;
 use camino::{Utf8Path, Utf8PathBuf};
 use petgraph::graph::NodeIndex;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::core::Hash32;
 use crate::output::Output;
@@ -90,7 +91,7 @@ impl Snapshot {
 
     /// Inserts a content-addressed hash asset (dist-relative path, e.g. `hash/abc.png`).
     ///
-    /// Multiple tasks may reference the same content-addressed path — that is valid
+    /// Multiple tasks may reference the same content-addressed path - that is valid
     /// (same hash = same content). The first claimant is recorded for provenance.
     pub(crate) fn insert_hash_asset(
         &mut self,
@@ -141,7 +142,7 @@ impl Snapshot {
             .count()
     }
 
-    /// Full reconcile against `dist` — intended for the initial build.
+    /// Full reconcile against `dist` - intended for the initial build.
     ///
     /// 1. Walks `dist` and deletes any file not present in this snapshot.
     /// 2. Writes every [`SnapshotEntry::Page`] whose content differs from
@@ -173,14 +174,14 @@ impl Snapshot {
         }))
     }
 
-    /// Incremental diff against a previous snapshot — intended for watch rebuilds.
+    /// Incremental diff against a previous snapshot - intended for watch rebuilds.
     ///
     /// Compared to `commit()`, this avoids walking `dist` on disk: the diff is
     /// computed entirely from the two in-memory snapshots.
     ///
     /// 1. Deletes files present in `prev` but absent from `self`.
     /// 2. Writes pages that are new or whose content hash changed.
-    ///    Pages with identical hashes are skipped entirely — no disk read needed.
+    ///    Pages with identical hashes are skipped entirely - no disk read needed.
     pub(crate) fn commit_diff(&self, prev: &Snapshot) -> io::Result<()> {
         let dist = Path::new("dist");
         fs::create_dir_all(dist)?;
@@ -236,6 +237,132 @@ impl Snapshot {
             }
         }))
     }
+
+    /// Converts this snapshot into a slim, serializable form suitable for
+    /// persisting to disk. Page output data is not included - only the
+    /// content hash is retained for future diffing.
+    pub(crate) fn to_meta(&self) -> SnapshotMeta {
+        let entries = self
+            .entries
+            .iter()
+            .map(|(path, entry)| {
+                let meta_entry = match entry {
+                    SnapshotEntry::Page { content_hash, .. } => {
+                        MetaEntry::Page { content_hash: content_hash.to_bytes() }
+                    }
+                    SnapshotEntry::HashAsset { .. } => MetaEntry::HashAsset,
+                    SnapshotEntry::StaticFile { .. } => MetaEntry::StaticFile,
+                };
+                (path.to_string(), meta_entry)
+            })
+            .collect();
+        SnapshotMeta { entries }
+    }
+
+    /// Incremental diff against a persisted snapshot - intended for cold-start
+    /// builds where no in-memory previous snapshot is available.
+    ///
+    /// Semantics are identical to [`commit_diff`](Self::commit_diff).
+    pub(crate) fn commit_diff_meta(&self, prev: &SnapshotMeta) -> io::Result<()> {
+        let dist = Path::new("dist");
+        fs::create_dir_all(dist)?;
+
+        tracing::debug!(
+            "commit_diff_meta: {} prev entries -> {} new entries",
+            prev.entries.len(),
+            self.entries.len(),
+        );
+
+        // Delete files that disappeared from the snapshot.
+        let mut removed = 0;
+        let mut dirs_to_prune: HashSet<std::path::PathBuf> = HashSet::new();
+        for path in prev.entries.keys() {
+            if !self.entries.contains_key(Utf8Path::new(path)) {
+                let abs = dist.join(path.as_str());
+                tracing::debug!("removing stale dist file: {}", path);
+                fs::remove_file(&abs)?;
+                removed += 1;
+                if let Some(parent) = abs.parent() {
+                    dirs_to_prune.insert(parent.to_path_buf());
+                }
+            }
+        }
+        if removed > 0 {
+            tracing::info!("removed {} stale file(s) from dist", removed);
+            prune_empty_dirs(dist, dirs_to_prune)?;
+        }
+
+        // Write pages that are new or whose content hash changed.
+        write_pages(dist, self.entries.iter().filter_map(|(path, entry)| {
+            let SnapshotEntry::Page { output, content_hash, .. } = entry else {
+                return None;
+            };
+            match prev.entries.get(path.as_str()) {
+                None => {
+                    tracing::debug!("new page: {}", path);
+                    Some((path, output, content_hash))
+                }
+                Some(MetaEntry::Page { content_hash: prev_hash }) => {
+                    if prev_hash != &content_hash.to_bytes() {
+                        tracing::debug!("changed page: {}", path);
+                        Some((path, output, content_hash))
+                    } else {
+                        tracing::debug!("unchanged page, skipping: {}", path);
+                        None
+                    }
+                }
+                _ => {
+                    tracing::debug!("new page (replaced non-page entry): {}", path);
+                    Some((path, output, content_hash))
+                }
+            }
+        }))
+    }
+}
+
+/// Slim, serializable representation of a [`Snapshot`].
+///
+/// Stored at `.cache/snapshot/metadata.cbor` after each successful build.
+/// Loaded on the next cold start to drive [`Snapshot::commit_diff_meta`],
+/// skipping unchanged pages without a full `dist` walk.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct SnapshotMeta {
+    entries: HashMap<String, MetaEntry>,
+}
+
+#[derive(Serialize, Deserialize)]
+enum MetaEntry {
+    Page { content_hash: [u8; 32] },
+    HashAsset,
+    StaticFile,
+}
+
+impl SnapshotMeta {
+    const PATH: &'static str = ".cache/snapshot/metadata.cbor";
+
+    /// Loads the persisted snapshot meta from disk.
+    ///
+    /// Returns `None` if the file does not exist (e.g. first build).
+    /// Returns an error for I/O or deserialization failures.
+    pub(crate) fn load() -> io::Result<Option<Self>> {
+        let file = match fs::File::open(Self::PATH) {
+            Ok(f) => f,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        tracing::debug!("loading snapshot meta from {}", Self::PATH);
+        ciborium::from_reader(file)
+            .map(Some)
+            .map_err(io::Error::other)
+    }
+
+    /// Persists this snapshot meta to `.cache/snapshot/metadata.cbor`.
+    pub(crate) fn save(&self) -> io::Result<()> {
+        fs::create_dir_all(".cache/snapshot")?;
+        let file = fs::File::create(Self::PATH)?;
+        tracing::debug!("saving snapshot meta to {}", Self::PATH);
+        ciborium::into_writer(self, file).map_err(io::Error::other)
+    }
 }
 
 /// Writes a set of pages to `dist` in parallel.
@@ -267,7 +394,7 @@ fn write_pages<'a>(
 ///
 /// Sorts candidates deepest-first so a parent is only attempted after all
 /// its children have been processed. `fs::remove_dir` is a no-op on
-/// non-empty directories — errors are silently ignored.
+/// non-empty directories - errors are silently ignored.
 fn prune_empty_dirs(
     dist: &Path,
     dirs: HashSet<std::path::PathBuf>,

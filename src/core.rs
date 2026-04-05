@@ -41,6 +41,10 @@ impl Hash32 {
             .into()
     }
 
+    pub(crate) fn to_bytes(self) -> [u8; 32] {
+        self.0
+    }
+
     pub(crate) fn hash_file(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
         Ok(blake3::Hasher::new().update_mmap(path)?.finalize().into())
     }

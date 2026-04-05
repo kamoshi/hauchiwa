@@ -118,7 +118,7 @@ where
     }
 
     fn is_valid(&self, _: &[Option<TrackerState>], _: &[Dynamic], _: &HashSet<NodeIndex>) -> bool {
-        // No upstream dependencies — always valid unless explicitly dirtied by a file change.
+        // No upstream dependencies - always valid unless explicitly dirtied by a file change.
         true
     }
 }

@@ -53,13 +53,19 @@ pub fn watch<G: Send + Sync>(
         data,
     };
 
+    let prev_meta = crate::snapshot::SnapshotMeta::load().ok().flatten();
+
     tracing::info!("running initial build...");
     let (mut cache, mut snapshot, _diagnostics) = run_once_parallel(site, &globals)?;
     for (source, dist_rel) in &static_entries {
         snapshot.insert_static_file(dist_rel.clone(), source.clone());
     }
     tracing::info!("collected {} pages", snapshot.page_count());
-    snapshot.commit().expect("Failed to save pages");
+    match prev_meta {
+        Some(ref prev) => snapshot.commit_diff_meta(prev).expect("Failed to save pages"),
+        None => snapshot.commit().expect("Failed to save pages"),
+    }
+    snapshot.to_meta().save().expect("Failed to save snapshot meta");
     let mut prev_snapshot = snapshot;
 
     tracing::info!("initial build completed, now watching for changes...");
@@ -153,6 +159,7 @@ pub fn watch<G: Send + Sync>(
                     }
                     tracing::info!("collected {} pages", snapshot.page_count());
                     snapshot.commit_diff(&prev_snapshot).expect("Failed to save pages");
+                    snapshot.to_meta().save().expect("Failed to save snapshot meta");
                     prev_snapshot = snapshot;
                     tx_reload.send(()).unwrap();
                     tracing::info!("rebuild complete, watching for changes...");

@@ -373,6 +373,7 @@ where
             data,
         };
 
+        let prev_meta = crate::snapshot::SnapshotMeta::load()?;
         let static_entries = crate::utils::clone_static(&self.copied)?;
 
         let (_, mut manifest, diagnostics) = run_once_parallel(self, &globals)?;
@@ -381,7 +382,11 @@ where
             manifest.insert_static_file(dist_rel, source);
         }
 
-        manifest.commit()?;
+        match prev_meta {
+            Some(ref prev) => manifest.commit_diff_meta(prev)?,
+            None => manifest.commit()?,
+        }
+        manifest.to_meta().save()?;
 
         Ok(diagnostics)
     }
