@@ -4,7 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+
+## [0.16.1] - 2026-04-06
+
+### Changed
+- Copying static assets now checks modification times (mtime) before falling
+  back to a full BLAKE3 content hash. This significantly speeds up the
+  `copy_static` task during rebuilds by avoiding expensive I/O when files
+  haven't been touched.
+
+## [0.16.0] - 2026-04-05
 
 ### Added
 - `Blueprint::copy_static` can now be used to copy arbitrary static assets to `dist/`.

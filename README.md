@@ -7,17 +7,17 @@ A flexible, incremental, graph-based static site generator library for Rust. It
 provides the building blocks to create your own custom static site generator
 tailored exactly to your needs.
 
-Unlike traditional SSGs that force a specific directory structure or build pipeline,
-Hauchiwa gives you a **task graph**. You define the inputs (files, data), the transformations
-(markdown parsing, image optimization, SCSS compilation), and the dependencies between them.
-Hauchiwa handles the parallel execution, caching, and incremental rebuilds.
+Create tasks and orchestrate them using simple primitives, which are
+type-checked by the Rust compiler. Each task can do a different thing, such as
+load images, bundle JS, parse markdown, render Jinja templates. This library
+already has some built-in tasks, but you can always define custom tasks when
+needed.
 
-If you are tired of:
-- Rigid frameworks that force their file structure on you (Jekyll, Hugo).
-- Complex config files that are hard to debug.
-- Bloated JavaScript bundles for simple static content.
+> The overarching goal is to create an easy-to-use tool with near instantaneous
+  rebuilds, which will work forever and be immune to churn by embracing web
+  standards. The moment you start using this library you won't ever need to move
+  to anything else.
 
-Then Hauchiwa is for you.
 
 ## Quick Start
 
@@ -89,44 +89,35 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-## Key Features
 
-* **Graph-based**: Define your build as a graph where tasks are wired together
-  using strictly typed handles rather than rigid file paths. This structure
-  automatically resolves complex dependencies, ensuring shared ancestor tasks
-  execute exactly once before efficiently distributing their results.
-* **Incremental**: The engine identifies the specific task responsible for a
-  changed file and marks only its dependent subgraph as "dirty". By re-executing
-  only this precise chain of tasks, the system avoids wasteful full rebuilds and
-  delivers near-instant updates.
-* **Parallel**: A threaded execution engine schedules tasks to run on a thread
-  pool the moment their dependencies are resolved. This saturates your CPU cores
-  automatically, processing heavy assets and content concurrently without manual
-  async orchestration.
+## Key features
+
+* **Parallel**: Define your build as a graph where tasks are wired together
+  using strictly typed handles, ensuring ideal parallelism.
+* **Incremental**: By re-executing only chains of dirty tasks, we can avoid
+  unneeded rebuilds and deliver near-instant updates.
 * **Type-safe**: Dependencies are passed as generic tokens, allowing the Rust
   compiler to enforce that the output type perfectly matches the input type.
-* **Asset pipeline**: Built-in support for:
-  * **Images**: Automatically generates multi-format sources (WebP, AVIF) via the `image` crate.
-  * **CSS/Sass**: Integrates `grass` to compile and minify stylesheets, outputting CSS bundles.
-  * **JavaScript**: Bundling and minification via `esbuild`.
-  * **Svelte**: Orchestrates Deno to compile components into separate SSR and hydration scripts,
-    automatically propagating import maps for seamless client-side interactivity.
-  * **Static files**: `Blueprint::copy_static` copies arbitrary file trees into `dist/`, skipping
-    unchanged files via content hashing.
-  * **Search**: Static search indexing via `pagefind`.
-  * **Sitemap**: Sitemap generation via `sitemap-rs`.
-  
-## Core Concepts
+* **Content-addressed**: Assets are stored by their hash, guaranteeing
+  cache-busting, deduplication, and reliable incremental builds out-of-the-box.
 
-- **Blueprint**: The blueprint of your site. You use this to register tasks and loaders.
-- **Task**: A single unit of work. Tasks can depend on other tasks.
-  - **Coarse-grained**: Tasks that produce a single output.
-  - **Fine-grained**: Tasks that produce multiple outputs.
-- **Handle**: A reference to the future result of a task. You pass these to other tasks to define dependencies.
-  - **One**: A handle to a single (coarse-grained) output.
-  - **Many**: A handle to multiple (fine-grained) outputs.
-- **Loader**: A kind of a task that reads data from the filesystem (e.g., markdown files, images).
-- **Website**: The engine that converts the graph defined in `Blueprint` into a proper static website.
+
+## Built-in support for
+* **Static files**: Copy arbitrary file trees into `dist/`.
+* **Content**: Parse Markdown and Frontmatter safely into strongly-typed Rust structs.
+* **Templating**: Render pages using `minijinja` (Jinja2 syntax) templates.
+* **CSS/Sass**: Integrate `grass` to compile and minify stylesheets.
+* **Images**: Generate optimized multi-format images via the `image` crate.
+* **JavaScript**: Bundle and minify JS/TS via `esbuild`.
+* **Svelte**: Compile components into separate SSR and hydration scripts.
+* **Search**: Static search indexing via `pagefind`.
+* **Sitemap**: Sitemap generation via `sitemap-rs`.
+
+> **Need something else?**  
+> Hauchiwa is designed to be extensible. You can write custom tasks in standard
+  Rust to handle anything not included out-of-the-box. The engine automatically
+  applies the exact same caching, parallelism, and compile-time type safety to
+  custom tasks.
 
 ## Documentation
 
@@ -135,6 +126,7 @@ can visit the [online version](https://hauchiwa.kamoshi.org). The best place to
 learn the API is the [full documentation](https://docs.rs/hauchiwa). It covers
 the available features in depth.
 
+
 ## Examples
 
 Some examples are available in the `examples/` directory.
@@ -142,6 +134,7 @@ Some examples are available in the `examples/` directory.
 In addition, there are also some real-world examples:
 - [hauchiwa.kamoshi.org](https://github.com/kamoshi/hauchiwa/tree/main/docs)
 - [kamoshi.org](https://github.com/kamoshi/kamoshi.org)
+
 
 ## Feature flags
 
@@ -159,6 +152,7 @@ Opt-in features:
 - `sitemap`: Enables `sitemap.xml` generation.
 - `minijinja`: Enables Jinja2-style template loading.
 - `logging`: Enables `init_logging()`, which sets up a `tracing` subscriber with ANSI colours, uptime timestamps, and progress bar integration.
+
 
 ## License
 
