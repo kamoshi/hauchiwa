@@ -4,6 +4,8 @@ use camino::{Utf8Path, Utf8PathBuf};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
+use glob::Pattern;
+
 use crate::{
     Blueprint, Output,
     engine::Many,
@@ -122,7 +124,8 @@ where
     R: DeserializeOwned + Send + Sync + 'static,
 {
     blueprint: &'a mut Blueprint<G>,
-    sources: Vec<String>,
+    entry: Vec<String>,
+    watch: Vec<Pattern>,
     offset: Option<String>,
     _phantom: std::marker::PhantomData<R>,
 }
@@ -135,16 +138,20 @@ where
     fn new(blueprint: &'a mut Blueprint<G>) -> Self {
         Self {
             blueprint,
-            sources: Vec::new(),
+            entry: Vec::new(),
+            watch: Vec::new(),
             offset: None,
             _phantom: std::marker::PhantomData,
         }
     }
 
     /// Adds a glob pattern to find documents.
-    pub fn source(mut self, glob: impl Into<String>) -> Self {
-        self.sources.push(glob.into());
-        self
+    pub fn glob(mut self, glob: impl Into<String>) -> Result<Self, HauchiwaError> {
+        let glob = glob.into();
+        let pattern = Pattern::new(&glob)?;
+        self.entry.push(glob);
+        self.watch.push(pattern);
+        Ok(self)
     }
 
     /// Sets the offset path for the documents.
@@ -156,12 +163,12 @@ where
     }
 
     /// Registers the task with the Blueprint.
-    pub fn register(self) -> Result<Many<Document<R>>, HauchiwaError> {
+    pub fn register(self) -> Many<Document<R>> {
         let offset = self.offset.map(Arc::from);
 
         let task = GlobFiles::new(
-            self.sources.clone(),
-            self.sources,
+            self.entry,
+            self.watch,
             move |_, _, input: Input| {
                 let bytes = input
                     .read()
@@ -187,9 +194,9 @@ where
                     },
                 ))
             },
-        )?;
+        );
 
-        Ok(self.blueprint.add_task_fine(task))
+        self.blueprint.add_task_fine(task)
     }
 }
 
@@ -216,11 +223,13 @@ where
     /// }
     ///
     /// # let mut config = hauchiwa::Blueprint::<()>::new();
+    /// # fn example(config: &mut hauchiwa::Blueprint<()>) -> Result<(), hauchiwa::error::HauchiwaError> {
     /// // Load all markdown files in the posts directory, parsing their
     /// // frontmatter into PostMeta structs.
     /// let posts = config.load_documents::<Post>()
-    ///     .source("content/posts/*.md")
+    ///     .glob("content/posts/*.md")?
     ///     .register();
+    /// # Ok(()) }
     /// ```
     pub fn load_documents<R>(&mut self) -> DocumentLoader<'_, G, R>
     where

@@ -375,7 +375,7 @@ mod tests {
             dependencies: Many::<i32>::new(dep_ref),
             _phantom: PhantomData::<()>,
             callback: |_, tracker| {
-                for _ in tracker {}
+                for (_, _) in tracker {}
                 Ok(())
             },
         };

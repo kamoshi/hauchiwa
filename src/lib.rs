@@ -27,8 +27,8 @@ pub use crate::output::Output;
 
 pub mod prelude {
     pub use super::blueprint::{Blueprint, Website};
-    pub use super::core::{Store, TaskContext};
-    pub use super::engine::{Many, One};
+    pub use super::core::{ImportMap, Store, TaskContext};
+    pub use super::engine::{Diagnostics, Many, One, Tracker};
     pub use super::output::Output;
 }
 

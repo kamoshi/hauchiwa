@@ -23,8 +23,9 @@ impl From<anyhow::Error> for LazyAssetError {
 
 #[derive(Debug, Error)]
 pub enum HauchiwaError {
+    #[doc(hidden)]
     #[error(transparent)]
-    AnyhowArc(#[from] Arc<anyhow::Error>),
+    AnyhowArc(Arc<anyhow::Error>),
 
     #[cfg(feature = "tokio")]
     #[error("Failed to build runtime")]

@@ -49,7 +49,7 @@ downstream task expects.
 
 ```rust
 // 'pages' is a Many<Document> handle
-let pages = config.load_documents::<Frontmatter>().source("*.md").register()?;
+let pages = config.load_documents::<Frontmatter>().glob("*.md")?.register();
 
 config.task()
     .using(pages) // We pass the handle here
@@ -71,19 +71,54 @@ Common loaders include:
 * `load_images`: For optimizing images.
 * `load_minijinja`: For Jinja2-style templates (requires `minijinja` feature).
 
+## Accessing items from a Tracker
+
+When a `Many<T>` dependency is resolved, you receive a `Tracker<T>`. It provides
+several ways to access the items inside:
+
+```rust
+config.task()
+    .using(pages)
+    .merge(|ctx, pages| {
+        // Look up a single item by path (fine-grained dependency)
+        let post = pages.get("content/hello.md")?;
+
+        // Iterate only items matching a glob (fine-grained dependency)
+        for (path, post) in pages.glob("content/blog/**/*.md")? {
+            println!("{path}: {}", post.matter.title);
+        }
+
+        // Iterate all items (coarse dependency — reruns if anything changes)
+        for (path, post) in pages.iter() { /* ... */ }
+
+        // Values-only shorthand (same coarse dependency as iter)
+        let titles: Vec<_> = pages.values().map(|p| &p.matter.title).collect();
+
+        Ok(())
+    });
+```
+
+`Tracker` implements `IntoIterator` yielding `(&str, &T)` pairs, so you can use
+it directly in a `for` loop:
+
+```rust
+for (path, post) in pages { /* ... */ }
+```
+
 ## Output
 
 To get data *out* of the graph and back onto the FileSystem (e.g., writing HTML
-files), your tasks return `Output` structs.
+files), your tasks return `Output` values.
 
 ```rust
-use hauchiwa::{Output, output::OutputData};
+use hauchiwa::Output;
 
 // Inside a task closure
-let html = "<html>...</html>";
 
-Ok(vec![Output {
-    path: "index.html".into(),
-    data: OutputData::Utf8(html.to_string()),
-}])
+// Convenience constructors
+Ok(Output::html("about/index.html", "<h1>About</h1>"))
+Ok(Output::binary("feed.xml", bytes))
 ```
+
+`Output::html` sets the correct `Content-Type` and handles clean URL paths.
+Tasks returning `Vec<Output>` can emit multiple files in a single run.

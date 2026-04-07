@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [0.17.0] - Unreleased
+
+### Added
+- `hauchiwa::prelude` now re-exports `Tracker`, `ImportMap`, and `Diagnostics`
+
+### Changed
+- **Breaking:** `Blueprint::copy_static` parameter order swapped from `(into, from)` to `(src, dest)`, matching standard Rust convention
+- **Breaking:** `Website::design()` removed — use `Blueprint::new()` as the single entry point
+- **Breaking:** `DocumentLoader::source()` renamed to `.glob()` for consistency with all other loaders
+- **Breaking:** Glob pattern validation moved to call sites: `.glob()`, `.entry()`, and `.watch()` on all loaders now return `Result<Self, HauchiwaError>` and validate the pattern immediately; `register()` is now infallible and returns the handle directly
+- **Breaking:** `IntoIterator` for `Tracker` now yields `(&str, &T)` key-value pairs, consistent with `Tracker::iter()`
+- `ImportMap::register` now returns `()` instead of `&mut Self`
+- `OutputBuilder::strip_prefix` now returns `Result<Self, std::path::StripPrefixError>` instead of `Result<Self, HauchiwaError>`
+- `Tracker::values()` now returns `impl Iterator` instead of `Box<dyn Iterator>`, removing an unnecessary allocation
+- Fixed `source_to_href` double-slash handling to only strip the leading character instead of replacing all occurrences
+
+### Meta
+- Added `#[must_use]` to `TaskDef`, `TaskBinderGlob`, `TaskBinderEach`, `TaskBinder`, `Blueprint::copy_static`, `Blueprint::finish`, and `Store::save`
+- Added doc comments to `TaskDef`, `TaskBinderGlob`, `TaskBinderEach`, `TaskBinder`, and `OutputBuilder`
+- `HauchiwaError::AnyhowArc` marked `#[doc(hidden)]` and its `#[from]` impl removed
+
 ## [0.16.1] - 2026-04-06
 
 ### Changed

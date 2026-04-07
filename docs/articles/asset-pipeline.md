@@ -15,10 +15,10 @@ Hauchiwa can automatically resize and convert images to modern formats.
 ```rust
 // Returns Many<Image>
 let images = config.load_images()
-    .glob("assets/images/*.jpg")
-    .glob("assets/images/*.png")
+    .glob("assets/images/*.jpg")?
+    .glob("assets/images/*.png")?
     .format(ImageFormat::WebP)
-    .register()?;
+    .register();
 ```
 
 ## Styling (CSS/Sass)
@@ -28,10 +28,10 @@ We use `grass`, a high-performance Sass compiler written in Rust.
 ```rust
 // Returns Many<Stylesheet>
 let css = config.load_css()
-    .entry("assets/style.scss")
-    .watch("assets/**/*.scss") // Watch imports for changes
+    .entry("assets/style.scss")?
+    .watch("assets/**/*.scss")? // Watch imports for changes
     .minify(true)
-    .register()?;
+    .register();
 ```
 
 Hauchiwa hashes the output filename (e.g., `a1b2c3d4e5f6.css`) for perfect long-term caching.
@@ -43,8 +43,8 @@ Files whose content has not changed are skipped, so repeated builds stay fast.
 
 ```rust
 let config = Blueprint::<()>::new()
-    .copy_static("fonts", "assets/fonts")   // dist/fonts/  ← assets/fonts/
-    .copy_static("icons", "assets/icons");  // dist/icons/  ← assets/icons/
+    .copy_static("assets/fonts", "fonts")   // dist/fonts/  ← assets/fonts/
+    .copy_static("assets/icons", "icons");  // dist/icons/  ← assets/icons/
 ```
 
 The target path is validated to stay inside `dist/` - relative traversals like
@@ -58,10 +58,10 @@ Hauchiwa uses `esbuild` for blazingly fast bundling. It supports TypeScript out 
 
 ```rust
 let js = config.load_esbuild()
-    .entry("src/client.ts")
+    .entry("src/client.ts")?
     .bundle(true)
     .minify(true)
-    .register()?;
+    .register();
 ```
 
 Use `.external()` to mark an npm package as external. Hauchiwa will bundle it
@@ -70,13 +70,15 @@ bare specifier:
 
 ```rust
 let js = config.load_esbuild()
-    .entry("src/app.ts")
+    .entry("src/app.ts")?
     .external("react")
     .external("react-dom")
-    .register()?;
+    .register();
 ```
 
 ### Svelte integration (SSR + hydration)
+
+> **Requires:** `deno` binary on your system `PATH`.
 
 This is one of Hauchiwa's superpower features. It orchestrates a hybrid
 rendering pipeline using Deno.
@@ -94,8 +96,8 @@ struct CounterProps {
 
 // 1. Load Component
 let counters = config.load_svelte::<CounterProps>()
-    .entry("components/Counter.svelte")
-    .register()?;
+    .entry("components/Counter.svelte")?
+    .register();
 
 // 2. Render in Task
 config.task().using(counters).merge(|ctx, counters| {
@@ -129,8 +131,8 @@ use hauchiwa::loader::TemplateEnv;
 
 // Returns One<TemplateEnv>
 let templates = config.load_minijinja()
-    .source("templates/**/*.html")
-    .register()?;
+    .glob("templates/**/*.html")?
+    .register();
 
 config.task().using(templates).merge(|ctx, env| {
     let tmpl = env.get_template("base.html")?;
@@ -143,9 +145,9 @@ Use `.filter()` to register custom Jinja filters before the environment is built
 
 ```rust
 let templates = config.load_minijinja()
-    .source("templates/**/*.html")
+    .glob("templates/**/*.html")?
     .filter("shout", |s: String| s.to_uppercase())
-    .register()?;
+    .register();
 ```
 
 Any change to a watched template file causes the loader to re-execute and all dependent tasks to re-run.

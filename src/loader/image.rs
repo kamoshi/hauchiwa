@@ -24,15 +24,15 @@
 //! use hauchiwa::{Blueprint, Many};
 //! use hauchiwa::loader::image::{Image, ImageFormat, Quality};
 //!
-//! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<Many<Image>> {
+//! fn configure(config: &mut Blueprint<()>) -> Result<Many<Image>, hauchiwa::error::HauchiwaError> {
 //!     // Process images
 //!     let images = config.load_images()
-//!         .glob("assets/photos/**/*.jpg")
+//!         .glob("assets/photos/**/*.jpg")?
 //!         // Generate AVIF for modern browsers (smaller, better quality)
 //!         .format(ImageFormat::Avif(Quality::Lossy(75)))
 //!         // Generate WebP as a solid fallback
 //!         .format(ImageFormat::WebP)
-//!         .register()?;
+//!         .register();
 //!
 //!     Ok(images)
 //! }
@@ -42,6 +42,7 @@ use std::fs::{self, File};
 use std::io::{BufReader, BufWriter};
 
 use camino::{Utf8Path, Utf8PathBuf};
+use glob::Pattern;
 use image::{ExtendedColorType, ImageReader};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -142,7 +143,8 @@ where
     G: Send + Sync,
 {
     blueprint: &'a mut Blueprint<G>,
-    globs: Vec<String>,
+    entry: Vec<String>,
+    watch: Vec<Pattern>,
     formats: Vec<ImageFormat>,
 }
 
@@ -153,15 +155,19 @@ where
     fn new(blueprint: &'a mut Blueprint<G>) -> Self {
         Self {
             blueprint,
-            globs: Vec::new(),
+            entry: Vec::new(),
+            watch: Vec::new(),
             formats: Vec::new(),
         }
     }
 
     /// Adds a glob pattern to find images.
-    pub fn glob(mut self, glob: impl Into<String>) -> Self {
-        self.globs.push(glob.into());
-        self
+    pub fn glob(mut self, glob: impl Into<String>) -> Result<Self, HauchiwaError> {
+        let glob = glob.into();
+        let pattern = Pattern::new(&glob)?;
+        self.entry.push(glob);
+        self.watch.push(pattern);
+        Ok(self)
     }
 
     /// Adds an output format to generate.
@@ -175,7 +181,7 @@ where
     }
 
     /// Registers the task with the Blueprint.
-    pub fn register(self) -> Result<Many<Image>, HauchiwaError> {
+    pub fn register(self) -> Many<Image> {
         let mut formats = self.formats;
 
         // Default to WebP if no format is specified
@@ -184,17 +190,16 @@ where
         }
 
         let task = GlobFiles::new(
-            self.globs.clone(),
-            // watch the source globs
-            self.globs,
+            self.entry,
+            self.watch,
             move |_: &TaskContext<G>, store: &mut Store, input: Input| {
                 let (image, dist_paths) = process_image(&input, &formats)?;
                 store.store_paths.extend(dist_paths);
                 Ok((input.path, image))
             },
-        )?;
+        );
 
-        Ok(self.blueprint.add_task_fine(task))
+        self.blueprint.add_task_fine(task)
     }
 }
 
@@ -209,10 +214,10 @@ where
     /// ```rust,no_run
     /// # let mut config = hauchiwa::Blueprint::<()>::new();
     /// config.load_images()
-    ///     .glob("assets/images/*.jpg")
+    ///     .glob("assets/images/*.jpg")?
     ///     .format(hauchiwa::loader::image::ImageFormat::WebP)
-    ///     .register()?;
-    /// # Ok::<(), anyhow::Error>(())
+    ///     .register();
+    /// # Ok::<(), hauchiwa::error::HauchiwaError>(())
     /// ```
     pub fn load_images(&mut self) -> ImageLoader<'_, G> {
         ImageLoader::new(self)

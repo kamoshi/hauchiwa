@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use glob::Pattern;
 use petgraph::Graph;
 
 use crate::core::{Environment, Mode, Store};
@@ -41,8 +42,9 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
         Self::default()
     }
 
-    pub fn copy_static(mut self, into: impl Into<String>, from: impl Into<String>) -> Self {
-        self.copied.push((into.into(), from.into()));
+    #[must_use]
+    pub fn copy_static(mut self, src: impl Into<String>, dest: impl Into<String>) -> Self {
+        self.copied.push((dest.into(), src.into()));
         self
     }
 
@@ -53,6 +55,7 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
         }
     }
 
+    #[must_use]
     pub fn finish(self) -> Website<G> {
         Website {
             graph: self.graph,
@@ -140,6 +143,11 @@ where
     }
 }
 
+/// Entry point for defining a new task. Created by [`Blueprint::task`].
+///
+/// Chain `.glob()`, `.each()`, `.using()`, or `.run()` to configure the task
+/// and produce a [`One`] or [`Many`] handle.
+#[must_use]
 pub struct TaskDef<'a, G: Send + Sync> {
     blueprint: &'a mut Blueprint<G>,
     name: Option<Cow<'static, str>>,
@@ -152,12 +160,15 @@ impl<'a, G: Send + Sync + 'static> TaskDef<'a, G> {
     }
 
     /// Load assets from file system using glob pattern.
-    pub fn glob(self, glob: impl Into<String>) -> TaskBinderGlob<'a, G> {
-        TaskBinderGlob {
+    pub fn glob(self, glob: impl Into<String>) -> Result<TaskBinderGlob<'a, G>, HauchiwaError> {
+        let glob = glob.into();
+        let pattern = Pattern::new(&glob)?;
+        Ok(TaskBinderGlob {
             blueprint: self.blueprint,
             name: self.name,
-            sources: vec![glob.into()],
-        }
+            entry: vec![glob],
+            watch: vec![pattern],
+        })
     }
 
     /// Perform a map on a collection.
@@ -197,10 +208,16 @@ impl<'a, G: Send + Sync + 'static> TaskDef<'a, G> {
     }
 }
 
+/// A task builder that loads files matching one or more glob patterns.
+///
+/// Created by [`TaskDef::glob`]. Call `.map()` to process each matched file
+/// and produce a [`Many`] handle.
+#[must_use]
 pub struct TaskBinderGlob<'a, G: Send + Sync> {
     blueprint: &'a mut Blueprint<G>,
     name: Option<Cow<'static, str>>,
-    sources: Vec<String>,
+    entry: Vec<String>,
+    watch: Vec<Pattern>,
 }
 
 impl<'a, G: Send + Sync + 'static> TaskBinderGlob<'a, G> {
@@ -209,31 +226,38 @@ impl<'a, G: Send + Sync + 'static> TaskBinderGlob<'a, G> {
         self
     }
 
-    pub fn glob(mut self, glob: impl Into<String>) -> Self {
-        self.sources.push(glob.into());
-        self
+    pub fn glob(mut self, glob: impl Into<String>) -> Result<Self, HauchiwaError> {
+        let glob = glob.into();
+        let pattern = Pattern::new(&glob)?;
+        self.entry.push(glob);
+        self.watch.push(pattern);
+        Ok(self)
     }
 
-    pub fn map<F, R>(self, callback: F) -> Result<Many<R>, HauchiwaError>
+    pub fn map<F, R>(self, callback: F) -> Many<R>
     where
         F: Fn(&TaskContext<G>, &mut Store, Input) -> anyhow::Result<R> + Send + Sync + 'static,
         R: Send + Sync + 'static,
     {
         let task = crate::loader::GlobFiles::new(
-            self.sources.clone(),
-            self.sources,
+            self.entry,
+            self.watch,
             move |ctx, store, input| {
                 let path = input.path.clone();
                 let res = callback(ctx, store, input)?;
                 Ok((path, res))
             },
-        )?;
+        );
 
-        Ok(self.blueprint.add_task_fine(task))
+        self.blueprint.add_task_fine(task)
     }
 }
 
-/// A binder for tasks that map over a collection with optional side dependencies.
+/// A task builder that maps a function over every item in a [`Many`] collection.
+///
+/// Created by [`TaskDef::each`]. Optionally add side dependencies with `.using()`,
+/// then call `.map()` to produce a new [`Many`] handle.
+#[must_use]
 pub struct TaskBinderEach<'a, G, T, D>
 where
     G: Send + Sync,
@@ -288,6 +312,11 @@ where
     }
 }
 
+/// A task builder with explicit dependencies.
+///
+/// Created by [`TaskDef::using`]. Call `.merge()` to produce a single [`One`]
+/// output, or `.spread()` to produce a keyed [`Many`] collection.
+#[must_use]
 pub struct TaskBinder<'a, G: Send + Sync, D> {
     blueprint: &'a mut Blueprint<G>,
     name: Option<Cow<'static, str>>,
@@ -351,10 +380,6 @@ impl<G> Website<G>
 where
     G: Send + Sync + 'static,
 {
-    pub fn design() -> Blueprint<G> {
-        Blueprint::default()
-    }
-
     /// Runs the build process once.
     ///
     /// This will:

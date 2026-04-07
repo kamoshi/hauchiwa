@@ -25,19 +25,20 @@
 //! use hauchiwa::{Blueprint, Many};
 //! use hauchiwa::loader::css::Stylesheet;
 //!
-//! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<Many<Stylesheet>> {
+//! fn configure(config: &mut Blueprint<()>) -> Result<Many<Stylesheet>, hauchiwa::error::HauchiwaError> {
 //!     // Compile main.scss
 //!     let css = config.load_css()
-//!         .entry("./styles/main.scss")
-//!         .watch("./styles/**/*.scss") // Watch partials/_*.scss too
+//!         .entry("./styles/main.scss")?
+//!         .watch("./styles/**/*.scss")? // Watch partials/_*.scss too
 //!         .minify(true)
-//!         .register()?;
+//!         .register();
 //!
 //!     // Pass `css` handle to your page renderer...
 //!     Ok(css)
 //! }
 //! ```
 
+use glob::Pattern;
 use thiserror::Error;
 
 use crate::core::Hash32;
@@ -75,7 +76,8 @@ where
 {
     blueprint: &'a mut Blueprint<G>,
     entry_globs: Vec<String>,
-    watch_globs: Vec<String>,
+    entry_patterns: Vec<Pattern>,
+    watch_globs: Vec<Pattern>,
     minify: bool,
 }
 
@@ -87,23 +89,29 @@ where
         Self {
             blueprint,
             entry_globs: Vec::new(),
+            entry_patterns: Vec::new(),
             watch_globs: Vec::new(),
             minify: true,
         }
     }
 
     /// Adds a glob pattern to find entry stylesheets (e.g., "styles/main.scss").
-    pub fn entry(mut self, glob: impl Into<String>) -> Self {
-        self.entry_globs.push(glob.into());
-        self
+    pub fn entry(mut self, glob: impl Into<String>) -> Result<Self, HauchiwaError> {
+        let glob = glob.into();
+        let pattern = Pattern::new(&glob)?;
+        self.entry_globs.push(glob);
+        self.entry_patterns.push(pattern);
+        Ok(self)
     }
 
     /// Adds a glob pattern for files to watch (e.g., "styles/**/*.scss").
     ///
     /// If never called, defaults to watching the entry globs.
-    pub fn watch(mut self, glob: impl Into<String>) -> Self {
-        self.watch_globs.push(glob.into());
-        self
+    pub fn watch(mut self, glob: impl Into<String>) -> Result<Self, HauchiwaError> {
+        let glob = glob.into();
+        let pattern = Pattern::new(&glob)?;
+        self.watch_globs.push(pattern);
+        Ok(self)
     }
 
     /// Configures minification (compression). Defaults to `true`.
@@ -113,35 +121,36 @@ where
     }
 
     /// Registers the task with the Blueprint.
-    pub fn register(self) -> Result<Many<Stylesheet>, HauchiwaError> {
+    pub fn register(self) -> Many<Stylesheet> {
         let watch_globs = if self.watch_globs.is_empty() {
-            self.entry_globs.clone()
+            self.entry_patterns
         } else {
             self.watch_globs
         };
 
         let minify = self.minify;
 
-        let task = GlobBundle::new(self.entry_globs, watch_globs, move |_, store, input| {
-            let style = if minify {
-                grass::OutputStyle::Compressed
-            } else {
-                grass::OutputStyle::Expanded
-            };
+        let task =
+            GlobBundle::new(self.entry_globs, watch_globs, move |_, store, input| {
+                let style = if minify {
+                    grass::OutputStyle::Compressed
+                } else {
+                    grass::OutputStyle::Expanded
+                };
 
-            let options = grass::Options::default().style(style);
+                let options = grass::Options::default().style(style);
 
-            let data = grass::from_path(&input.path, &options).map_err(StyleError::Sass)?;
-            let hash = Hash32::hash(&data);
+                let data = grass::from_path(&input.path, &options).map_err(StyleError::Sass)?;
+                let hash = Hash32::hash(&data);
 
-            let path = store
-                .save(data.as_bytes(), "css")
-                .map_err(StyleError::Build)?;
+                let path = store
+                    .save(data.as_bytes(), "css")
+                    .map_err(StyleError::Build)?;
 
-            Ok((hash, input.path, Stylesheet { path }))
-        })?;
+                Ok((hash, input.path, Stylesheet { path }))
+            });
 
-        Ok(self.blueprint.add_task_fine(task))
+        self.blueprint.add_task_fine(task)
     }
 }
 
@@ -156,11 +165,11 @@ where
     /// ```rust,no_run
     /// # let mut config = hauchiwa::Blueprint::<()>::new();
     /// config.load_css()
-    ///     .entry("styles/main.scss")
-    ///     .watch("styles/**/*.scss")
+    ///     .entry("styles/main.scss")?
+    ///     .watch("styles/**/*.scss")?
     ///     .minify(true)
-    ///     .register()?;
-    /// # Ok::<(), anyhow::Error>(())
+    ///     .register();
+    /// # Ok::<(), hauchiwa::error::HauchiwaError>(())
     /// ```
     pub fn load_css(&mut self) -> CssLoader<'_, G> {
         CssLoader::new(self)

@@ -36,6 +36,7 @@
 //! ```
 
 use camino::Utf8Path;
+use glob::Pattern;
 use rolldown::{BundlerOptions, CodeSplittingMode, InputItem, RawMinifyOptions};
 use thiserror::Error;
 
@@ -69,7 +70,8 @@ where
 {
     blueprint: &'a mut Blueprint<G>,
     entry_globs: Vec<String>,
-    watch_globs: Vec<String>,
+    entry_patterns: Vec<Pattern>,
+    watch_globs: Vec<Pattern>,
     bundle: bool,
     minify: bool,
 }
@@ -82,6 +84,7 @@ where
         Self {
             blueprint,
             entry_globs: Vec::new(),
+            entry_patterns: Vec::new(),
             watch_globs: Vec::new(),
             bundle: true,
             minify: true,
@@ -89,17 +92,22 @@ where
     }
 
     /// Adds a glob pattern for the entry points (e.g., "src/main.ts").
-    pub fn entry(mut self, glob: impl Into<String>) -> Self {
-        self.entry_globs.push(glob.into());
-        self
+    pub fn entry(mut self, glob: impl Into<String>) -> Result<Self, HauchiwaError> {
+        let glob = glob.into();
+        let pattern = Pattern::new(&glob)?;
+        self.entry_globs.push(glob);
+        self.entry_patterns.push(pattern);
+        Ok(self)
     }
 
     /// Adds a glob pattern for files to watch for changes (often broader, e.g., "src/**/*.ts").
     ///
     /// If never called, defaults to watching the entry globs.
-    pub fn watch(mut self, glob: impl Into<String>) -> Self {
-        self.watch_globs.push(glob.into());
-        self
+    pub fn watch(mut self, glob: impl Into<String>) -> Result<Self, HauchiwaError> {
+        let glob = glob.into();
+        let pattern = Pattern::new(&glob)?;
+        self.watch_globs.push(pattern);
+        Ok(self)
     }
 
     /// Toggles bundling dependencies. Defaults to `true`.
@@ -115,9 +123,9 @@ where
     }
 
     /// Registers the task with the Blueprint.
-    pub fn register(self) -> Result<Many<super::Script>, HauchiwaError> {
+    pub fn register(self) -> Many<super::Script> {
         let watch_globs = if self.watch_globs.is_empty() {
-            self.entry_globs.clone()
+            self.entry_patterns
         } else {
             self.watch_globs
         };
@@ -131,9 +139,9 @@ where
             let path = store.save(&data, "js").map_err(ScriptError::Build)?;
 
             Ok((hash, input.path, super::Script { path }))
-        })?;
+        });
 
-        Ok(self.blueprint.add_task_fine(task))
+        self.blueprint.add_task_fine(task)
     }
 }
 

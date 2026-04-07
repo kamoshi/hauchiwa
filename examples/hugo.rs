@@ -59,8 +59,8 @@ fn main() -> anyhow::Result<()> {
     // to a `HashMap<PathBuf, Document<Frontmatter>>`.
     let content = config
         .load_documents::<Frontmatter>()
-        .source("examples/assets/content/*.md")
-        .register()?;
+        .glob("examples/assets/content/*.md")?
+        .register();
 
     // -------------------------------------------------------------------------
     // 2. Styles
@@ -68,9 +68,9 @@ fn main() -> anyhow::Result<()> {
     // We process SCSS files. This mimics `themes/mytheme/assets`.
     let css = config
         .load_css()
-        .entry("examples/assets/styles/main.scss")
-        .watch("examples/assets/styles/**/*.scss")
-        .register()?;
+        .entry("examples/assets/styles/main.scss")?
+        .watch("examples/assets/styles/**/*.scss")?
+        .register();
 
     // -------------------------------------------------------------------------
     // 3. Build task
@@ -87,10 +87,10 @@ fn main() -> anyhow::Result<()> {
             let css_link = css
                 .into_iter()
                 .next()
-                .map(|s| s.path.as_str())
+                .map(|(_, s)| s.path.as_str())
                 .unwrap_or("style.css");
 
-            for doc in &content {
+            for (_, doc) in &content {
                 // Skip drafts in production builds
                 if doc.matter.draft {
                     continue;
@@ -156,7 +156,7 @@ fn main() -> anyhow::Result<()> {
             //    `posts: Vec<&Frontmatter>` as a field.
 
             let mut list_items = String::new();
-            for doc in &content {
+            for (_, doc) in &content {
                 if !doc.matter.draft {
                     let stem = doc.meta.path.file_stem().unwrap_or_default();
                     list_items.push_str(&format!(

@@ -123,12 +123,33 @@ A shortcut to load files directly without a separate loader.
 
 ```rust
 config.task()
-    .glob("src/assets/*.png")
+    .glob("src/assets/*.png")?
     .map(|ctx, store, input| {
         // Process file...
         Ok(processed_image)
     });
 ```
+
+## TaskContext
+
+Every task callback receives a `ctx: &TaskContext<G>` as its first argument. It
+provides two fields:
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `ctx.env` | `&Environment<G>` | Global build settings and your user data (`ctx.env.data`). |
+| `ctx.importmap` | `&ImportMap` | Aggregated JS import map from all upstream dependencies. |
+
+`Environment` fields:
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `env.data` | `G` | Your user-defined global data (passed to `.build(data)` / `.watch(data)`). |
+| `env.mode` | `Mode` | `Mode::Build` or `Mode::Watch`. Useful to skip dev-only work in production. |
+| `env.port` | `Option<u16>` | Dev server port, `None` during a static build. |
+
+`ctx.importmap.to_html()` serializes the accumulated import map as a
+`<script type="importmap">` tag ready for inclusion in your HTML `<head>`.
 
 ## Static file copying
 
@@ -138,13 +159,13 @@ served verbatim.
 
 ```rust
 let config = Blueprint::<()>::new()
-    .copy_static("fonts", "assets/fonts")
-    .copy_static("images", "assets/images");
+    .copy_static("assets/fonts", "fonts")
+    .copy_static("assets/images", "images");
 ```
 
 Arguments:
-- First: the destination path **inside** `dist/` (e.g. `"fonts"` → `dist/fonts/`).
-- Second: the source directory to copy from.
+- First: the source directory to copy from.
+- Second: the destination path **inside** `dist/` (e.g. `"fonts"` → `dist/fonts/`).
 
 Paths that would escape `dist/` (e.g. `"../../etc"`) are rejected at build time.
 Unchanged files are skipped via content hashing, so repeated builds stay fast.
@@ -157,13 +178,13 @@ which scans the filesystem and runs a closure for each matched file:
 ```rust
 let data: Many<MyData> = config
     .task()
-    .glob("data/*.json")
+    .glob("data/*.json")?
     .map(|_ctx, _store, input| {
         let content = std::fs::read(&input.path)?;
         let data: MyData = serde_json::from_slice(&content)
             .map_err(|e| anyhow::anyhow!("Failed to parse {}: {}", input.path, e))?;
         Ok(data)
-    })?;
+    });
 ```
 
 The `input` argument provides:

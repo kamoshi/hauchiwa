@@ -52,8 +52,8 @@ fn main() -> anyhow::Result<()> {
     // This scans for .md files in the "content" directory.
     // 'pages' is a Handle representing all future markdown files.
     let pages = config.load_documents::<Frontmatter>()
-        .source("content/*.md")
-        .register()?;
+        .glob("content/*.md")?
+        .register();
 
     // 4. Define a Task (Processing)
     // We use .each().map() to process files one by one.

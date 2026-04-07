@@ -24,11 +24,11 @@
 //! use hauchiwa::{Blueprint, Many};
 //! use hauchiwa::loader::Script;
 //!
-//! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<Many<Script>> {
+//! fn configure(config: &mut Blueprint<()>) -> Result<Many<Script>, hauchiwa::error::HauchiwaError> {
 //!     let app = config.load_esbuild()
-//!         .entry("src/client/main.ts")
-//!         .watch("src/client/**/*.ts")
-//!         .register()?;
+//!         .entry("src/client/main.ts")?
+//!         .watch("src/client/**/*.ts")?
+//!         .register();
 //!
 //!     Ok(app)
 //! }
@@ -37,6 +37,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use camino::Utf8Path;
+use glob::Pattern;
 use thiserror::Error;
 
 use crate::core::Hash32;
@@ -69,7 +70,8 @@ where
 {
     blueprint: &'a mut Blueprint<G>,
     entry_globs: Vec<String>,
-    watch_globs: Vec<String>,
+    entry_patterns: Vec<Pattern>,
+    watch_globs: Vec<Pattern>,
     bundle: bool,
     minify: bool,
     externals: Vec<String>,
@@ -83,6 +85,7 @@ where
         Self {
             blueprint,
             entry_globs: Vec::new(),
+            entry_patterns: Vec::new(),
             watch_globs: Vec::new(),
             bundle: true,
             minify: true,
@@ -91,17 +94,22 @@ where
     }
 
     /// Adds a glob pattern for the entry points (e.g., "src/main.ts").
-    pub fn entry(mut self, glob: impl Into<String>) -> Self {
-        self.entry_globs.push(glob.into());
-        self
+    pub fn entry(mut self, glob: impl Into<String>) -> Result<Self, HauchiwaError> {
+        let glob = glob.into();
+        let pattern = Pattern::new(&glob)?;
+        self.entry_globs.push(glob);
+        self.entry_patterns.push(pattern);
+        Ok(self)
     }
 
     /// Adds a glob pattern for files to watch for changes (often broader, e.g., "src/**/*.ts").
     ///
     /// If never called, defaults to watching the entry globs.
-    pub fn watch(mut self, glob: impl Into<String>) -> Self {
-        self.watch_globs.push(glob.into());
-        self
+    pub fn watch(mut self, glob: impl Into<String>) -> Result<Self, HauchiwaError> {
+        let glob = glob.into();
+        let pattern = Pattern::new(&glob)?;
+        self.watch_globs.push(pattern);
+        Ok(self)
     }
 
     /// Toggles bundling dependencies. Defaults to `true`.
@@ -131,9 +139,9 @@ where
     ///
     /// Returns a [`Many<Script>`] handle that resolves to one compiled output
     /// per matched entry file.
-    pub fn register(self) -> Result<Many<super::Script>, HauchiwaError> {
+    pub fn register(self) -> Many<super::Script> {
         let watch_globs = if self.watch_globs.is_empty() {
-            self.entry_globs.clone()
+            self.entry_patterns
         } else {
             self.watch_globs
         };
@@ -142,21 +150,22 @@ where
         let minify = self.minify;
         let externals = self.externals;
 
-        let task = GlobBundle::new(self.entry_globs, watch_globs, move |_, store, input| {
-            for package in &externals {
-                let data = bundle_package(package, minify)?;
+        let task =
+            GlobBundle::new(self.entry_globs, watch_globs, move |_, store, input| {
+                for package in &externals {
+                    let data = bundle_package(package, minify)?;
+                    let path = store.save(&data, "js").map_err(ScriptError::Build)?;
+                    store.register(package.as_str(), path.as_str());
+                }
+
+                let data = compile_esbuild(&input.path, bundle, minify, &externals)?;
+                let hash = Hash32::hash(&data);
                 let path = store.save(&data, "js").map_err(ScriptError::Build)?;
-                store.register(package.as_str(), path.as_str());
-            }
 
-            let data = compile_esbuild(&input.path, bundle, minify, &externals)?;
-            let hash = Hash32::hash(&data);
-            let path = store.save(&data, "js").map_err(ScriptError::Build)?;
+                Ok((hash, input.path, super::Script { path }))
+            });
 
-            Ok((hash, input.path, super::Script { path }))
-        })?;
-
-        Ok(self.blueprint.add_task_fine(task))
+        self.blueprint.add_task_fine(task)
     }
 }
 
@@ -173,10 +182,10 @@ where
     /// ```rust,no_run
     /// # let mut config = hauchiwa::Blueprint::<()>::new();
     /// config.load_esbuild()
-    ///     .entry("scripts/main.ts")
-    ///     .watch("scripts/**/*.ts")
-    ///     .register()?;
-    /// # Ok::<(), anyhow::Error>(())
+    ///     .entry("scripts/main.ts")?
+    ///     .watch("scripts/**/*.ts")?
+    ///     .register();
+    /// # Ok::<(), hauchiwa::error::HauchiwaError>(())
     /// ```
     pub fn load_esbuild(&mut self) -> ScriptLoader<'_, G> {
         ScriptLoader::new(self)

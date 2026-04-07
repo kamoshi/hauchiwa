@@ -185,9 +185,8 @@ impl ImportMap {
     /// # Arguments
     /// * `key` - The module specifier (e.g., "svelte")
     /// * `value` - The URL or path (e.g., "/_app/svelte.js")
-    pub fn register(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
+    pub fn register(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.imports.insert(key.into(), value.into());
-        self
     }
 
     /// Merges another import map into this one.
@@ -261,6 +260,7 @@ impl Store {
     /// # Returns
     ///
     /// The logical path to the file (e.g., `/hash/abcdef123.png`), suitable for use in HTML `src` attributes.
+    #[must_use = "the returned path should be used in your output (e.g. as an asset URL)"]
     pub fn save(&mut self, data: &[u8], ext: &str) -> Result<Utf8PathBuf, BuildError> {
         let hash = Hash32::hash(data);
         let hash = hash.to_hex();

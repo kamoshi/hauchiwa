@@ -31,12 +31,12 @@
 //!     count: i32,
 //! }
 //!
-//! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<()> {
+//! fn configure(config: &mut Blueprint<()>) -> Result<(), hauchiwa::error::HauchiwaError> {
 //!     // 1. Load the component
 //!     // Returns Many<Svelte<ButtonProps>>
 //!     let buttons = config.load_svelte::<ButtonProps>()
-//!         .entry("components/Counter.svelte")
-//!         .register()?;
+//!         .entry("components/Counter.svelte")?
+//!         .register();
 //!
 //!     // 2. Use it in a task to render HTML
 //!     config
@@ -64,6 +64,7 @@ use std::{
 };
 
 use camino::Utf8Path;
+use glob::Pattern;
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
@@ -141,7 +142,8 @@ where
 {
     blueprint: &'a mut Blueprint<G>,
     entry_globs: Vec<String>,
-    watch_globs: Vec<String>,
+    entry_patterns: Vec<Pattern>,
+    watch_globs: Vec<Pattern>,
     _phantom: std::marker::PhantomData<P>,
 }
 
@@ -154,29 +156,35 @@ where
         Self {
             blueprint,
             entry_globs: Vec::new(),
+            entry_patterns: Vec::new(),
             watch_globs: Vec::new(),
             _phantom: std::marker::PhantomData,
         }
     }
 
     /// Adds a glob pattern for the entry components (e.g., "components/Button.svelte").
-    pub fn entry(mut self, glob: impl Into<String>) -> Self {
-        self.entry_globs.push(glob.into());
-        self
+    pub fn entry(mut self, glob: impl Into<String>) -> Result<Self, HauchiwaError> {
+        let glob = glob.into();
+        let pattern = Pattern::new(&glob)?;
+        self.entry_globs.push(glob);
+        self.entry_patterns.push(pattern);
+        Ok(self)
     }
 
     /// Adds a glob pattern for files to watch (e.g., "components/**/*.svelte").
     ///
     /// If never called, defaults to watching the entry globs.
-    pub fn watch(mut self, glob: impl Into<String>) -> Self {
-        self.watch_globs.push(glob.into());
-        self
+    pub fn watch(mut self, glob: impl Into<String>) -> Result<Self, HauchiwaError> {
+        let glob = glob.into();
+        let pattern = Pattern::new(&glob)?;
+        self.watch_globs.push(pattern);
+        Ok(self)
     }
 
     /// Registers the task with the Blueprint.
-    pub fn register(self) -> Result<Many<Svelte<P>>, HauchiwaError> {
+    pub fn register(self) -> Many<Svelte<P>> {
         let watch_globs = if self.watch_globs.is_empty() {
-            self.entry_globs.clone()
+            self.entry_patterns
         } else {
             self.watch_globs
         };
@@ -233,9 +241,9 @@ where
                     runtime: Script { path: runtime },
                 },
             ))
-        })?;
+        });
 
-        Ok(self.blueprint.add_task_fine(task))
+        self.blueprint.add_task_fine(task)
     }
 }
 
@@ -263,10 +271,10 @@ where
     /// }
     ///
     /// let buttons = config.load_svelte::<ButtonProps>()
-    ///     .entry("components/Button.svelte")
-    ///     .watch("components/**/*.svelte")
-    ///     .register()?;
-    /// # Ok::<(), anyhow::Error>(())
+    ///     .entry("components/Button.svelte")?
+    ///     .watch("components/**/*.svelte")?
+    ///     .register();
+    /// # Ok::<(), hauchiwa::error::HauchiwaError>(())
     /// ```
     pub fn load_svelte<P>(&mut self) -> SvelteLoader<'_, G, P>
     where

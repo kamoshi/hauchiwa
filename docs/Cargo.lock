@@ -888,7 +888,7 @@ dependencies = [
 
 [[package]]
 name = "hauchiwa"
-version = "0.16.0"
+version = "0.17.0-unreleased"
 dependencies = [
  "anyhow",
  "axum",

@@ -40,14 +40,14 @@ fn main() -> anyhow::Result<()> {
 
     let css = config
         .load_css()
-        .entry("assets/style.scss")
-        .watch("assets/*.scss")
-        .register()?;
+        .entry("assets/style.scss")?
+        .watch("assets/*.scss")?
+        .register();
 
     let articles = config
         .load_documents::<Frontmatter>()
-        .source("articles/*.md")
-        .register()?;
+        .glob("articles/*.md")?
+        .register();
 
     config
         .task()

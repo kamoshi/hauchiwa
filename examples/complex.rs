@@ -47,8 +47,8 @@ fn main() -> anyhow::Result<()> {
     // injected into multiple downstream tasks.
     let posts = config
         .load_documents::<Post>()
-        .source("examples/assets/content/*.md")
-        .register()?;
+        .glob("examples/assets/content/*.md")?
+        .register();
 
     // -----------------------------------------------------------------------
     // 2. Create taxonomy
@@ -59,7 +59,7 @@ fn main() -> anyhow::Result<()> {
     let taxonomy = config.task().using(posts).merge(|_, posts| {
         let mut tags = HashMap::new();
 
-        for post in posts {
+        for (_, post) in posts {
             for tag in &post.matter.tags {
                 tags.entry(tag.clone())
                     .or_insert_with(Vec::new)
@@ -83,7 +83,7 @@ fn main() -> anyhow::Result<()> {
         .merge(|_, (posts, taxonomy)| {
             let mut pages = Vec::new();
 
-            for post in posts {
+            for (_, post) in posts {
                 // Logic: For every tag on this post, look up the total count in the taxonomy.
                 let tag_counts = post
                     .matter
@@ -125,7 +125,7 @@ fn main() -> anyhow::Result<()> {
                 String::from(r#"<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">"#);
 
             // List all posts
-            for post in posts {
+            for (_, post) in posts {
                 let stem = post.meta.path.file_stem().unwrap_or("unknown");
                 xml.push_str(&format!("<url><loc>/{}</loc></url>", stem));
             }

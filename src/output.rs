@@ -70,7 +70,7 @@ pub fn source_to_href(path: &Utf8Path, offset: Option<&str>) -> String {
 
     // Handling edge case: double slash at start if parent was empty
     if url.starts_with("//") {
-        url.replace("//", "/")
+        url[1..].to_string()
     } else {
         url
     }
@@ -211,7 +211,10 @@ impl Output {
     }
 }
 
-/// A helper builder to transform source paths into destination URLs.
+/// A builder for transforming a source path into a destination [`Output`].
+///
+/// Created by [`Output::mapper`]. Chain `.strip_prefix()`, `.html()`, or `.ext()`
+/// to shape the output path, then call `.content()` to finalise.
 pub struct OutputBuilder {
     current: Utf8PathBuf,
 }
@@ -221,19 +224,11 @@ impl OutputBuilder {
     pub fn strip_prefix(
         mut self,
         prefix: impl AsRef<Utf8Path>,
-    ) -> Result<Self, crate::error::HauchiwaError> {
+    ) -> Result<Self, std::path::StripPrefixError> {
         self.current = self
             .current
             .strip_prefix(prefix.as_ref())
-            .map(|p| p.to_path_buf())
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "Path {} does not start with prefix {}",
-                    self.current,
-                    prefix.as_ref().as_str()
-                )
-            })
-            .map_err(|e| crate::error::HauchiwaError::Build(crate::error::BuildError::Other(e)))?;
+            .map(|p| p.to_path_buf())?;
         Ok(self)
     }
 

@@ -56,7 +56,6 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::core::{Dynamic, Hash32, Store, TaskContext};
 use crate::engine::{Map, Provenance, Tracking, TypedFine};
-use crate::error::HauchiwaError;
 
 /// Represents a compiled JavaScript module.
 #[derive(Clone)]
@@ -105,32 +104,21 @@ where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
-    /// Creates a new `GlobAssetsTask`.
+    /// Creates a new `GlobFiles` task with pre-compiled watch patterns.
     ///
-    /// # Arguments
-    ///
-    /// * `glob_entry` - Patterns to search for files to process.
-    /// * `glob_watch` - Patterns to watch for changes (retriggering the task).
-    /// * `callback` - A function that processes each found file.
-    pub fn new<F>(
-        glob_entry: Vec<String>,
-        glob_watch: Vec<String>,
-        callback: F,
-    ) -> Result<Self, HauchiwaError>
+    /// Use this when patterns have already been validated at the call site.
+    pub fn new<F>(glob_entry: Vec<String>, glob_watch: Vec<Pattern>, callback: F) -> Self
     where
         F: Fn(&TaskContext<G>, &mut Store, Input) -> anyhow::Result<(Utf8PathBuf, R)>
             + Send
             + Sync
             + 'static,
     {
-        Ok(Self {
+        Self {
             glob_entry,
-            glob_watch: glob_watch
-                .iter()
-                .map(|p| Pattern::new(p))
-                .collect::<Result<_, _>>()?,
+            glob_watch,
             callback: Box::new(callback),
-        })
+        }
     }
 }
 
@@ -235,32 +223,25 @@ where
     G: Send + Sync + 'static,
     R: Send + Sync + 'static,
 {
-    /// Creates a new `GlobAssetsTask`.
+    /// Creates a new `GlobBundle` task with pre-compiled watch patterns.
     ///
-    /// # Arguments
-    ///
-    /// * `glob_entry` - Patterns to search for files to process.
-    /// * `glob_watch` - Patterns to watch for changes (retriggering the task).
-    /// * `callback` - A function that processes each found file.
+    /// Use this when patterns have already been validated at the call site.
     pub(crate) fn new<F>(
         glob_entry: Vec<String>,
-        glob_watch: Vec<String>,
+        glob_watch: Vec<Pattern>,
         callback: F,
-    ) -> Result<Self, HauchiwaError>
+    ) -> Self
     where
         F: Fn(&TaskContext<G>, &mut Store, Input) -> anyhow::Result<(Hash32, Utf8PathBuf, R)>
             + Send
             + Sync
             + 'static,
     {
-        Ok(Self {
+        Self {
             glob_entry,
-            glob_watch: glob_watch
-                .iter()
-                .map(|p| Pattern::new(p))
-                .collect::<Result<_, _>>()?,
+            glob_watch,
             callback: Box::new(callback),
-        })
+        }
     }
 }
 

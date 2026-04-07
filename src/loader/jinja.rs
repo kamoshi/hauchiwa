@@ -60,6 +60,20 @@ impl GlobJinja {
             filters,
         })
     }
+
+    pub fn new(
+        glob_entry: Vec<String>,
+        glob_watch: Vec<Pattern>,
+        offset: Option<String>,
+        filters: Vec<FilterFn>,
+    ) -> Self {
+        Self {
+            glob_entry,
+            glob_watch,
+            offset,
+            filters,
+        }
+    }
 }
 
 impl<G> TypedCoarse<G> for GlobJinja
@@ -129,7 +143,8 @@ where
     G: Send + Sync,
 {
     blueprint: &'a mut Blueprint<G>,
-    globs: Vec<String>,
+    entry: Vec<String>,
+    watch: Vec<Pattern>,
     root: Option<String>,
     filters: Vec<FilterFn>,
 }
@@ -141,16 +156,20 @@ where
     pub(crate) fn new(blueprint: &'a mut Blueprint<G>) -> Self {
         Self {
             blueprint,
-            globs: Vec::new(),
+            entry: Vec::new(),
+            watch: Vec::new(),
             root: None,
             filters: Vec::new(),
         }
     }
 
     /// Add a glob pattern to find template files.
-    pub fn glob(mut self, glob: impl Into<String>) -> Self {
-        self.globs.push(glob.into());
-        self
+    pub fn glob(mut self, glob: impl Into<String>) -> Result<Self, HauchiwaError> {
+        let glob = glob.into();
+        let pattern = Pattern::new(&glob)?;
+        self.entry.push(glob);
+        self.watch.push(pattern);
+        Ok(self)
     }
 
     /// Strip this prefix from file paths when computing template names.
@@ -178,9 +197,9 @@ where
     }
 
     /// Register the task with the blueprint.
-    pub fn register(self) -> Result<crate::One<TemplateEnv>, HauchiwaError> {
-        let task = GlobJinja::new(self.globs.clone(), self.globs, self.root, self.filters)?;
-        Ok(self.blueprint.add_task_coarse(task))
+    pub fn register(self) -> crate::One<TemplateEnv> {
+        let task = GlobJinja::new(self.entry, self.watch, self.root, self.filters);
+        self.blueprint.add_task_coarse(task)
     }
 }
 

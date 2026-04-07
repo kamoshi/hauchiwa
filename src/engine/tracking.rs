@@ -75,7 +75,8 @@ impl<'a, T> Tracker<'a, T> {
 
         match self.map.map.get_key_value(key) {
             Some((key, (item, provenance))) => {
-                #[allow(clippy::unwrap_used)] // poisoned mutex means a thread panicked - unrecoverable
+                #[allow(clippy::unwrap_used)]
+                // poisoned mutex means a thread panicked - unrecoverable
                 let mut inner = self.tracker.ptr.lock().unwrap();
                 inner.accessed.insert(key.clone(), *provenance);
 
@@ -127,15 +128,8 @@ impl<'a, T> Tracker<'a, T> {
     /// Iterates over all tracked values.
     ///
     /// **Warning:** Like [`iter`](Self::iter), this creates a dependency on the entire collection.
-    pub fn values(&self) -> Box<dyn Iterator<Item = &T> + '_> {
-        Box::new(
-            TrackerIter {
-                iter: self.map.map.iter(),
-                tracker: self.tracker.ptr.clone(),
-                count: 0,
-            }
-            .map(|(_, item)| item),
-        )
+    pub fn values(&self) -> impl Iterator<Item = &T> + '_ {
+        self.iter().map(|(_, item)| item)
     }
 }
 
@@ -201,33 +195,27 @@ impl<'a, T> Iterator for TrackerGlobIter<'a, T> {
 }
 
 impl<'a, T> IntoIterator for Tracker<'a, T> {
-    type Item = &'a T;
-    type IntoIter = Box<dyn Iterator<Item = &'a T> + 'a>;
+    type Item = (&'a str, &'a T);
+    type IntoIter = TrackerIter<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Box::new(
-            TrackerIter {
-                iter: self.map.map.iter(),
-                tracker: self.tracker.ptr.clone(),
-                count: 0,
-            }
-            .map(|(_, item)| item),
-        )
+        TrackerIter {
+            iter: self.map.map.iter(),
+            tracker: self.tracker.ptr.clone(),
+            count: 0,
+        }
     }
 }
 
-impl<'a, 'b, T> IntoIterator for &'b Tracker<'a, T> {
-    type Item = &'a T;
-    type IntoIter = Box<dyn Iterator<Item = &'a T> + 'b>;
+impl<'a, T> IntoIterator for &Tracker<'a, T> {
+    type Item = (&'a str, &'a T);
+    type IntoIter = TrackerIter<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Box::new(
-            TrackerIter {
-                iter: self.map.map.iter(),
-                tracker: self.tracker.ptr.clone(),
-                count: 0,
-            }
-            .map(|(_, item)| item),
-        )
+        TrackerIter {
+            iter: self.map.map.iter(),
+            tracker: self.tracker.ptr.clone(),
+            count: 0,
+        }
     }
 }

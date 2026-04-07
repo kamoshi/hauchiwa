@@ -14,9 +14,9 @@ already has some built-in tasks, but you can always define custom tasks when
 needed.
 
 > The overarching goal is to create an easy-to-use tool with near instantaneous
-  rebuilds, which will work forever and be immune to churn by embracing web
-  standards. The moment you start using this library you won't ever need to move
-  to anything else.
+> rebuilds, which will work forever and be immune to churn by embracing web
+> standards. The moment you start using this library you won't ever need to move
+> to anything else.
 
 
 ## Quick Start
@@ -53,12 +53,12 @@ fn main() -> anyhow::Result<()> {
     // 3. Add a loader to glob markdown files
     // `posts` is `Many<Document<Post>>`
     let posts = config.load_documents::<Post>()
-        .source("content/**/*.md")
-        .register()?;
-    
+        .glob("content/**/*.md")?
+        .register();
+
     let css = config.load_css()
-        .entry("styles/**/*.scss")
-        .register()?;
+        .entry("styles/**/*.scss")?
+        .register();
 
     // 4. Define a task to render pages
     // We declare that this task depends on `posts`.
@@ -113,11 +113,11 @@ fn main() -> anyhow::Result<()> {
 * **Search**: Static search indexing via `pagefind`.
 * **Sitemap**: Sitemap generation via `sitemap-rs`.
 
-> **Need something else?**  
+> **Need something else?**
 > Hauchiwa is designed to be extensible. You can write custom tasks in standard
-  Rust to handle anything not included out-of-the-box. The engine automatically
-  applies the exact same caching, parallelism, and compile-time type safety to
-  custom tasks.
+> Rust to handle anything not included out-of-the-box. The engine automatically
+> applies the exact same caching, parallelism, and compile-time type safety to
+> custom tasks.
 
 ## Documentation
 

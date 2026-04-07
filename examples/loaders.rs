@@ -45,8 +45,8 @@ fn main() -> anyhow::Result<()> {
     // We explicitly pass `<Post>` so it knows how to parse the frontmatter.
     let posts = config
         .load_documents::<Post>()
-        .source("examples/assets/content/*.md")
-        .register()?;
+        .glob("examples/assets/content/*.md")?
+        .register();
 
     // B. Styles
     // We specify an "entry point" (main.scss) which imports other files,
@@ -54,18 +54,18 @@ fn main() -> anyhow::Result<()> {
     // Note: This uses the internal `grass` crate for compilation.
     let styles = config
         .load_css()
-        .entry("examples/assets/styles/main.scss")
-        .watch("examples/assets/styles/**/*.scss")
-        .register()?;
+        .entry("examples/assets/styles/main.scss")?
+        .watch("examples/assets/styles/**/*.scss")?
+        .register();
 
     // C. Scripts
     // This uses `esbuild` (which must be installed in your environment) to
     // bundle modules starting from `main.js`.
     let scripts = config
         .load_esbuild()
-        .entry("examples/assets/scripts/main.ts")
-        .watch("examples/assets/scripts/**/*.ts")
-        .register()?;
+        .entry("examples/assets/scripts/main.ts")?
+        .watch("examples/assets/scripts/**/*.ts")?
+        .register();
 
     // D. Images
     // This loader finds images, optimizes them, and converts them to WebP.
@@ -73,8 +73,8 @@ fn main() -> anyhow::Result<()> {
     let images = config
         .load_images()
         .format(hauchiwa::loader::image::ImageFormat::WebP)
-        .glob("examples/assets/images/*.ppm")
-        .register()?;
+        .glob("examples/assets/images/*.ppm")?
+        .register();
 
     // -----------------------------------------------------------------------
     // 3. Define the build task
@@ -92,7 +92,7 @@ fn main() -> anyhow::Result<()> {
 
             // Inject the link tag for our compiled CSS.
             // `styles.values()` gives us access to the processed CSS metadata.
-            for css in styles {
+            for (_, css) in styles {
                 html.push_str(&format!(r#"<link rel="stylesheet" href="{}">"#, css.path));
             }
 
@@ -109,13 +109,13 @@ fn main() -> anyhow::Result<()> {
             html.push_str("<ul>");
 
             // Iterate over our markdown posts and create a list.
-            for post in &posts {
+            for (_, post) in &posts {
                 html.push_str(&format!("<li>{}</li>", post.matter.title));
             }
             html.push_str("</ul>");
 
             // Inject the script tag for our compiled JS.
-            for js in &scripts {
+            for (_, js) in &scripts {
                 html.push_str(&format!(
                     r#"<script type="module" src="{}"></script>"#,
                     js.path
