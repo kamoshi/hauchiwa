@@ -109,6 +109,10 @@ pub(crate) trait TypedCoarse<G: Send + Sync = ()>: Send + Sync {
         new_outputs: &[Dynamic],
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool;
+
+    fn requirements(&self) -> Vec<crate::preflight::Requirement> {
+        vec![]
+    }
 }
 
 pub(crate) trait Coarse<G: Send + Sync = ()>: Send + Sync {
@@ -140,6 +144,8 @@ pub(crate) trait Coarse<G: Send + Sync = ()>: Send + Sync {
         new_outputs: &[Dynamic],
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool;
+
+    fn requirements(&self) -> Vec<crate::preflight::Requirement>;
 }
 
 impl<G, T> Coarse<G> for T
@@ -192,5 +198,9 @@ where
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool {
         T::is_valid(self, old_tracking, new_outputs, updated_nodes)
+    }
+
+    fn requirements(&self) -> Vec<crate::preflight::Requirement> {
+        T::requirements(self)
     }
 }

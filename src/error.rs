@@ -52,6 +52,9 @@ pub enum HauchiwaError {
 
     #[error("Asset '{0}' not found")]
     AssetNotFound(Box<str>),
+
+    #[error("Preflight checks failed — missing:\n{0}")]
+    Preflight(String),
 }
 
 #[derive(Debug, Error)]

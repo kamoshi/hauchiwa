@@ -111,6 +111,13 @@ where
             Task::F(task) => task.is_valid(old_tracking, new_outputs, updated_nodes),
         }
     }
+
+    pub(crate) fn requirements(&self) -> Vec<crate::preflight::Requirement> {
+        match self {
+            Task::C(task) => task.requirements(),
+            Task::F(task) => task.requirements(),
+        }
+    }
 }
 
 impl<G> Clone for Task<G> {

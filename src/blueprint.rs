@@ -380,6 +380,31 @@ impl<G> Website<G>
 where
     G: Send + Sync + 'static,
 {
+    fn run_preflight(&self) -> anyhow::Result<()> {
+        use std::collections::HashSet;
+        let mut seen = HashSet::new();
+        let mut missing = Vec::new();
+
+        for idx in self.graph.node_indices() {
+            for req in self.graph[idx].requirements() {
+                if seen.insert(req.clone()) && !req.check() {
+                    missing.push(req);
+                }
+            }
+        }
+
+        if missing.is_empty() {
+            return Ok(());
+        }
+
+        let list = missing
+            .iter()
+            .map(|r| format!("  - {r}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Err(crate::error::HauchiwaError::Preflight(list).into())
+    }
+
     /// Runs the build process once.
     ///
     /// This will:
@@ -392,6 +417,8 @@ where
     ///
     /// * `data` - The global user data to pass to all tasks.
     pub fn build(&mut self, data: G) -> anyhow::Result<Diagnostics> {
+        self.run_preflight()?;
+
         let globals = Environment {
             generator: "hauchiwa",
             mode: Mode::Build,
@@ -427,6 +454,8 @@ where
     /// * `data` - The global user data to pass to all tasks.
     #[cfg(feature = "live")]
     pub fn watch(&mut self, data: G) -> anyhow::Result<()> {
+        self.run_preflight()?;
+
         let static_entries = crate::utils::clone_static(&self.copied)?;
 
         crate::engine::watch(self, data, static_entries)?;

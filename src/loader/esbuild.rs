@@ -163,7 +163,8 @@ where
                 let path = store.save(&data, "js").map_err(ScriptError::Build)?;
 
                 Ok((hash, input.path, super::Script { path }))
-            });
+            })
+            .require(crate::preflight::Requirement::Binary("esbuild"));
 
         self.blueprint.add_task_fine(task)
     }

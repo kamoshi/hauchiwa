@@ -216,6 +216,7 @@ where
     glob_entry: Vec<String>,
     glob_watch: Vec<Pattern>,
     callback: GlobBundleCallback<G, R>,
+    requirements: Vec<crate::preflight::Requirement>,
 }
 
 impl<G, R> GlobBundle<G, R>
@@ -241,7 +242,14 @@ where
             glob_entry,
             glob_watch,
             callback: Box::new(callback),
+            requirements: Vec::new(),
         }
+    }
+
+    /// Declares a preflight requirement for this task.
+    pub(crate) fn require(mut self, req: crate::preflight::Requirement) -> Self {
+        self.requirements.push(req);
+        self
     }
 }
 
@@ -318,6 +326,10 @@ where
 
     fn is_dirty(&self, path: &Utf8Path) -> bool {
         self.glob_watch.iter().any(|p| p.matches(path.as_str()))
+    }
+
+    fn requirements(&self) -> Vec<crate::preflight::Requirement> {
+        self.requirements.clone()
     }
 }
 

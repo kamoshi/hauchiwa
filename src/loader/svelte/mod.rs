@@ -243,6 +243,8 @@ where
             ))
         });
 
+        let task = task.require(crate::preflight::Requirement::Binary("deno"));
+
         self.blueprint.add_task_fine(task)
     }
 }

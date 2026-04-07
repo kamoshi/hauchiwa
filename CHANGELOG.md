@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - `hauchiwa::prelude` now re-exports `Tracker`, `ImportMap`, and `Diagnostics`
+- Preflight check system: loaders can declare `Requirement`s checked before any task runs; `load_esbuild` requires `esbuild` on PATH, `load_svelte` requires `deno` on PATH; missing requirements are reported together in a single error
 
 ### Changed
 - **Breaking:** `Blueprint::copy_static` parameter order swapped from `(into, from)` to `(src, dest)`, matching standard Rust convention

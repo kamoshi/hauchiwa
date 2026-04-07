@@ -6,6 +6,7 @@ mod core;
 mod engine;
 pub mod error;
 pub mod loader;
+pub mod preflight;
 #[cfg(feature = "logging")]
 mod logging;
 pub mod output;
@@ -24,6 +25,7 @@ pub use crate::blueprint::{Blueprint, Website};
 pub use crate::core::{Environment, FileMetadata, ImportMap, Mode, Store, TaskContext};
 pub use crate::engine::{Diagnostics, Many, One, Tracker};
 pub use crate::output::Output;
+pub use crate::preflight::Requirement;
 
 pub mod prelude {
     pub use super::blueprint::{Blueprint, Website};

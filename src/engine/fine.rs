@@ -223,6 +223,10 @@ pub(crate) trait TypedFine<G: Send + Sync = ()>: Send + Sync {
     fn is_valid(&self, _: &[Option<TrackerState>], _: &[Dynamic], _: &HashSet<NodeIndex>) -> bool {
         true
     }
+
+    fn requirements(&self) -> Vec<crate::preflight::Requirement> {
+        vec![]
+    }
 }
 
 /// The core trait for all tasks in the graph.
@@ -261,6 +265,8 @@ pub(crate) trait Fine<G: Send + Sync = ()>: Send + Sync {
         new_outputs: &[Dynamic],
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool;
+
+    fn requirements(&self) -> Vec<crate::preflight::Requirement>;
 }
 
 // A blanket implementation to automatically bridge the two. This is where the
@@ -325,6 +331,10 @@ where
         updated_nodes: &HashSet<NodeIndex>,
     ) -> bool {
         T::is_valid(self, old_tracking, new_outputs, updated_nodes)
+    }
+
+    fn requirements(&self) -> Vec<crate::preflight::Requirement> {
+        T::requirements(self)
     }
 }
 
