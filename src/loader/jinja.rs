@@ -46,23 +46,6 @@ pub(crate) struct GlobJinja {
 impl GlobJinja {
     pub fn new(
         glob_entry: Vec<String>,
-        glob_watch: Vec<String>,
-        offset: Option<String>,
-        filters: Vec<FilterFn>,
-    ) -> Result<Self, HauchiwaError> {
-        Ok(Self {
-            glob_entry,
-            glob_watch: glob_watch
-                .iter()
-                .map(|p| Pattern::new(p))
-                .collect::<Result<_, _>>()?,
-            offset,
-            filters,
-        })
-    }
-
-    pub fn new(
-        glob_entry: Vec<String>,
         glob_watch: Vec<Pattern>,
         offset: Option<String>,
         filters: Vec<FilterFn>,

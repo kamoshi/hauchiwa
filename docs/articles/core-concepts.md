@@ -88,7 +88,7 @@ config.task()
             println!("{path}: {}", post.matter.title);
         }
 
-        // Iterate all items (coarse dependency — reruns if anything changes)
+        // Iterate all items (coarse dependency - reruns if anything changes)
         for (path, post) in pages.iter() { /* ... */ }
 
         // Values-only shorthand (same coarse dependency as iter)

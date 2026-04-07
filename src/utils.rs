@@ -17,7 +17,7 @@ use crate::error::StepCopyStatic;
 
 const ANSI_BLUE: Style = Style::new().blue();
 
-#[allow(clippy::expect_used)] // hardcoded template literal — cannot fail
+#[allow(clippy::expect_used)] // hardcoded template literal - cannot fail
 static PROGRESS_STYLE: LazyLock<ProgressStyle> = LazyLock::new(|| {
     ProgressStyle::default_bar()
         .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos} {msg}")

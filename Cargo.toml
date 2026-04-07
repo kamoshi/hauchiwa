@@ -69,7 +69,7 @@ optional = true
 
 # Feature = "pagefind"
 [dependencies.pagefind]
-version = "1.5"
+version = "=1.4"
 optional = true
 default-features = false
 

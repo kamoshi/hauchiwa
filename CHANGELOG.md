@@ -13,7 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 - **Breaking:** `Blueprint::copy_static` parameter order swapped from `(into, from)` to `(src, dest)`, matching standard Rust convention
-- **Breaking:** `Website::design()` removed — use `Blueprint::new()` as the single entry point
+- **Breaking:** `Website::design()` removed - use `Blueprint::new()` as the single entry point
 - **Breaking:** `DocumentLoader::source()` renamed to `.glob()` for consistency with all other loaders
 - **Breaking:** Glob pattern validation moved to call sites: `.glob()`, `.entry()`, and `.watch()` on all loaders now return `Result<Self, HauchiwaError>` and validate the pattern immediately; `register()` is now infallible and returns the handle directly
 - **Breaking:** `IntoIterator` for `Tracker` now yields `(&str, &T)` key-value pairs, consistent with `Tracker::iter()`
