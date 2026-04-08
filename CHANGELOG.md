@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [0.18.0] - 2026-04-08
+
+### Added
+- `Blueprint::set_dir_dist()` and `Blueprint::set_dir_cache()` allow
+  configuring the output and cache directories (defaults: `"dist"` and
+  `".cache"`); previously both were hardcoded
+
+### Changed
+- **Breaking:** `Blueprint::build()` and `Blueprint::watch()` now return
+  `Result<_, HauchiwaError>` instead of `anyhow::Result`, allowing callers to
+  match on specific error variants
+- `HauchiwaError::GraphCycle` added as a typed variant for cycle detection in
+  the task graph (previously an opaque `anyhow` error)
+
+### Fixed
+- WebSocket incoming thread no longer panics on transient stream errors or
+  failed handshakes; bad connections are now logged and skipped so live-reload
+  keeps working for the rest of the session
+
+### Removed
+- Internal dead types `HookError` and `LoaderFileCallbackError` (were defined
+  but never used)
+
 ## [0.17.0] - 2026-04-08
 
 ### Added

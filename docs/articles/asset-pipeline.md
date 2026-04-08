@@ -38,8 +38,9 @@ Hauchiwa hashes the output filename (e.g., `a1b2c3d4e5f6.css`) for perfect long-
 
 ## Static files
 
-Use `Blueprint::copy_static` to copy an entire directory tree into `dist/` as-is.
-Files whose content has not changed are skipped, so repeated builds stay fast.
+Use `Blueprint::copy_static` to copy an entire directory tree into the output
+directory as-is. Files whose content has not changed are skipped (mtime + BLAKE3
+fallback), so repeated builds stay fast.
 
 ```rust
 let config = Blueprint::<()>::new()
@@ -47,8 +48,8 @@ let config = Blueprint::<()>::new()
     .copy_static("assets/icons", "icons");  // dist/icons/  ← assets/icons/
 ```
 
-The target path is validated to stay inside `dist/` - relative traversals like
-`../../etc` are rejected with an error.
+The destination path is validated to stay inside the output directory - relative
+traversals like `../../etc` are rejected with an error at build time.
 
 ## Scripts (JS & Svelte)
 

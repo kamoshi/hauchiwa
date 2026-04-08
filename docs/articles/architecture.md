@@ -89,5 +89,7 @@ Two strategies are used depending on context:
   are deleted. No `dist/` walk needed.
 
 A slim version of the snapshot (content hashes only) is persisted to
-`.cache/snapshot/metadata.cbor` after each successful build, so the diff path
-is also taken on the first watch-mode rebuild after a cold `build`.
+`{cache_dir}/snapshot/metadata.cbor` (default: `.cache/snapshot/metadata.cbor`)
+after each successful build, so the diff path is also taken on the first
+watch-mode rebuild after a cold `build`. The cache directory can be changed with
+`Blueprint::set_dir_cache()`.

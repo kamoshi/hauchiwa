@@ -82,6 +82,8 @@ fn main() -> anyhow::Result<()> {
         });
 
     // 5. Build the website
+    // Optionally override the output and cache directories (defaults: "dist", ".cache"):
+    // let config = config.set_dir_dist("output").set_dir_cache(".build-cache");
     let mut website = config.finish();
     website.build(())?;
 
@@ -103,7 +105,7 @@ fn main() -> anyhow::Result<()> {
 
 
 ## Built-in support for
-* **Static files**: Copy arbitrary file trees into `dist/`.
+* **Static files**: Copy arbitrary file trees into the output directory.
 * **Content**: Parse Markdown and Frontmatter safely into strongly-typed Rust structs.
 * **Templating**: Render pages using `minijinja` (Jinja2 syntax) templates.
 * **CSS/Sass**: Integrate `grass` to compile and minify stylesheets.

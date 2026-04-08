@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use camino::Utf8PathBuf;
 use glob::Pattern;
 use petgraph::Graph;
 
@@ -34,12 +35,28 @@ use crate::{Diagnostics, TaskContext};
 pub struct Blueprint<G: Send + Sync = ()> {
     pub(crate) graph: Graph<Task<G>, ()>,
     pub(crate) copied: Vec<(String, String)>,
+    pub(crate) out_dir: Utf8PathBuf,
+    pub(crate) cache_dir: Utf8PathBuf,
 }
 
 impl<G: Send + Sync + 'static> Blueprint<G> {
     /// Creates a new, empty configuration.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Sets the output directory (default: `"dist"`).
+    #[must_use]
+    pub fn set_dir_dist(mut self, dir: impl Into<Utf8PathBuf>) -> Self {
+        self.out_dir = dir.into();
+        self
+    }
+
+    /// Sets the cache directory (default: `".cache"`).
+    #[must_use]
+    pub fn set_dir_cache(mut self, dir: impl Into<Utf8PathBuf>) -> Self {
+        self.cache_dir = dir.into();
+        self
     }
 
     #[must_use]
@@ -60,6 +77,8 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
         Website {
             graph: self.graph,
             copied: self.copied,
+            out_dir: self.out_dir,
+            cache_dir: self.cache_dir,
         }
     }
 
@@ -99,6 +118,8 @@ impl<G: Send + Sync> Default for Blueprint<G> {
         Self {
             copied: Vec::default(),
             graph: Graph::default(),
+            out_dir: Utf8PathBuf::from("dist"),
+            cache_dir: Utf8PathBuf::from(".cache"),
         }
     }
 }
@@ -374,13 +395,15 @@ where
 pub struct Website<G: Send + Sync = ()> {
     pub(crate) graph: Graph<Task<G>, ()>,
     pub(crate) copied: Vec<(String, String)>,
+    pub(crate) out_dir: Utf8PathBuf,
+    pub(crate) cache_dir: Utf8PathBuf,
 }
 
 impl<G> Website<G>
 where
     G: Send + Sync + 'static,
 {
-    fn run_preflight(&self) -> anyhow::Result<()> {
+    fn run_preflight(&self) -> Result<(), crate::error::HauchiwaError> {
         use std::collections::HashSet;
         let mut seen = HashSet::new();
         let mut missing = Vec::new();
@@ -402,7 +425,7 @@ where
             .map(|r| format!("  - {r}"))
             .collect::<Vec<_>>()
             .join("\n");
-        Err(crate::error::HauchiwaError::Preflight(list).into())
+        Err(crate::error::HauchiwaError::Preflight(list))
     }
 
     /// Runs the build process once.
@@ -416,7 +439,8 @@ where
     /// # Arguments
     ///
     /// * `data` - The global user data to pass to all tasks.
-    pub fn build(&mut self, data: G) -> anyhow::Result<Diagnostics> {
+    pub fn build(&mut self, data: G) -> Result<Diagnostics, crate::error::HauchiwaError> {
+        use crate::error::BuildError;
         self.run_preflight()?;
 
         let globals = Environment {
@@ -426,8 +450,8 @@ where
             data,
         };
 
-        let prev_meta = crate::snapshot::SnapshotMeta::load()?;
-        let static_entries = crate::utils::clone_static(&self.copied)?;
+        let prev_meta = crate::snapshot::SnapshotMeta::load(&self.cache_dir).map_err(BuildError::Io)?;
+        let static_entries = crate::utils::clone_static(&self.copied, &self.out_dir)?;
 
         let (_, mut manifest, diagnostics) = run_once_parallel(self, &globals)?;
 
@@ -436,10 +460,10 @@ where
         }
 
         match prev_meta {
-            Some(ref prev) => manifest.commit_diff_meta(prev)?,
-            None => manifest.commit()?,
+            Some(ref prev) => manifest.commit_diff_meta(prev, &self.out_dir).map_err(BuildError::Io)?,
+            None => manifest.commit(&self.out_dir).map_err(BuildError::Io)?,
         }
-        manifest.to_meta().save()?;
+        manifest.to_meta().save(&self.cache_dir).map_err(BuildError::Io)?;
 
         Ok(diagnostics)
     }
@@ -453,12 +477,15 @@ where
     ///
     /// * `data` - The global user data to pass to all tasks.
     #[cfg(feature = "live")]
-    pub fn watch(&mut self, data: G) -> anyhow::Result<()> {
+    pub fn watch(&mut self, data: G) -> Result<(), crate::error::HauchiwaError> {
         self.run_preflight()?;
 
-        let static_entries = crate::utils::clone_static(&self.copied)?;
+        let out_dir = self.out_dir.clone();
+        let cache_dir = self.cache_dir.clone();
+        let static_entries = crate::utils::clone_static(&self.copied, &out_dir)?;
 
-        crate::engine::watch(self, data, static_entries)?;
+        crate::engine::watch(self, data, static_entries, &out_dir, &cache_dir)
+            .map_err(crate::error::WatchError::Other)?;
 
         Ok(())
     }

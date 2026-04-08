@@ -55,11 +55,10 @@ pub enum HauchiwaError {
 
     #[error("Preflight checks failed - missing:\n{0}")]
     Preflight(String),
-}
 
-#[derive(Debug, Error)]
-#[error(transparent)]
-pub struct LoaderFileCallbackError(pub anyhow::Error);
+    #[error("Cycle detected in task graph")]
+    GraphCycle,
+}
 
 #[derive(Debug, Error)]
 pub enum LoaderError {
@@ -119,12 +118,9 @@ pub enum WatchError {
 
     #[error(transparent)]
     Send(#[from] SendError<()>),
-}
 
-#[derive(Debug, Error)]
-pub enum HookError {
     #[error(transparent)]
-    Userland(#[from] anyhow::Error),
+    Other(anyhow::Error),
 }
 
 #[derive(Debug, Error)]

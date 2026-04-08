@@ -97,7 +97,7 @@ Now run your generator:
 cargo run
 ```
 
-See the result: Check the newly created `dist/` directory. You will see `dist/index.html`.
+Check the newly created `dist/` directory (the default output location). You will see `dist/index.html`.
 
 You should see:
 ```html

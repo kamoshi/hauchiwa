@@ -19,7 +19,7 @@ To keep your build times low, you can disable features you don't need in `Cargo.
 
 ```toml
 [dependencies]
-hauchiwa = { version = "0.17.0", default-features = false, features = ["grass"] }
+hauchiwa = { version = "0.18.0", default-features = false, features = ["grass"] }
 ```
 
 ### Available Features

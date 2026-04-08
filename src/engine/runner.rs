@@ -49,16 +49,17 @@ pub(crate) struct NodeData {
 pub(crate) fn run_once_parallel<G: Send + Sync>(
     website: &mut Website<G>,
     globals: &Environment<G>,
-) -> anyhow::Result<(HashMap<NodeIndex, NodeData>, Snapshot, Diagnostics)> {
+) -> Result<(HashMap<NodeIndex, NodeData>, Snapshot, Diagnostics), crate::error::HauchiwaError> {
     // We run toposort primarily to detect any cycles in the graph.
     petgraph::algo::toposort(&website.graph, None)
-        .map_err(|_| anyhow::anyhow!("cycle detected in task graph"))?;
+        .map_err(|_| crate::error::HauchiwaError::GraphCycle)?;
 
     let mut cache = HashMap::new();
     let pending = website.graph.node_indices().collect();
     let dirty = HashSet::new();
 
-    let diagnostics = run_tasks_parallel(website, globals, &mut cache, &pending, &dirty)?;
+    let diagnostics = run_tasks_parallel(website, globals, &mut cache, &pending, &dirty)
+        .map_err(|e| crate::error::HauchiwaError::Build(crate::error::BuildError::Other(e)))?;
 
     let manifest = collect_manifest(&cache, &website.graph);
     Ok((cache, manifest, diagnostics))

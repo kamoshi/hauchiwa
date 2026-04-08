@@ -150,8 +150,8 @@ impl Snapshot {
     ///
     /// [`SnapshotEntry::HashAsset`] and [`SnapshotEntry::StaticFile`] entries
     /// are already on disk before `commit()` is called.
-    pub(crate) fn commit(&self) -> io::Result<()> {
-        let dist = Path::new("dist");
+    pub(crate) fn commit(&self, dist: &camino::Utf8Path) -> io::Result<()> {
+        let dist = dist.as_std_path();
         fs::create_dir_all(dist)?;
 
         tracing::debug!(
@@ -182,8 +182,8 @@ impl Snapshot {
     /// 1. Deletes files present in `prev` but absent from `self`.
     /// 2. Writes pages that are new or whose content hash changed.
     ///    Pages with identical hashes are skipped entirely - no disk read needed.
-    pub(crate) fn commit_diff(&self, prev: &Snapshot) -> io::Result<()> {
-        let dist = Path::new("dist");
+    pub(crate) fn commit_diff(&self, prev: &Snapshot, dist: &camino::Utf8Path) -> io::Result<()> {
+        let dist = dist.as_std_path();
         fs::create_dir_all(dist)?;
 
         tracing::debug!(
@@ -269,8 +269,8 @@ impl Snapshot {
     /// builds where no in-memory previous snapshot is available.
     ///
     /// Semantics are identical to [`commit_diff`](Self::commit_diff).
-    pub(crate) fn commit_diff_meta(&self, prev: &SnapshotMeta) -> io::Result<()> {
-        let dist = Path::new("dist");
+    pub(crate) fn commit_diff_meta(&self, prev: &SnapshotMeta, dist: &camino::Utf8Path) -> io::Result<()> {
+        let dist = dist.as_std_path();
         fs::create_dir_all(dist)?;
 
         tracing::debug!(
@@ -350,29 +350,31 @@ enum MetaEntry {
 }
 
 impl SnapshotMeta {
-    const PATH: &'static str = ".cache/snapshot/metadata.cbor";
+    const RELATIVE_PATH: &'static str = "snapshot/metadata.cbor";
 
     /// Loads the persisted snapshot meta from disk.
     ///
     /// Returns `None` if the file does not exist (e.g. first build).
     /// Returns an error for I/O or deserialization failures.
-    pub(crate) fn load() -> io::Result<Option<Self>> {
-        let file = match fs::File::open(Self::PATH) {
+    pub(crate) fn load(cache_dir: &camino::Utf8Path) -> io::Result<Option<Self>> {
+        let path = cache_dir.join(Self::RELATIVE_PATH);
+        let file = match fs::File::open(&path) {
             Ok(f) => f,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e),
         };
-        tracing::debug!("loading snapshot meta from {}", Self::PATH);
+        tracing::debug!("loading snapshot meta from {}", path);
         ciborium::from_reader(file)
             .map(Some)
             .map_err(io::Error::other)
     }
 
-    /// Persists this snapshot meta to `.cache/snapshot/metadata.cbor`.
-    pub(crate) fn save(&self) -> io::Result<()> {
-        fs::create_dir_all(".cache/snapshot")?;
-        let file = fs::File::create(Self::PATH)?;
-        tracing::debug!("saving snapshot meta to {}", Self::PATH);
+    /// Persists this snapshot meta to `{cache_dir}/snapshot/metadata.cbor`.
+    pub(crate) fn save(&self, cache_dir: &camino::Utf8Path) -> io::Result<()> {
+        let path = cache_dir.join(Self::RELATIVE_PATH);
+        fs::create_dir_all(cache_dir.join("snapshot"))?;
+        let file = fs::File::create(&path)?;
+        tracing::debug!("saving snapshot meta to {}", path);
         ciborium::into_writer(self, file).map_err(io::Error::other)
     }
 }

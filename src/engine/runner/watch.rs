@@ -42,6 +42,8 @@ pub fn watch<G: Send + Sync>(
     site: &mut Website<G>,
     data: G,
     static_entries: Vec<(Utf8PathBuf, Utf8PathBuf)>,
+    out_dir: &Utf8Path,
+    cache_dir: &Utf8Path,
 ) -> anyhow::Result<()> {
     let (tcp, port) = reserve_port()?;
     let pwd = env::current_dir()?;
@@ -53,7 +55,7 @@ pub fn watch<G: Send + Sync>(
         data,
     };
 
-    let prev_meta = crate::snapshot::SnapshotMeta::load().ok().flatten();
+    let prev_meta = crate::snapshot::SnapshotMeta::load(cache_dir).ok().flatten();
 
     let (mut cache, mut snapshot, _) = run_once_parallel(site, &globals)?;
     for (source, dist_rel) in &static_entries {
@@ -61,10 +63,10 @@ pub fn watch<G: Send + Sync>(
     }
     tracing::info!("collected {} pages", snapshot.page_count());
     match prev_meta {
-        Some(ref prev) => snapshot.commit_diff_meta(prev)?,
-        None => snapshot.commit()?,
+        Some(ref prev) => snapshot.commit_diff_meta(prev, out_dir)?,
+        None => snapshot.commit(out_dir)?,
     }
-    snapshot.to_meta().save()?;
+    snapshot.to_meta().save(cache_dir)?;
     let mut prev_snapshot = snapshot;
 
     tracing::info!("initial build completed, now watching for changes...");
@@ -100,7 +102,7 @@ pub fn watch<G: Send + Sync>(
     }
 
     #[cfg(feature = "server")]
-    let _thread_http = super::http::start();
+    let _thread_http = super::http::start(out_dir.to_string());
 
     loop {
         match rx.recv() {
@@ -157,11 +159,11 @@ pub fn watch<G: Send + Sync>(
                         snapshot.insert_static_file(dist_rel.clone(), source.clone());
                     }
                     tracing::info!("collected {} pages", snapshot.page_count());
-                    if let Err(e) = snapshot.commit_diff(&prev_snapshot) {
+                    if let Err(e) = snapshot.commit_diff(&prev_snapshot, out_dir) {
                         tracing::error!("failed to write pages to dist: {}", e);
                         continue;
                     }
-                    if let Err(e) = snapshot.to_meta().save() {
+                    if let Err(e) = snapshot.to_meta().save(cache_dir) {
                         tracing::warn!("failed to save snapshot meta: {}", e);
                     }
                     prev_snapshot = snapshot;
@@ -192,9 +194,20 @@ fn new_thread_ws_incoming(
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         for stream in server.incoming() {
-            #[allow(clippy::unwrap_used)]
-            // IO errors from incoming streams are logged or skipped; accept errors abort the connection
-            let socket = tungstenite::accept(stream.unwrap()).unwrap();
+            let stream = match stream {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("WebSocket: incoming stream error: {e}");
+                    continue;
+                }
+            };
+            let socket = match tungstenite::accept(stream) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!("WebSocket: handshake failed: {e}");
+                    continue;
+                }
+            };
             #[allow(clippy::unwrap_used)] // poisoned mutex means a thread panicked - unrecoverable
             client.lock().unwrap().push(socket);
         }

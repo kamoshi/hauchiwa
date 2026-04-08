@@ -84,6 +84,7 @@ struct FileEntry {
 /// by the caller so that step 4 can reconcile `dist` without `clear_dist()`.
 pub fn clone_static(
     copied: &[(String, String)],
+    out_dir: &Utf8Path,
 ) -> Result<Vec<(Utf8PathBuf, Utf8PathBuf)>, StepCopyStatic> {
     if copied.is_empty() {
         return Ok(vec![]);
@@ -126,7 +127,7 @@ pub fn clone_static(
             return Err(StepCopyStatic::UnsafeTarget(into.clone()));
         }
 
-        let target = std::path::Path::new("dist").join(into);
+        let target = out_dir.as_std_path().join(into);
         let dist_rel = Utf8Path::new(into);
 
         if fs::metadata(from).is_ok() {

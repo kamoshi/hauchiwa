@@ -153,9 +153,9 @@ provides two fields:
 
 ## Static file copying
 
-Use `copy_static` to mirror a directory tree into `dist/` without processing it.
-This is suitable for fonts, favicons, robots.txt, and other files that should be
-served verbatim.
+Use `copy_static` to mirror a directory tree into the output directory without
+processing it. This is suitable for fonts, favicons, robots.txt, and other files
+that should be served verbatim.
 
 ```rust
 let config = Blueprint::<()>::new()
@@ -165,10 +165,25 @@ let config = Blueprint::<()>::new()
 
 Arguments:
 - First: the source directory to copy from.
-- Second: the destination path **inside** `dist/` (e.g. `"fonts"` → `dist/fonts/`).
+- Second: the destination path inside the output directory (e.g. `"fonts"` → `dist/fonts/`).
 
-Paths that would escape `dist/` (e.g. `"../../etc"`) are rejected at build time.
-Unchanged files are skipped via content hashing, so repeated builds stay fast.
+Paths that would escape the output directory (e.g. `"../../etc"`) are rejected at
+build time. Unchanged files are skipped via mtime and content hashing, so repeated
+builds stay fast.
+
+## Directory configuration
+
+By default, Hauchiwa writes output to `dist/` and keeps its build cache in `.cache/`.
+Both can be changed with builder methods on `Blueprint`:
+
+```rust
+let config = Blueprint::<()>::new()
+    .set_dir_dist("output")    // write pages and assets here
+    .set_dir_cache(".hauchiwa-cache"); // store snapshot meta and hashed assets here
+```
+
+This is useful when your project already uses `dist/` for something else, or when
+you want to co-locate the cache with the build artefacts.
 
 ## Custom loaders
 
@@ -193,3 +208,38 @@ The `input` argument provides:
 
 The returned `Many<MyData>` handle can be wired into any downstream task just like
 a handle from a built-in loader.
+
+## Error handling
+
+`website.build()` and `website.watch()` return `Result<_, HauchiwaError>`, a typed
+error enum. You can propagate it with `?` directly - `HauchiwaError` implements
+`std::error::Error`, so it works in any `anyhow::Result` context too.
+
+When you need to react to specific failures, match on the variants:
+
+```rust
+use hauchiwa::error::HauchiwaError;
+
+match website.build(data) {
+    Ok(diagnostics) => { /* inspect timings */ }
+    Err(HauchiwaError::Preflight(msg)) => {
+        eprintln!("Missing dependencies:\n{msg}");
+        std::process::exit(1);
+    }
+    Err(HauchiwaError::GraphCycle) => {
+        eprintln!("Cycle detected in task graph - check your .using() wiring");
+        std::process::exit(1);
+    }
+    Err(e) => return Err(e.into()),
+}
+```
+
+Notable variants:
+
+| Variant | When it occurs |
+| :--- | :--- |
+| `HauchiwaError::Preflight(msg)` | A required binary (e.g. `esbuild`, `deno`) is missing from `PATH`. |
+| `HauchiwaError::GraphCycle` | A cycle was detected in the task dependency graph. |
+| `HauchiwaError::Build(BuildError)` | A task returned an error or an I/O failure occurred during the build. |
+| `HauchiwaError::StepStatic(e)` | `copy_static` failed (unsafe path or I/O error). |
+| `HauchiwaError::AssetNotFound(path)` | A task requested an asset that was not found in the graph. |
