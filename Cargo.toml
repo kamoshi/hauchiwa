@@ -1,6 +1,6 @@
 [package]
 name        = "hauchiwa"
-version     = "0.17.0-unreleased"
+version     = "0.17.0"
 edition     = "2024"
 authors     = ["Maciej Jur <maciej@kamoshi.org>"]
 keywords    = ["ssg"]
@@ -69,7 +69,7 @@ optional = true
 
 # Feature = "pagefind"
 [dependencies.pagefind]
-version = "=1.4"
+version = "1.5.1"
 optional = true
 default-features = false
 
