@@ -22,9 +22,6 @@ pub mod css;
 #[cfg(feature = "grass")]
 pub use css::Stylesheet;
 
-#[cfg(feature = "rolldown")]
-pub mod rolldown;
-
 #[cfg(feature = "minijinja")]
 pub mod jinja;
 #[cfg(feature = "minijinja")]
@@ -171,7 +168,7 @@ where
                 let hash = Hash32::hash_file(&path)?;
                 let file = Input { path, hash };
 
-                let mut rt = Store::new();
+                let mut rt = runtime.fork();
 
                 // call the user callback
                 let (path, res) = (self.callback)(context, &mut rt, file)?;
@@ -227,11 +224,7 @@ where
     /// Creates a new `GlobBundle` task with pre-compiled watch patterns.
     ///
     /// Use this when patterns have already been validated at the call site.
-    pub(crate) fn new<F>(
-        glob_entry: Vec<String>,
-        glob_watch: Vec<Pattern>,
-        callback: F,
-    ) -> Self
+    pub(crate) fn new<F>(glob_entry: Vec<String>, glob_watch: Vec<Pattern>, callback: F) -> Self
     where
         F: Fn(&TaskContext<G>, &mut Store, Input) -> anyhow::Result<(Hash32, Utf8PathBuf, R)>
             + Send
@@ -302,7 +295,7 @@ where
                 let hash = Hash32::hash_file(&path)?;
                 let file = Input { path, hash };
 
-                let mut rt = Store::new();
+                let mut rt = runtime.fork();
 
                 // call the user callback
                 let (hash, path, res) = (self.callback)(context, &mut rt, file)?;

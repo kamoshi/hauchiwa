@@ -53,8 +53,7 @@ use crate::loader::{GlobFiles, Input, Store};
 use crate::{Blueprint, TaskContext};
 
 const DIR_STORE: &str = "/hash/img/";
-const DIR_CACHE: &str = ".cache/hash/img/";
-const DIR_DIST: &str = "dist/hash/img/";
+const DIR_REL: &str = "hash/img";
 
 /// Errors that can occur when processing images.
 #[derive(Debug, Error)]
@@ -193,7 +192,7 @@ where
             self.entry,
             self.watch,
             move |_: &TaskContext<G>, store: &mut Store, input: Input| {
-                let (image, dist_paths) = process_image(&input, &formats)?;
+                let (image, dist_paths) = process_image(&input, &formats, store)?;
                 store.store_paths.extend(dist_paths);
                 Ok((input.path, image))
             },
@@ -224,14 +223,20 @@ where
     }
 }
 
-fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<(Image, Vec<Utf8PathBuf>), ImageError> {
+fn process_image(
+    file: &Input,
+    formats: &[ImageFormat],
+    store: &Store,
+) -> Result<(Image, Vec<Utf8PathBuf>), ImageError> {
     let source_hash = file.hash.to_hex();
+    let cache_dir = store.cache_dir.join(DIR_REL);
+    let dist_dir = store.out_dir.join(DIR_REL);
 
     let meta_file_name = format!("{}.meta.cbor", source_hash);
-    let meta_file_path = Utf8Path::new(DIR_CACHE).join(&meta_file_name);
+    let meta_file_path = cache_dir.join(&meta_file_name);
 
-    fs::create_dir_all(DIR_CACHE)?;
-    fs::create_dir_all(DIR_DIST)?;
+    fs::create_dir_all(&cache_dir)?;
+    fs::create_dir_all(&dist_dir)?;
 
     // Try to load serialized metadata
     let metadata = if meta_file_path.exists() {
@@ -260,8 +265,8 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<(Image, Vec<Ut
         let file_name = format!("{}.{}.{}", source_hash, config, format.extension());
 
         let path_store = Utf8Path::new(DIR_STORE).join(&file_name);
-        let path_cache = Utf8Path::new(DIR_CACHE).join(&file_name);
-        let path_dist = Utf8Path::new(DIR_DIST).join(&file_name);
+        let path_cache = cache_dir.join(&file_name);
+        let path_dist = dist_dir.join(&file_name);
 
         if !path_cache.exists() {
             // cache miss
@@ -286,9 +291,13 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<(Image, Vec<Ut
                 }
             }
 
-            dist_paths.push(Utf8Path::new("hash/img").join(
-    path_dist.file_name().ok_or(ImageError::InvalidOutput("path_dist has no filename"))?,
-));
+            dist_paths.push(
+                Utf8Path::new(DIR_REL).join(
+                    path_dist
+                        .file_name()
+                        .ok_or(ImageError::InvalidOutput("path_dist has no filename"))?,
+                ),
+            );
             sources.insert(format, path_store.clone());
 
             if default_path.is_none() {
@@ -298,7 +307,9 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<(Image, Vec<Ut
 
         return Ok((
             Image {
-                default: default_path.ok_or(ImageError::InvalidOutput("at least one image format must be produced"))?,
+                default: default_path.ok_or(ImageError::InvalidOutput(
+                    "at least one image format must be produced",
+                ))?,
                 sources,
                 width: meta.width,
                 height: meta.height,
@@ -384,9 +395,13 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<(Image, Vec<Ut
             }
         }
 
-        dist_paths.push(Utf8Path::new("hash/img").join(
-    path_dist.file_name().ok_or(ImageError::InvalidOutput("path_dist has no filename"))?,
-));
+        dist_paths.push(
+            Utf8Path::new(DIR_REL).join(
+                path_dist
+                    .file_name()
+                    .ok_or(ImageError::InvalidOutput("path_dist has no filename"))?,
+            ),
+        );
         sources.insert(format, path_store.clone());
 
         if default_path.is_none() {
@@ -396,8 +411,9 @@ fn process_image(file: &Input, formats: &[ImageFormat]) -> Result<(Image, Vec<Ut
 
     Ok((
         Image {
-            default: default_path
-                .ok_or(ImageError::InvalidOutput("at least one image format must be produced"))?,
+            default: default_path.ok_or(ImageError::InvalidOutput(
+                "at least one image format must be produced",
+            ))?,
             sources,
             width,
             height,

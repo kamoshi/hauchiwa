@@ -41,7 +41,7 @@ use tungstenite::WebSocket;
 pub fn watch<G: Send + Sync>(
     site: &mut Website<G>,
     data: G,
-    static_entries: Vec<(Utf8PathBuf, Utf8PathBuf)>,
+    copied: Vec<(String, String)>,
     out_dir: &Utf8Path,
     cache_dir: &Utf8Path,
 ) -> anyhow::Result<()> {
@@ -55,12 +55,17 @@ pub fn watch<G: Send + Sync>(
         data,
     };
 
-    let prev_meta = crate::snapshot::SnapshotMeta::load(cache_dir).ok().flatten();
+    let prev_meta = crate::snapshot::SnapshotMeta::load(cache_dir)
+        .ok()
+        .flatten();
+
+    let mut static_files = crate::utils::collect_static(&copied, out_dir)?;
 
     let (mut cache, mut snapshot, _) = run_once_parallel(site, &globals)?;
-    for (source, dist_rel) in &static_entries {
-        snapshot.insert_static_file(dist_rel.clone(), source.clone());
+    for entry in &static_files {
+        snapshot.insert_static_file(entry.dist_rel.clone(), entry.source_utf8.clone())?;
     }
+    crate::utils::copy_static_entries(&static_files)?;
     tracing::info!("collected {} pages", snapshot.page_count());
     match prev_meta {
         Some(ref prev) => snapshot.commit_diff_meta(prev, out_dir)?,
@@ -81,15 +86,25 @@ pub fn watch<G: Send + Sync>(
     })?;
 
     let mut watched = HashSet::new();
-    let mut filters = HashSet::new();
+    let mut task_filters = HashSet::new();
+    let mut static_filters = HashSet::new();
     for (_, task) in site.graph.node_references() {
         for path in &task.watched() {
             if let Ok((path, pattern)) = resolve_watch_path(path) {
                 watched.insert(path);
-                filters.insert(pattern);
+                task_filters.insert(pattern);
             } else {
                 tracing::error!("failed to resolve path: {}", &path);
             };
+        }
+    }
+    for (_, source) in &copied {
+        match resolve_static_watch_path(source) {
+            Ok((path, patterns)) => {
+                watched.insert(path);
+                static_filters.extend(patterns);
+            }
+            Err(e) => tracing::error!("failed to resolve static path `{}`: {}", source, e),
         }
     }
 
@@ -110,13 +125,22 @@ pub fn watch<G: Send + Sync>(
                 tracing::debug!("{:?} events received", events);
 
                 let mut dirty_nodes = HashSet::new();
+                let mut static_dirty = false;
                 for de in events {
                     for path in &de.event.paths {
-                        if !filters.iter().any(|filter| filter.matches_path(path)) {
+                        let task_match =
+                            task_filters.iter().any(|filter| filter.matches_path(path));
+                        let static_match = static_filters
+                            .iter()
+                            .any(|filter| filter.matches_path(path));
+
+                        if !task_match && !static_match {
                             continue;
                         }
 
-                        if let Some(path) = Utf8Path::from_path(path) {
+                        static_dirty |= static_match;
+
+                        if task_match && let Some(path) = Utf8Path::from_path(path) {
                             let Ok(path) = path.strip_prefix(&pwd) else {
                                 continue;
                             };
@@ -130,7 +154,7 @@ pub fn watch<G: Send + Sync>(
                     }
                 }
 
-                if !dirty_nodes.is_empty() {
+                if !dirty_nodes.is_empty() || static_dirty {
                     tracing::info!("change detected, re-running tasks...");
                     let mut to_rerun = HashSet::new();
                     for start_node in &dirty_nodes {
@@ -140,23 +164,55 @@ pub fn watch<G: Send + Sync>(
                         }
                     }
 
-                    let _diagnostics = match run_tasks_parallel(
-                        site,
-                        &globals,
-                        &mut cache,
-                        &to_rerun,
-                        &dirty_nodes,
-                    ) {
-                        Ok(res) => res,
+                    if !to_rerun.is_empty() {
+                        let _diagnostics = match run_tasks_parallel(
+                            site,
+                            &globals,
+                            &mut cache,
+                            &to_rerun,
+                            &dirty_nodes,
+                        ) {
+                            Ok(res) => res,
+                            Err(e) => {
+                                tracing::error!("Error running tasks: {}", e);
+                                continue;
+                            }
+                        };
+                    }
+
+                    if static_dirty {
+                        static_files = match crate::utils::collect_static(&copied, out_dir) {
+                            Ok(files) => files,
+                            Err(e) => {
+                                tracing::error!("failed to collect static files: {}", e);
+                                continue;
+                            }
+                        };
+                    }
+
+                    let mut snapshot = match collect_manifest(&cache, &site.graph) {
+                        Ok(snapshot) => snapshot,
                         Err(e) => {
-                            tracing::error!("Error running tasks: {}", e);
+                            tracing::error!("failed to collect output manifest: {}", e);
                             continue;
                         }
                     };
-
-                    let mut snapshot = collect_manifest(&cache, &site.graph);
-                    for (source, dist_rel) in &static_entries {
-                        snapshot.insert_static_file(dist_rel.clone(), source.clone());
+                    let mut static_manifest_ok = true;
+                    for entry in &static_files {
+                        if let Err(e) = snapshot
+                            .insert_static_file(entry.dist_rel.clone(), entry.source_utf8.clone())
+                        {
+                            tracing::error!("failed to add static file to manifest: {}", e);
+                            static_manifest_ok = false;
+                            break;
+                        }
+                    }
+                    if !static_manifest_ok {
+                        continue;
+                    }
+                    if let Err(e) = crate::utils::copy_static_entries(&static_files) {
+                        tracing::error!("failed to copy static files: {}", e);
+                        continue;
                     }
                     tracing::info!("collected {} pages", snapshot.page_count());
                     if let Err(e) = snapshot.commit_diff(&prev_snapshot, out_dir) {
@@ -297,6 +353,24 @@ pub fn resolve_watch_path(glob_str: impl AsRef<str>) -> anyhow::Result<(Utf8Path
     Ok((watch_root, pattern))
 }
 
+fn resolve_static_watch_path(
+    source: impl AsRef<str>,
+) -> anyhow::Result<(Utf8PathBuf, Vec<Pattern>)> {
+    let absolute = Utf8Path::new(source.as_ref()).canonicalize_utf8()?;
+
+    if absolute.is_file() {
+        let watch_root = absolute.parent().unwrap_or(&absolute).to_path_buf();
+        let pattern = Pattern::new(absolute.as_str())?;
+        return Ok((watch_root, vec![pattern]));
+    }
+
+    let patterns = vec![
+        Pattern::new(absolute.as_str())?,
+        Pattern::new(absolute.join("**").as_str())?,
+    ];
+    Ok((absolute, patterns))
+}
+
 /// Reduces a set of paths to the minimal set of watch roots.
 ///
 /// If we watch `/a` and `/a/b`, we only need to watch `/a` because
@@ -364,6 +438,36 @@ mod tests {
         // Pattern: "src/**/*.rs"
         assert_eq!(watch.as_str(), cwd.join("src/"));
         assert_eq!(pattern.as_str(), cwd.join("src/**/*.rs"));
+    }
+
+    #[test]
+    fn test_static_directory_watch_path() {
+        let (watch, patterns) = resolve_static_watch_path("src").expect("Should resolve");
+        let cwd = Utf8PathBuf::try_from(std::env::current_dir().unwrap()).unwrap();
+        let source = cwd.join("src");
+
+        assert_eq!(watch, source);
+        assert!(
+            patterns
+                .iter()
+                .any(|p| p.matches_path(source.as_std_path()))
+        );
+        assert!(
+            patterns
+                .iter()
+                .any(|p| p.matches_path(source.join("lib.rs").as_std_path()))
+        );
+    }
+
+    #[test]
+    fn test_static_file_watch_path() {
+        let (watch, patterns) = resolve_static_watch_path("README.md").expect("Should resolve");
+        let cwd = Utf8PathBuf::try_from(std::env::current_dir().unwrap()).unwrap();
+        let source = cwd.join("README.md");
+
+        assert_eq!(watch, cwd);
+        assert_eq!(patterns.len(), 1);
+        assert!(patterns[0].matches_path(source.as_std_path()));
     }
 
     #[test]

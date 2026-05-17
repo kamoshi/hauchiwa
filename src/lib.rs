@@ -6,10 +6,10 @@ mod core;
 mod engine;
 pub mod error;
 pub mod loader;
-pub mod preflight;
 #[cfg(feature = "logging")]
 mod logging;
 pub mod output;
+pub mod preflight;
 pub(crate) mod snapshot;
 mod utils;
 

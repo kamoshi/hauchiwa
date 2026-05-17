@@ -237,15 +237,30 @@ pub struct Store {
     /// Dist-relative paths of all hash assets saved by this store during a task execution.
     /// Collected into `NodeData` after the task completes so the `Snapshot` can track them.
     pub(crate) store_paths: Vec<Utf8PathBuf>,
+    pub(crate) out_dir: Utf8PathBuf,
+    pub(crate) cache_dir: Utf8PathBuf,
 }
 
 impl Store {
     /// Creates a new, empty Store.
     pub fn new() -> Self {
+        Self::with_dirs("dist", ".cache")
+    }
+
+    pub(crate) fn with_dirs(
+        out_dir: impl Into<Utf8PathBuf>,
+        cache_dir: impl Into<Utf8PathBuf>,
+    ) -> Self {
         Self {
             imports: ImportMap::new(),
             store_paths: Vec::new(),
+            out_dir: out_dir.into(),
+            cache_dir: cache_dir.into(),
         }
+    }
+
+    pub(crate) fn fork(&self) -> Self {
+        Self::with_dirs(self.out_dir.clone(), self.cache_dir.clone())
     }
 
     /// Saves raw data as a content-addressed artifact.
@@ -265,12 +280,12 @@ impl Store {
         let hash = Hash32::hash(data);
         let hash = hash.to_hex();
 
-        let path_temp = Utf8Path::new(".cache/hash").join(&hash);
-        let path_dist = Utf8Path::new("dist/hash").join(&hash).with_extension(ext);
+        let path_temp = self.cache_dir.join("hash").join(&hash);
+        let path_dist = self.out_dir.join("hash").join(&hash).with_extension(ext);
         let path_rel = Utf8Path::new("hash").join(&hash).with_extension(ext);
         let path_root = Utf8Path::new("/hash/").join(&hash).with_extension(ext);
 
-        fs::create_dir_all(".cache/hash")?;
+        fs::create_dir_all(self.cache_dir.join("hash"))?;
         match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -360,5 +375,24 @@ mod test {
         assert!(json.contains(r#""a":"path/a""#));
         assert!(json.contains(r#""b":"path/b2""#));
         assert!(json.contains(r#""c":"path/c""#));
+    }
+
+    #[test]
+    fn test_store_save_uses_configured_dirs() -> Result<(), Box<dyn std::error::Error>> {
+        let root = std::env::temp_dir().join(format!("hauchiwa-store-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+
+        let out_dir = Utf8PathBuf::try_from(root.join("public"))?;
+        let cache_dir = Utf8PathBuf::try_from(root.join("cache"))?;
+        let mut store = Store::with_dirs(out_dir.clone(), cache_dir.clone());
+
+        let public_path = store.save(b"asset", "txt")?;
+        let dist_rel = public_path.as_str().trim_start_matches('/');
+
+        assert!(out_dir.join(dist_rel).exists());
+        assert!(cache_dir.join("hash").exists());
+
+        let _ = std::fs::remove_dir_all(root);
+        Ok(())
     }
 }

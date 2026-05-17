@@ -70,33 +70,24 @@ fn is_unchanged(src: &Path, dst: &Path) -> bool {
     src == dst
 }
 
-struct FileEntry {
-    src: PathBuf,
-    dst: PathBuf,
-    source_utf8: Utf8PathBuf,
-    dist_rel: Utf8PathBuf,
+#[derive(Clone, Debug)]
+pub(crate) struct StaticFileEntry {
+    pub(crate) src: PathBuf,
+    pub(crate) dst: PathBuf,
+    pub(crate) source_utf8: Utf8PathBuf,
+    pub(crate) dist_rel: Utf8PathBuf,
 }
 
-/// Copies all static file trees configured via `Blueprint::copy_static` into `dist/`.
-///
-/// Returns the list of `(source_path, dist_relative_path)` pairs for every file
-/// that was copied. These are inserted into the [`Snapshot`](crate::output::Snapshot)
-/// by the caller so that step 4 can reconcile `dist` without `clear_dist()`.
-pub fn clone_static(
+/// Discovers static files configured via `Blueprint::copy_static`.
+pub(crate) fn collect_static(
     copied: &[(String, String)],
     out_dir: &Utf8Path,
-) -> Result<Vec<(Utf8PathBuf, Utf8PathBuf)>, StepCopyStatic> {
+) -> Result<Vec<StaticFileEntry>, StepCopyStatic> {
     if copied.is_empty() {
         return Ok(vec![]);
     }
 
-    let span = span!(Level::INFO, "copy_static", indicatif.pb_show = true);
-    span.pb_set_message("Copying static files...");
-    span.pb_set_style(&PROGRESS_STYLE);
-    let _enter = span.enter();
-
-    let s = Instant::now();
-    let mut files: Vec<FileEntry> = Vec::new();
+    let mut files: Vec<StaticFileEntry> = Vec::new();
 
     for (into, from) in copied {
         let path = std::path::Path::new(into);
@@ -130,11 +121,50 @@ pub fn clone_static(
         let target = out_dir.as_std_path().join(into);
         let dist_rel = Utf8Path::new(into);
 
-        if fs::metadata(from).is_ok() {
+        let metadata = fs::metadata(from).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                StepCopyStatic::MissingSource(from.clone())
+            } else {
+                StepCopyStatic::Io(e)
+            }
+        })?;
+
+        if metadata.is_dir() {
             collect_files(from, &target, dist_rel, &mut files)?;
+        } else {
+            let source_utf8 = Utf8PathBuf::try_from(PathBuf::from(from))
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            files.push(StaticFileEntry {
+                src: PathBuf::from(from),
+                dst: target,
+                source_utf8,
+                dist_rel: dist_rel.to_path_buf(),
+            });
         }
     }
 
+    Ok(files)
+}
+
+/// Copies pre-discovered static files into `dist/`.
+///
+/// Returns the list of `(source_path, dist_relative_path)` pairs for every file
+/// that was copied. These are inserted into the [`Snapshot`](crate::output::Snapshot)
+/// by the caller so that reconciliation can track static files without clearing
+/// `dist`.
+pub(crate) fn copy_static_entries(
+    files: &[StaticFileEntry],
+) -> Result<Vec<(Utf8PathBuf, Utf8PathBuf)>, StepCopyStatic> {
+    if files.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let span = span!(Level::INFO, "copy_static", indicatif.pb_show = true);
+    span.pb_set_message("Copying static files...");
+    span.pb_set_style(&PROGRESS_STYLE);
+    let _enter = span.enter();
+
+    let s = Instant::now();
     span.pb_set_length(files.len() as u64);
 
     // Pre-create all destination directories before parallelising copies to
@@ -164,13 +194,13 @@ pub fn clone_static(
     Ok(entries)
 }
 
-/// Recursively walks `src`, appending one [`FileEntry`] per file to `files`.
+/// Recursively walks `src`, appending one [`StaticFileEntry`] per file to `files`.
 /// Directory creation is deferred to the caller.
 fn collect_files(
     src: impl AsRef<Path>,
     dst: impl AsRef<Path>,
     dist_rel: &Utf8Path,
-    files: &mut Vec<FileEntry>,
+    files: &mut Vec<StaticFileEntry>,
 ) -> std::io::Result<()> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
@@ -190,7 +220,7 @@ fn collect_files(
             let src_path = entry.path();
             let source_utf8 = Utf8PathBuf::try_from(src_path.clone())
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            files.push(FileEntry {
+            files.push(StaticFileEntry {
                 dst: dst.as_ref().join(&name),
                 src: src_path,
                 source_utf8,
@@ -200,4 +230,22 @@ fn collect_files(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clone_static_errors_for_missing_source() {
+        let result = collect_static(
+            &[("assets".to_string(), "missing-static-source".to_string())],
+            Utf8Path::new("dist"),
+        );
+
+        assert!(matches!(
+            result,
+            Err(StepCopyStatic::MissingSource(source)) if source == "missing-static-source"
+        ));
+    }
 }

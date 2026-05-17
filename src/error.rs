@@ -82,6 +82,8 @@ pub enum LoaderError {
 pub enum StepCopyStatic {
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error("Static source path '{0}' does not exist")]
+    MissingSource(String),
     #[error("Target path '{0}' is outside the allowed 'dist' directory")]
     UnsafeTarget(String),
 }

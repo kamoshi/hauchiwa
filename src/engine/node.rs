@@ -513,7 +513,10 @@ mod tests {
 
         // Invalid if read changed
         let is_not_valid = !node.is_valid(&[Some(state)], &[input_3], &updated);
-        assert!(is_not_valid, "Scatter should be invalid if read dep changed");
+        assert!(
+            is_not_valid,
+            "Scatter should be invalid if read dep changed"
+        );
 
         Ok(())
     }

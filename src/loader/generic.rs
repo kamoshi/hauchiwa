@@ -45,8 +45,8 @@ pub struct Document<T> {
 pub struct DocumentMeta {
     /// The original path of content file.
     pub path: Utf8PathBuf,
-    /// The shared offset path used to calculate the href.
-    pub offset: Option<Arc<str>>,
+    /// The shared source base path used to calculate the href.
+    pub base: Option<Arc<str>>,
     /// The web-accessible URL path.
     pub href: String,
 }
@@ -126,7 +126,7 @@ where
     blueprint: &'a mut Blueprint<G>,
     entry: Vec<String>,
     watch: Vec<Pattern>,
-    offset: Option<String>,
+    base: Option<String>,
     _phantom: std::marker::PhantomData<R>,
 }
 
@@ -140,7 +140,7 @@ where
             blueprint,
             entry: Vec::new(),
             watch: Vec::new(),
-            offset: None,
+            base: None,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -154,47 +154,43 @@ where
         Ok(self)
     }
 
-    /// Sets the offset path for the documents.
+    /// Sets the source base path for the documents.
     ///
-    /// This path will be stripped from the file path when calculating the `href`.
-    pub fn offset(mut self, offset: impl Into<String>) -> Self {
-        self.offset = Some(offset.into());
+    /// This path will be stripped from each file path when calculating the `href`.
+    pub fn base(mut self, base: impl Into<String>) -> Self {
+        self.base = Some(base.into());
         self
     }
 
     /// Registers the task with the Blueprint.
     pub fn register(self) -> Many<Document<R>> {
-        let offset = self.offset.map(Arc::from);
+        let base = self.base.map(Arc::from);
 
-        let task = GlobFiles::new(
-            self.entry,
-            self.watch,
-            move |_, _, input: Input| {
-                let bytes = input
-                    .read()
-                    .map_err(|e| FrontmatterError::Parse(e.into()))?;
+        let task = GlobFiles::new(self.entry, self.watch, move |_, _, input: Input| {
+            let bytes = input
+                .read()
+                .map_err(|e| FrontmatterError::Parse(e.into()))?;
 
-                let data = std::str::from_utf8(&bytes).map_err(FrontmatterError::Utf8)?;
+            let data = std::str::from_utf8(&bytes).map_err(FrontmatterError::Utf8)?;
 
-                let (metadata, content) =
-                    super::parse_yaml::<R>(data).map_err(FrontmatterError::Parse)?;
+            let (metadata, content) =
+                super::parse_yaml::<R>(data).map_err(FrontmatterError::Parse)?;
 
-                let href = crate::output::source_to_href(&input.path, offset.as_deref());
+            let href = crate::output::source_to_href(&input.path, base.as_deref());
 
-                Ok((
-                    input.path.clone(),
-                    Document {
-                        matter: Box::new(metadata),
-                        text: content,
-                        meta: DocumentMeta {
-                            path: input.path,
-                            offset: offset.clone(),
-                            href,
-                        },
+            Ok((
+                input.path.clone(),
+                Document {
+                    matter: Box::new(metadata),
+                    text: content,
+                    meta: DocumentMeta {
+                        path: input.path,
+                        base: base.clone(),
+                        href,
                     },
-                ))
-            },
-        );
+                },
+            ))
+        });
 
         self.blueprint.add_task_fine(task)
     }

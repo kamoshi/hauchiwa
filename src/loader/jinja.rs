@@ -39,7 +39,7 @@ type FilterFn = Box<dyn Fn(&mut minijinja::Environment<'static>) + Send + Sync>;
 pub(crate) struct GlobJinja {
     glob_entry: Vec<String>,
     glob_watch: Vec<Pattern>,
-    offset: Option<String>,
+    root: Option<String>,
     filters: Vec<FilterFn>,
 }
 
@@ -47,13 +47,13 @@ impl GlobJinja {
     pub fn new(
         glob_entry: Vec<String>,
         glob_watch: Vec<Pattern>,
-        offset: Option<String>,
+        root: Option<String>,
         filters: Vec<FilterFn>,
     ) -> Self {
         Self {
             glob_entry,
             glob_watch,
-            offset,
+            root,
             filters,
         }
     }
@@ -93,8 +93,8 @@ where
                 let path = Utf8PathBuf::try_from(path?)?;
                 let source = std::fs::read_to_string(&path)?;
 
-                let name = match &self.offset {
-                    Some(offset) => path.strip_prefix(offset).unwrap_or(&path).to_string(),
+                let name = match &self.root {
+                    Some(root) => path.strip_prefix(root).unwrap_or(&path).to_string(),
                     None => path.to_string(),
                 };
 

@@ -3,7 +3,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 use petgraph::graph::NodeIndex;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,6 @@ use crate::output::Output;
 pub(crate) enum SnapshotEntry {
     /// An [`Output`] file whose content is held in memory and written by `commit()`.
     Page {
-        node: NodeIndex,
         task: String,
         output: Output,
         /// Blake3 hash of `output.data`, computed once at insert time.
@@ -27,16 +26,42 @@ pub(crate) enum SnapshotEntry {
     },
     /// A content-addressed asset already written to `dist/hash/` by `Store::save()`
     /// during task execution. Tracked here so reconciliation can detect orphans.
-    HashAsset {
-        node: NodeIndex,
-        task: String,
-    },
+    HashAsset { task: String },
     /// A static file copied from the source tree via `Blueprint::copy_static()`.
     /// The copy happens in `clone_static()`; this entry records provenance for
     /// the reconciliation pass.
-    StaticFile {
-        source: Utf8PathBuf,
-    },
+    StaticFile { source: Utf8PathBuf },
+}
+
+fn validate_dist_path(path: &Utf8Path) -> Result<(), crate::error::BuildError> {
+    let normalized = crate::output::normalize_path(path);
+    let safe = !path.as_str().is_empty()
+        && !path.as_str().split('/').any(|component| component == ".")
+        && normalized == path
+        && path
+            .components()
+            .all(|component| matches!(component, Utf8Component::Normal(_)));
+
+    if safe {
+        Ok(())
+    } else {
+        Err(crate::error::BuildError::Other(anyhow::anyhow!(
+            "Output path `{path}` is outside the configured dist directory"
+        )))
+    }
+}
+
+fn existing_producer(entry: &SnapshotEntry) -> String {
+    match entry {
+        SnapshotEntry::Page { task, .. } | SnapshotEntry::HashAsset { task, .. } => task.clone(),
+        SnapshotEntry::StaticFile { source } => format!("static file `{source}`"),
+    }
+}
+
+fn output_conflict(path: Utf8PathBuf, existing: String, new: String) -> crate::error::BuildError {
+    crate::error::BuildError::Other(anyhow::anyhow!(
+        "Output conflict at `{path}`: produced by `{existing}` and `{new}`"
+    ))
 }
 
 /// A virtual representation of the `dist` directory after a build.
@@ -45,8 +70,8 @@ pub(crate) enum SnapshotEntry {
 /// written to disk. It serves as the single authority on what files should
 /// exist in `dist` and which task produced each one.
 ///
-/// Conflict detection happens at insert time: if two tasks claim the same
-/// output path, a warning is emitted and the first writer wins.
+/// Conflict detection happens at insert time: if two producers claim the same
+/// output path, the build fails before anything is written.
 pub(crate) struct Snapshot {
     entries: HashMap<Utf8PathBuf, SnapshotEntry>,
 }
@@ -58,35 +83,33 @@ impl Snapshot {
         }
     }
 
-    /// Inserts an [`Output`] page. Warns if two tasks claim the same dist path.
-    pub(crate) fn insert_page(&mut self, node: NodeIndex, task_name: &str, output: Output) {
+    /// Inserts an [`Output`] page. Fails if another producer already claimed the same dist path.
+    pub(crate) fn insert_page(
+        &mut self,
+        _node: NodeIndex,
+        task_name: &str,
+        output: Output,
+    ) -> Result<(), crate::error::BuildError> {
         let path = output.path.clone();
+        validate_dist_path(&path)?;
         if let Some(existing) = self.entries.get(&path) {
-            let existing_task = match existing {
-                SnapshotEntry::Page { task, .. } | SnapshotEntry::HashAsset { task, .. } => {
-                    task.as_str()
-                }
-                SnapshotEntry::StaticFile { .. } => "<static>",
-            };
-            tracing::warn!(
-                "Output conflict at `{}`: produced by `{}` and `{}`",
+            return Err(output_conflict(
                 path,
-                existing_task,
-                task_name
-            );
-        } else {
-            tracing::debug!("snapshot: page `{}` <- task `{}`", path, task_name);
-            let content_hash = Hash32::hash(&output.data);
-            self.entries.insert(
-                path,
-                SnapshotEntry::Page {
-                    node,
-                    task: task_name.to_string(),
-                    content_hash,
-                    output,
-                },
-            );
+                existing_producer(existing),
+                task_name.to_string(),
+            ));
         }
+        tracing::debug!("snapshot: page `{}` <- task `{}`", path, task_name);
+        let content_hash = Hash32::hash(&output.data);
+        self.entries.insert(
+            path,
+            SnapshotEntry::Page {
+                task: task_name.to_string(),
+                content_hash,
+                output,
+            },
+        );
+        Ok(())
     }
 
     /// Inserts a content-addressed hash asset (dist-relative path, e.g. `hash/abc.png`).
@@ -95,43 +118,50 @@ impl Snapshot {
     /// (same hash = same content). The first claimant is recorded for provenance.
     pub(crate) fn insert_hash_asset(
         &mut self,
-        node: NodeIndex,
+        _node: NodeIndex,
         task_name: &str,
         path: Utf8PathBuf,
-    ) {
-        self.entries
-            .entry(path)
-            .or_insert(SnapshotEntry::HashAsset {
-                node,
+    ) -> Result<(), crate::error::BuildError> {
+        validate_dist_path(&path)?;
+        if let Some(existing) = self.entries.get(&path) {
+            if matches!(existing, SnapshotEntry::HashAsset { .. }) {
+                return Ok(());
+            }
+            return Err(output_conflict(
+                path,
+                existing_producer(existing),
+                task_name.to_string(),
+            ));
+        }
+        self.entries.insert(
+            path,
+            SnapshotEntry::HashAsset {
                 task: task_name.to_string(),
-            });
+            },
+        );
+        Ok(())
     }
 
     /// Inserts a static file entry (dist-relative path → source path).
     ///
     /// The file is already copied to dist by `clone_static()`; this records
     /// provenance so the reconciliation pass can run without `clear_dist()`.
-    pub(crate) fn insert_static_file(&mut self, dist_rel: Utf8PathBuf, source: Utf8PathBuf) {
-        self.entries
-            .entry(dist_rel)
-            .or_insert(SnapshotEntry::StaticFile { source });
-    }
-
-    pub(crate) fn find(&self, path: &Utf8Path) -> Option<(NodeIndex, &str)> {
-        match self.entries.get(path)? {
-            SnapshotEntry::Page { node, task, .. } => Some((*node, task.as_str())),
-            SnapshotEntry::HashAsset { node, task } => Some((*node, task.as_str())),
-            SnapshotEntry::StaticFile { .. } => None,
+    pub(crate) fn insert_static_file(
+        &mut self,
+        dist_rel: Utf8PathBuf,
+        source: Utf8PathBuf,
+    ) -> Result<(), crate::error::BuildError> {
+        validate_dist_path(&dist_rel)?;
+        if let Some(existing) = self.entries.get(&dist_rel) {
+            return Err(output_conflict(
+                dist_rel,
+                existing_producer(existing),
+                format!("static file `{source}`"),
+            ));
         }
-    }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&Utf8PathBuf, &SnapshotEntry)> {
-        self.entries.iter()
-    }
-
-    /// Total number of tracked dist files across all entry types.
-    pub(crate) fn len(&self) -> usize {
-        self.entries.len()
+        self.entries
+            .insert(dist_rel, SnapshotEntry::StaticFile { source });
+        Ok(())
     }
 
     /// Number of [`SnapshotEntry::Page`] entries (HTML/binary outputs from tasks).
@@ -157,9 +187,18 @@ impl Snapshot {
         tracing::debug!(
             "commit: {} total entries ({} pages, {} hash assets, {} static files)",
             self.entries.len(),
-            self.entries.values().filter(|e| matches!(e, SnapshotEntry::Page { .. })).count(),
-            self.entries.values().filter(|e| matches!(e, SnapshotEntry::HashAsset { .. })).count(),
-            self.entries.values().filter(|e| matches!(e, SnapshotEntry::StaticFile { .. })).count(),
+            self.entries
+                .values()
+                .filter(|e| matches!(e, SnapshotEntry::Page { .. }))
+                .count(),
+            self.entries
+                .values()
+                .filter(|e| matches!(e, SnapshotEntry::HashAsset { .. }))
+                .count(),
+            self.entries
+                .values()
+                .filter(|e| matches!(e, SnapshotEntry::StaticFile { .. }))
+                .count(),
         );
 
         let desired: HashSet<Utf8PathBuf> = self.entries.keys().cloned().collect();
@@ -168,10 +207,17 @@ impl Snapshot {
             tracing::info!("removed {} stale file(s) from dist", removed);
         }
 
-        write_pages(dist, self.entries.iter().filter_map(|(path, entry)| match entry {
-            SnapshotEntry::Page { output, content_hash, .. } => Some((path, output, content_hash)),
-            _ => None,
-        }))
+        write_pages(
+            dist,
+            self.entries.iter().filter_map(|(path, entry)| match entry {
+                SnapshotEntry::Page {
+                    output,
+                    content_hash,
+                    ..
+                } => Some((path, output, content_hash)),
+                _ => None,
+            }),
+        )
     }
 
     /// Incremental diff against a previous snapshot - intended for watch rebuilds.
@@ -217,31 +263,42 @@ impl Snapshot {
         }
 
         // Write pages that are new or whose content changed.
-        write_pages(dist, self.entries.iter().filter_map(|(path, entry)| {
-            let SnapshotEntry::Page { output, content_hash, .. } = entry else {
-                return None;
-            };
-            match prev.entries.get(path) {
-                None => {
-                    tracing::debug!("new page: {}", path);
-                    Some((path, output, content_hash))
-                }
-                Some(SnapshotEntry::Page { content_hash: prev_hash, .. }) => {
-                    let abs_path = dist.join(path.as_std_path());
-                    if prev_hash != content_hash || !abs_path.exists() {
-                        tracing::debug!("changed or missing page: {}", path);
+        write_pages(
+            dist,
+            self.entries.iter().filter_map(|(path, entry)| {
+                let SnapshotEntry::Page {
+                    output,
+                    content_hash,
+                    ..
+                } = entry
+                else {
+                    return None;
+                };
+                match prev.entries.get(path) {
+                    None => {
+                        tracing::debug!("new page: {}", path);
                         Some((path, output, content_hash))
-                    } else {
-                        tracing::debug!("unchanged page, skipping: {}", path);
-                        None
+                    }
+                    Some(SnapshotEntry::Page {
+                        content_hash: prev_hash,
+                        ..
+                    }) => {
+                        let abs_path = dist.join(path.as_std_path());
+                        if prev_hash != content_hash || !abs_path.exists() {
+                            tracing::debug!("changed or missing page: {}", path);
+                            Some((path, output, content_hash))
+                        } else {
+                            tracing::debug!("unchanged page, skipping: {}", path);
+                            None
+                        }
+                    }
+                    _ => {
+                        tracing::debug!("new page (replaced non-page entry): {}", path);
+                        Some((path, output, content_hash))
                     }
                 }
-                _ => {
-                    tracing::debug!("new page (replaced non-page entry): {}", path);
-                    Some((path, output, content_hash))
-                }
-            }
-        }))
+            }),
+        )
     }
 
     /// Converts this snapshot into a slim, serializable form suitable for
@@ -253,9 +310,9 @@ impl Snapshot {
             .iter()
             .map(|(path, entry)| {
                 let meta_entry = match entry {
-                    SnapshotEntry::Page { content_hash, .. } => {
-                        MetaEntry::Page { content_hash: content_hash.to_bytes() }
-                    }
+                    SnapshotEntry::Page { content_hash, .. } => MetaEntry::Page {
+                        content_hash: content_hash.to_bytes(),
+                    },
                     SnapshotEntry::HashAsset { .. } => MetaEntry::HashAsset,
                     SnapshotEntry::StaticFile { .. } => MetaEntry::StaticFile,
                 };
@@ -269,7 +326,11 @@ impl Snapshot {
     /// builds where no in-memory previous snapshot is available.
     ///
     /// Semantics are identical to [`commit_diff`](Self::commit_diff).
-    pub(crate) fn commit_diff_meta(&self, prev: &SnapshotMeta, dist: &camino::Utf8Path) -> io::Result<()> {
+    pub(crate) fn commit_diff_meta(
+        &self,
+        prev: &SnapshotMeta,
+        dist: &camino::Utf8Path,
+    ) -> io::Result<()> {
         let dist = dist.as_std_path();
         fs::create_dir_all(dist)?;
 
@@ -304,31 +365,41 @@ impl Snapshot {
         }
 
         // Write pages that are new or whose content hash changed.
-        write_pages(dist, self.entries.iter().filter_map(|(path, entry)| {
-            let SnapshotEntry::Page { output, content_hash, .. } = entry else {
-                return None;
-            };
-            match prev.entries.get(path.as_str()) {
-                None => {
-                    tracing::debug!("new page: {}", path);
-                    Some((path, output, content_hash))
-                }
-                Some(MetaEntry::Page { content_hash: prev_hash }) => {
-                    let abs_path = dist.join(path.as_std_path());
-                    if prev_hash != &content_hash.to_bytes() || !abs_path.exists() {
-                        tracing::debug!("changed or missing page: {}", path);
+        write_pages(
+            dist,
+            self.entries.iter().filter_map(|(path, entry)| {
+                let SnapshotEntry::Page {
+                    output,
+                    content_hash,
+                    ..
+                } = entry
+                else {
+                    return None;
+                };
+                match prev.entries.get(path.as_str()) {
+                    None => {
+                        tracing::debug!("new page: {}", path);
                         Some((path, output, content_hash))
-                    } else {
-                        tracing::debug!("unchanged page, skipping: {}", path);
-                        None
+                    }
+                    Some(MetaEntry::Page {
+                        content_hash: prev_hash,
+                    }) => {
+                        let abs_path = dist.join(path.as_std_path());
+                        if prev_hash != &content_hash.to_bytes() || !abs_path.exists() {
+                            tracing::debug!("changed or missing page: {}", path);
+                            Some((path, output, content_hash))
+                        } else {
+                            tracing::debug!("unchanged page, skipping: {}", path);
+                            None
+                        }
+                    }
+                    _ => {
+                        tracing::debug!("new page (replaced non-page entry): {}", path);
+                        Some((path, output, content_hash))
                     }
                 }
-                _ => {
-                    tracing::debug!("new page (replaced non-page entry): {}", path);
-                    Some((path, output, content_hash))
-                }
-            }
-        }))
+            }),
+        )
     }
 }
 
@@ -392,7 +463,9 @@ fn write_pages<'a>(
     let parent_dirs: HashSet<std::path::PathBuf> = pages
         .iter()
         .filter_map(|(path, _, _)| {
-            dist.join(path.as_std_path()).parent().map(|p| p.to_path_buf())
+            dist.join(path.as_std_path())
+                .parent()
+                .map(|p| p.to_path_buf())
         })
         .collect();
     for dir in parent_dirs {
@@ -409,10 +482,7 @@ fn write_pages<'a>(
 /// Sorts candidates deepest-first so a parent is only attempted after all
 /// its children have been processed. `fs::remove_dir` is a no-op on
 /// non-empty directories - errors are silently ignored.
-fn prune_empty_dirs(
-    dist: &Path,
-    dirs: HashSet<std::path::PathBuf>,
-) -> io::Result<()> {
+fn prune_empty_dirs(dist: &Path, dirs: HashSet<std::path::PathBuf>) -> io::Result<()> {
     let mut dirs: Vec<_> = dirs.into_iter().collect();
     dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
     for dir in dirs {
@@ -472,4 +542,71 @@ fn remove_stale(dist: &Path, rel: &Utf8Path, desired: &HashSet<Utf8PathBuf>) -> 
     }
 
     Ok(removed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Output, output::OutputData};
+
+    #[test]
+    fn rejects_paths_outside_dist() {
+        let mut snapshot = Snapshot::new();
+        let result = snapshot.insert_page(
+            NodeIndex::new(0),
+            "escape",
+            Output {
+                path: Utf8PathBuf::from("../escape.txt"),
+                data: OutputData::Utf8("bad".into()),
+            },
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_absolute_paths() {
+        let mut snapshot = Snapshot::new();
+        let result = snapshot.insert_page(
+            NodeIndex::new(0),
+            "escape",
+            Output {
+                path: Utf8PathBuf::from("/tmp/escape.txt"),
+                data: OutputData::Utf8("bad".into()),
+            },
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_outputs() {
+        let mut snapshot = Snapshot::new();
+        let first = Output::binary("same.txt", b"first".to_vec());
+        let second = Output::binary("same.txt", b"second".to_vec());
+
+        assert!(
+            snapshot
+                .insert_page(NodeIndex::new(0), "first", first)
+                .is_ok()
+        );
+        let result = snapshot.insert_page(NodeIndex::new(1), "second", second);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_current_dir_components() {
+        let mut snapshot = Snapshot::new();
+        let result = snapshot.insert_page(
+            NodeIndex::new(0),
+            "curdir",
+            Output {
+                path: Utf8PathBuf::from("same/./file.txt"),
+                data: OutputData::Utf8("bad".into()),
+            },
+        );
+
+        assert!(result.is_err());
+    }
 }

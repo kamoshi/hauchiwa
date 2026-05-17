@@ -22,8 +22,7 @@ async fn serve(port: u16, dist: String) -> Result<(), anyhow::Error> {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     let address = tokio::net::TcpListener::bind(address).await?;
 
-    let router = Router::new()
-        .fallback_service(ServeDir::new(dist));
+    let router = Router::new().fallback_service(ServeDir::new(dist));
 
     axum::serve(address, router).await?;
 

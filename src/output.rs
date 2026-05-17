@@ -5,6 +5,7 @@
 
 use camino::Utf8Component;
 use camino::{Utf8Path, Utf8PathBuf};
+use thiserror::Error;
 
 use crate::Many;
 use crate::One;
@@ -39,10 +40,10 @@ pub fn source_to_bundle(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
 
 /// Helper function to compute the web-accessible URL path (href).
 ///
-/// It strips the offset and creates a pretty URL (ending in `/`).
-pub fn source_to_href(path: &Utf8Path, offset: Option<&str>) -> String {
-    let path = if let Some(offset) = offset {
-        path.strip_prefix(offset).unwrap_or(path)
+/// It strips the source base and creates a pretty URL (ending in `/`).
+pub fn source_to_href(path: &Utf8Path, base: Option<&str>) -> String {
+    let path = if let Some(base) = base {
+        path.strip_prefix(base).unwrap_or(path)
     } else {
         path
     };
@@ -148,6 +149,185 @@ fn normalize_path_html(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
     buffer
 }
 
+#[derive(Debug, Error)]
+pub enum OutputPathError {
+    #[error("Output path '{0}' is outside the configured dist directory")]
+    UnsafePath(Utf8PathBuf),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputTargetKind {
+    Page,
+    File,
+}
+
+#[derive(Debug, Clone)]
+pub struct OutputTarget {
+    path: Utf8PathBuf,
+    kind: OutputTargetKind,
+}
+
+impl OutputTarget {
+    fn infer(path: impl Into<Utf8PathBuf>) -> Self {
+        let path = path.into();
+        let raw = path.as_str();
+        let kind = if raw.is_empty()
+            || raw.starts_with('/')
+            || raw.ends_with('/')
+            || path.extension().is_none()
+        {
+            OutputTargetKind::Page
+        } else {
+            OutputTargetKind::File
+        };
+        Self { path, kind }
+    }
+
+    fn page(route: impl Into<Utf8PathBuf>) -> Self {
+        Self {
+            path: route.into(),
+            kind: OutputTargetKind::Page,
+        }
+    }
+
+    fn file(path: impl Into<Utf8PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            kind: OutputTargetKind::File,
+        }
+    }
+
+    fn into_dist_path(self) -> Result<Utf8PathBuf, OutputPathError> {
+        let path = match self.kind {
+            OutputTargetKind::Page => route_to_page_path(&self.path),
+            OutputTargetKind::File => self.path,
+        };
+        validate_output_path(path)
+    }
+}
+
+pub trait IntoOutputTarget {
+    fn into_output_target(self) -> OutputTarget;
+}
+
+impl IntoOutputTarget for OutputTarget {
+    fn into_output_target(self) -> OutputTarget {
+        self
+    }
+}
+
+impl IntoOutputTarget for &str {
+    fn into_output_target(self) -> OutputTarget {
+        OutputTarget::infer(self)
+    }
+}
+
+impl IntoOutputTarget for String {
+    fn into_output_target(self) -> OutputTarget {
+        OutputTarget::infer(self)
+    }
+}
+
+impl IntoOutputTarget for &String {
+    fn into_output_target(self) -> OutputTarget {
+        OutputTarget::infer(self.as_str())
+    }
+}
+
+impl IntoOutputTarget for Utf8PathBuf {
+    fn into_output_target(self) -> OutputTarget {
+        OutputTarget::infer(self)
+    }
+}
+
+impl IntoOutputTarget for &Utf8Path {
+    fn into_output_target(self) -> OutputTarget {
+        OutputTarget::infer(self.to_path_buf())
+    }
+}
+
+impl IntoOutputTarget for &Utf8PathBuf {
+    fn into_output_target(self) -> OutputTarget {
+        OutputTarget::infer(self.clone())
+    }
+}
+
+impl<T> IntoOutputTarget for &crate::loader::generic::Document<T> {
+    fn into_output_target(self) -> OutputTarget {
+        OutputTarget::page(self.meta.href.as_str())
+    }
+}
+
+impl<T> IntoOutputTarget for &&crate::loader::generic::Document<T> {
+    fn into_output_target(self) -> OutputTarget {
+        OutputTarget::page(self.meta.href.as_str())
+    }
+}
+
+impl IntoOutputTarget for &crate::loader::generic::DocumentMeta {
+    fn into_output_target(self) -> OutputTarget {
+        OutputTarget::page(self.href.as_str())
+    }
+}
+
+impl IntoOutputTarget for &&crate::loader::generic::DocumentMeta {
+    fn into_output_target(self) -> OutputTarget {
+        OutputTarget::page(self.href.as_str())
+    }
+}
+
+fn route_to_page_path(route: &Utf8Path) -> Utf8PathBuf {
+    let route = route.as_str().trim_start_matches('/').trim_end_matches('/');
+    if route.is_empty() {
+        Utf8PathBuf::from("index.html")
+    } else {
+        Utf8Path::new(route).join("index.html")
+    }
+}
+
+fn validate_output_path(path: Utf8PathBuf) -> Result<Utf8PathBuf, OutputPathError> {
+    let normalized = normalize_path(&path);
+    let safe = !path.as_str().is_empty()
+        && !path.as_str().split('/').any(|component| component == ".")
+        && normalized == path
+        && path
+            .components()
+            .all(|component| matches!(component, Utf8Component::Normal(_)));
+
+    if safe {
+        Ok(path)
+    } else {
+        Err(OutputPathError::UnsafePath(path))
+    }
+}
+
+pub struct OutputTargetBuilder {
+    target: OutputTarget,
+}
+
+impl OutputTargetBuilder {
+    pub fn html(self, data: impl Into<String>) -> Result<Output, OutputPathError> {
+        Ok(Output {
+            path: self.target.into_dist_path()?,
+            data: OutputData::Utf8(data.into()),
+        })
+    }
+
+    pub fn text(self, data: impl Into<String>) -> Result<Output, OutputPathError> {
+        Ok(Output {
+            path: self.target.into_dist_path()?,
+            data: OutputData::Utf8(data.into()),
+        })
+    }
+
+    pub fn bytes(self, data: impl Into<Vec<u8>>) -> Result<Output, OutputPathError> {
+        Ok(Output {
+            path: self.target.into_dist_path()?,
+            data: OutputData::Binary(data.into()),
+        })
+    }
+}
+
 /// The content of an [`Output`] file.
 #[derive(Debug, Clone, Hash)]
 pub enum OutputData {
@@ -180,6 +360,24 @@ pub struct Output {
 }
 
 impl Output {
+    pub fn to(target: impl IntoOutputTarget) -> OutputTargetBuilder {
+        OutputTargetBuilder {
+            target: target.into_output_target(),
+        }
+    }
+
+    pub fn page(route: impl Into<Utf8PathBuf>) -> OutputTargetBuilder {
+        OutputTargetBuilder {
+            target: OutputTarget::page(route),
+        }
+    }
+
+    pub fn file(path: impl Into<Utf8PathBuf>) -> OutputTargetBuilder {
+        OutputTargetBuilder {
+            target: OutputTarget::file(path),
+        }
+    }
+
     /// Starts a builder to create an Output from a source path.
     pub fn mapper(source: impl Into<Utf8PathBuf>) -> OutputBuilder {
         OutputBuilder {
@@ -298,7 +496,8 @@ impl OutputHandle for Many<Output> {
                 let mut items = Vec::new();
 
                 {
-                    #[allow(clippy::unwrap_used)] // poisoned mutex means a thread panicked - unrecoverable
+                    #[allow(clippy::unwrap_used)]
+                    // poisoned mutex means a thread panicked - unrecoverable
                     let mut tracker = ptr.ptr.lock().unwrap();
 
                     for (key, (output, provenance)) in &map.map {
@@ -332,7 +531,7 @@ mod tests {
             "/posts/"
         );
 
-        // No offset
+        // No base
         assert_eq!(
             source_to_href(Utf8Path::new("posts/hello.md"), None),
             "/posts/hello/"
@@ -341,7 +540,7 @@ mod tests {
         // Root index
         assert_eq!(source_to_href(Utf8Path::new("index.md"), None), "/");
 
-        // Double slash edge case (e.g. parent is empty after offset strip, but it's not index)
+        // Double slash edge case (e.g. parent is empty after base strip, but it's not index)
         assert_eq!(
             source_to_href(Utf8Path::new("content/hello.md"), Some("content")),
             "/hello/"
@@ -394,5 +593,66 @@ mod tests {
             href_to_dist("/a/b/c/", "dist"),
             Utf8Path::new("dist/a/b/c/index.html")
         );
+    }
+
+    #[test]
+    fn test_output_to_route_html() -> Result<(), OutputPathError> {
+        let page = Output::to("/posts/hello/").html("hello")?;
+        assert_eq!(page.path, Utf8Path::new("posts/hello/index.html"));
+
+        let page = Output::to("posts").html("hello")?;
+        assert_eq!(page.path, Utf8Path::new("posts/index.html"));
+
+        let page = Output::to("").html("hello")?;
+        assert_eq!(page.path, Utf8Path::new("index.html"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_output_to_file_text_and_bytes() -> Result<(), OutputPathError> {
+        let text = Output::to("posts/rss.xml").text("<rss />")?;
+        assert_eq!(text.path, Utf8Path::new("posts/rss.xml"));
+        assert!(matches!(text.data, OutputData::Utf8(_)));
+
+        let bytes = Output::file("files/archive.zip").bytes([1, 2, 3])?;
+        assert_eq!(bytes.path, Utf8Path::new("files/archive.zip"));
+        assert!(matches!(bytes.data, OutputData::Binary(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_output_to_rejects_unsafe_paths() {
+        assert!(Output::file("../escape.txt").text("bad").is_err());
+        assert!(Output::file("same/./file.txt").text("bad").is_err());
+    }
+
+    #[test]
+    fn test_output_to_document_html() -> Result<(), OutputPathError> {
+        let document = crate::loader::generic::Document {
+            matter: Box::new(()),
+            text: String::new(),
+            meta: crate::loader::generic::DocumentMeta {
+                path: Utf8PathBuf::from("content/posts/hello.md"),
+                base: Some("content".into()),
+                href: "/posts/hello/".to_string(),
+            },
+        };
+
+        let page = Output::to(&document).html("hello")?;
+        assert_eq!(page.path, Utf8Path::new("posts/hello/index.html"));
+
+        let page = Output::to(&document.meta).html("hello")?;
+        assert_eq!(page.path, Utf8Path::new("posts/hello/index.html"));
+
+        let document_ref = &document;
+        fn from_double_ref(
+            document: &&crate::loader::generic::Document<()>,
+        ) -> Result<Output, OutputPathError> {
+            Output::to(document).html("hello")
+        }
+
+        let page = from_double_ref(&document_ref)?;
+        assert_eq!(page.path, Utf8Path::new("posts/hello/index.html"));
+        Ok(())
     }
 }

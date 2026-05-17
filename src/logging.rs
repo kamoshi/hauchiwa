@@ -41,7 +41,10 @@ struct CleanFields;
 
 impl<'w> FormatFields<'w> for CleanFields {
     fn format_fields<R: RecordFields>(&self, mut writer: Writer<'w>, fields: R) -> fmt::Result {
-        let mut v = CleanVisitor { writer: &mut writer, first: true };
+        let mut v = CleanVisitor {
+            writer: &mut writer,
+            first: true,
+        };
         fields.record(&mut v);
         Ok(())
     }

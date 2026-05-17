@@ -130,25 +130,24 @@ where
 
         let minify = self.minify;
 
-        let task =
-            GlobBundle::new(self.entry_globs, watch_globs, move |_, store, input| {
-                let style = if minify {
-                    grass::OutputStyle::Compressed
-                } else {
-                    grass::OutputStyle::Expanded
-                };
+        let task = GlobBundle::new(self.entry_globs, watch_globs, move |_, store, input| {
+            let style = if minify {
+                grass::OutputStyle::Compressed
+            } else {
+                grass::OutputStyle::Expanded
+            };
 
-                let options = grass::Options::default().style(style);
+            let options = grass::Options::default().style(style);
 
-                let data = grass::from_path(&input.path, &options).map_err(StyleError::Sass)?;
-                let hash = Hash32::hash(&data);
+            let data = grass::from_path(&input.path, &options).map_err(StyleError::Sass)?;
+            let hash = Hash32::hash(&data);
 
-                let path = store
-                    .save(data.as_bytes(), "css")
-                    .map_err(StyleError::Build)?;
+            let path = store
+                .save(data.as_bytes(), "css")
+                .map_err(StyleError::Build)?;
 
-                Ok((hash, input.path, Stylesheet { path }))
-            });
+            Ok((hash, input.path, Stylesheet { path }))
+        });
 
         self.blueprint.add_task_fine(task)
     }

@@ -61,7 +61,8 @@ pub(crate) fn run_once_parallel<G: Send + Sync>(
     let diagnostics = run_tasks_parallel(website, globals, &mut cache, &pending, &dirty)
         .map_err(|e| crate::error::HauchiwaError::Build(crate::error::BuildError::Other(e)))?;
 
-    let manifest = collect_manifest(&cache, &website.graph);
+    let manifest =
+        collect_manifest(&cache, &website.graph).map_err(crate::error::HauchiwaError::Build)?;
     Ok((cache, manifest, diagnostics))
 }
 
@@ -150,7 +151,8 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
             let mut importmap = ImportMap::new();
 
             for dep_index in site.graph[index].dependencies() {
-                #[allow(clippy::unwrap_used)] // graph invariant: dependencies always in cache before this node runs
+                #[allow(clippy::unwrap_used)]
+                // graph invariant: dependencies always in cache before this node runs
                 let node_data = cache.get(&dep_index).unwrap();
                 dependencies.push(node_data.output.clone());
                 importmap.merge(node_data.importmap.clone());
@@ -172,7 +174,8 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
             if !should_run {
                 // Task is skipped
                 let sender = result_sender.clone();
-                #[allow(clippy::unwrap_used)] // old_data is Some when should_run is false (set above)
+                #[allow(clippy::unwrap_used)]
+                // old_data is Some when should_run is false (set above)
                 let output = old_data.unwrap();
                 #[allow(clippy::unwrap_used)] // receiver lives for the duration of the rayon scope
                 sender
@@ -211,7 +214,7 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
                 // memory in a way that affects other threads (since we are
                 // using mostly cloned and/or immutable data).
                 let output = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let mut rt = Store::new();
+                    let mut rt = Store::with_dirs(site.out_dir.clone(), site.cache_dir.clone());
 
                     match task {
                         Task::C(task) => task.execute(&context, &mut rt, &dependencies).map(
@@ -280,7 +283,8 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
         // The main thread sits here while Rayon workers execute tasks.
         while completed_tasks < total_tasks {
             // Wait for any task to finish
-            #[allow(clippy::unwrap_used)] // senders live in the rayon scope above; recv only fails if all senders dropped
+            #[allow(clippy::unwrap_used)]
+            // senders live in the rayon scope above; recv only fails if all senders dropped
             let (completed_index, output, start, duration, executed) =
                 result_receiver.recv().unwrap();
 
@@ -318,27 +322,27 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
 pub(crate) fn collect_manifest<G: Send + Sync>(
     cache: &HashMap<NodeIndex, NodeData>,
     graph: &Graph<Task<G>, ()>,
-) -> Snapshot {
+) -> Result<Snapshot, crate::error::BuildError> {
     let mut manifest = Snapshot::new();
     for (index, node_data) in cache {
         let task_name = graph[*index].name();
         let value = &node_data.output;
 
         if let Some(page) = value.downcast_ref::<Output>() {
-            manifest.insert_page(*index, &task_name, page.clone());
+            manifest.insert_page(*index, &task_name, page.clone())?;
         } else if let Some(page_vec) = value.downcast_ref::<Vec<Output>>() {
             for page in page_vec {
-                manifest.insert_page(*index, &task_name, page.clone());
+                manifest.insert_page(*index, &task_name, page.clone())?;
             }
         } else if let Some(page_map) = value.downcast_ref::<Map<Output>>() {
             for (item, _) in page_map.map.values() {
-                manifest.insert_page(*index, &task_name, item.clone());
+                manifest.insert_page(*index, &task_name, item.clone())?;
             }
         }
 
         for path in &node_data.store_paths {
-            manifest.insert_hash_asset(*index, &task_name, path.clone());
+            manifest.insert_hash_asset(*index, &task_name, path.clone())?;
         }
     }
-    manifest
+    Ok(manifest)
 }

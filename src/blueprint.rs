@@ -260,15 +260,12 @@ impl<'a, G: Send + Sync + 'static> TaskBinderGlob<'a, G> {
         F: Fn(&TaskContext<G>, &mut Store, Input) -> anyhow::Result<R> + Send + Sync + 'static,
         R: Send + Sync + 'static,
     {
-        let task = crate::loader::GlobFiles::new(
-            self.entry,
-            self.watch,
-            move |ctx, store, input| {
+        let task =
+            crate::loader::GlobFiles::new(self.entry, self.watch, move |ctx, store, input| {
                 let path = input.path.clone();
                 let res = callback(ctx, store, input)?;
                 Ok((path, res))
-            },
-        );
+            });
 
         self.blueprint.add_task_fine(task)
     }
@@ -450,20 +447,27 @@ where
             data,
         };
 
-        let prev_meta = crate::snapshot::SnapshotMeta::load(&self.cache_dir).map_err(BuildError::Io)?;
-        let static_entries = crate::utils::clone_static(&self.copied, &self.out_dir)?;
+        let prev_meta =
+            crate::snapshot::SnapshotMeta::load(&self.cache_dir).map_err(BuildError::Io)?;
+        let static_files = crate::utils::collect_static(&self.copied, &self.out_dir)?;
 
         let (_, mut manifest, diagnostics) = run_once_parallel(self, &globals)?;
 
-        for (source, dist_rel) in static_entries {
-            manifest.insert_static_file(dist_rel, source);
+        for entry in &static_files {
+            manifest.insert_static_file(entry.dist_rel.clone(), entry.source_utf8.clone())?;
         }
+        crate::utils::copy_static_entries(&static_files)?;
 
         match prev_meta {
-            Some(ref prev) => manifest.commit_diff_meta(prev, &self.out_dir).map_err(BuildError::Io)?,
+            Some(ref prev) => manifest
+                .commit_diff_meta(prev, &self.out_dir)
+                .map_err(BuildError::Io)?,
             None => manifest.commit(&self.out_dir).map_err(BuildError::Io)?,
         }
-        manifest.to_meta().save(&self.cache_dir).map_err(BuildError::Io)?;
+        manifest
+            .to_meta()
+            .save(&self.cache_dir)
+            .map_err(BuildError::Io)?;
 
         Ok(diagnostics)
     }
@@ -482,9 +486,9 @@ where
 
         let out_dir = self.out_dir.clone();
         let cache_dir = self.cache_dir.clone();
-        let static_entries = crate::utils::clone_static(&self.copied, &out_dir)?;
+        let copied = self.copied.clone();
 
-        crate::engine::watch(self, data, static_entries, &out_dir, &cache_dir)
+        crate::engine::watch(self, data, copied, &out_dir, &cache_dir)
             .map_err(crate::error::WatchError::Other)?;
 
         Ok(())
