@@ -45,7 +45,12 @@ pub struct Document<T> {
 pub struct DocumentMeta {
     /// The original path of content file.
     pub path: Utf8PathBuf,
-    /// The shared source base path used to calculate the href.
+    /// The source base path used to calculate the public href.
+    ///
+    /// This is set by [`DocumentLoader::base`]. When present, it is stripped
+    /// from [`DocumentMeta::path`] before Hauchiwa derives [`DocumentMeta::href`].
+    /// For example, with `base("content")`, `content/posts/hello.md` becomes
+    /// `/posts/hello/`.
     pub base: Option<Arc<str>>,
     /// The web-accessible URL path.
     pub href: String,
@@ -154,9 +159,36 @@ where
         Ok(self)
     }
 
-    /// Sets the source base path for the documents.
+    /// Sets the source base path used to derive document hrefs.
     ///
-    /// This path will be stripped from each file path when calculating the `href`.
+    /// The base is stripped from each matched source path before Hauchiwa turns
+    /// that path into a public route. This keeps source organization out of
+    /// generated URLs:
+    ///
+    /// - `content/index.md` becomes `/`.
+    /// - `content/posts/hello.md` becomes `/posts/hello/`.
+    /// - `content/posts/hello/index.md` also becomes `/posts/hello/`.
+    ///
+    /// Without a base, hrefs are derived from the full matched path.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use hauchiwa::Blueprint;
+    /// # #[derive(serde::Deserialize)]
+    /// # struct Page {}
+    /// # fn main() -> Result<(), hauchiwa::error::HauchiwaError> {
+    /// let mut site = Blueprint::<()>::new();
+    ///
+    /// let pages = site
+    ///     .load_documents::<Page>()
+    ///     .glob("content/**/*.md")?
+    ///     .base("content")
+    ///     .register();
+    /// # let _ = pages;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn base(mut self, base: impl Into<String>) -> Self {
         self.base = Some(base.into());
         self

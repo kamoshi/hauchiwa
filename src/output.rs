@@ -151,6 +151,11 @@ fn normalize_path_html(path: impl AsRef<Utf8Path>) -> Utf8PathBuf {
 
 #[derive(Debug, Error)]
 pub enum OutputPathError {
+    /// The requested output path was not a safe path relative to `dist`.
+    ///
+    /// Output paths must stay inside the configured output directory. Absolute
+    /// paths, parent-directory components (`..`), current-directory components
+    /// (`.`), and empty file paths are rejected before an [`Output`] is created.
     #[error("Output path '{0}' is outside the configured dist directory")]
     UnsafePath(Utf8PathBuf),
 }
@@ -162,6 +167,11 @@ enum OutputTargetKind {
 }
 
 #[derive(Debug, Clone)]
+/// A destination accepted by [`Output::to`].
+///
+/// Most users do not need to construct this type directly. Pass a route, file
+/// path, [`crate::loader::generic::Document`], or
+/// [`crate::loader::generic::DocumentMeta`] to [`Output::to`] instead.
 pub struct OutputTarget {
     path: Utf8PathBuf,
     kind: OutputTargetKind,
@@ -206,6 +216,13 @@ impl OutputTarget {
     }
 }
 
+/// Converts a value into an output destination for [`Output::to`].
+///
+/// Strings and paths are interpreted by convention: values that look like web
+/// routes become pretty HTML pages, while values with a file extension become
+/// exact file paths. Loaded documents use their generated `meta.href`, making
+/// `Output::to(document).html(rendered)?` the shortest path from a document to
+/// its rendered page.
 pub trait IntoOutputTarget {
     fn into_output_target(self) -> OutputTarget;
 }
@@ -301,11 +318,38 @@ fn validate_output_path(path: Utf8PathBuf) -> Result<Utf8PathBuf, OutputPathErro
     }
 }
 
+/// Builder returned by [`Output::to`], [`Output::page`], and [`Output::file`].
+///
+/// Pick the content method that matches what you generated:
+///
+/// - [`OutputTargetBuilder::html`] for rendered HTML pages.
+/// - [`OutputTargetBuilder::text`] for UTF-8 text files such as RSS or JSON.
+/// - [`OutputTargetBuilder::bytes`] for binary files.
 pub struct OutputTargetBuilder {
     target: OutputTarget,
 }
 
 impl OutputTargetBuilder {
+    /// Creates a UTF-8 HTML output at this target.
+    ///
+    /// For page targets, the route is converted to a pretty URL path:
+    /// `/posts/hello/` becomes `posts/hello/index.html`. For file targets, the
+    /// file path is kept exactly as requested.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # fn main() -> Result<(), hauchiwa::output::OutputPathError> {
+    /// use hauchiwa::Output;
+    ///
+    /// let output = Output::to("/posts/hello/").html("<h1>Hello</h1>")?;
+    /// assert_eq!(output.path.as_str(), "posts/hello/index.html");
+    ///
+    /// let output = Output::to("feed.xml").html("<feed />")?;
+    /// assert_eq!(output.path.as_str(), "feed.xml");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn html(self, data: impl Into<String>) -> Result<Output, OutputPathError> {
         Ok(Output {
             path: self.target.into_dist_path()?,
@@ -313,6 +357,22 @@ impl OutputTargetBuilder {
         })
     }
 
+    /// Creates a UTF-8 text output at this target.
+    ///
+    /// Use this for text-like non-HTML files where the destination should still
+    /// be described with the fluent target API.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # fn main() -> Result<(), hauchiwa::output::OutputPathError> {
+    /// use hauchiwa::Output;
+    ///
+    /// let output = Output::file("robots.txt").text("User-agent: *")?;
+    /// assert_eq!(output.path.as_str(), "robots.txt");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn text(self, data: impl Into<String>) -> Result<Output, OutputPathError> {
         Ok(Output {
             path: self.target.into_dist_path()?,
@@ -320,6 +380,22 @@ impl OutputTargetBuilder {
         })
     }
 
+    /// Creates a binary output at this target.
+    ///
+    /// Binary outputs are usually exact files, so this is most commonly paired
+    /// with [`Output::file`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # fn main() -> Result<(), hauchiwa::output::OutputPathError> {
+    /// use hauchiwa::Output;
+    ///
+    /// let output = Output::file("downloads/archive.zip").bytes([1, 2, 3])?;
+    /// assert_eq!(output.path.as_str(), "downloads/archive.zip");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn bytes(self, data: impl Into<Vec<u8>>) -> Result<Output, OutputPathError> {
         Ok(Output {
             path: self.target.into_dist_path()?,
@@ -360,18 +436,86 @@ pub struct Output {
 }
 
 impl Output {
+    /// Starts an output builder for a route, file path, or document.
+    ///
+    /// This is the ergonomic constructor for task output. It accepts:
+    ///
+    /// - A web route such as `"/posts/hello/"` or `"posts/hello"`, which writes
+    ///   to `posts/hello/index.html`.
+    /// - A file path with an extension such as `"feed.xml"`, which writes to
+    ///   that exact path.
+    /// - A loaded document or document metadata, which writes to the document's
+    ///   generated `href`.
+    ///
+    /// When the distinction matters, prefer [`Output::page`] for routes and
+    /// [`Output::file`] for exact file paths.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # fn main() -> Result<(), hauchiwa::output::OutputPathError> {
+    /// use hauchiwa::Output;
+    ///
+    /// let page = Output::to("/about/").html("<h1>About</h1>")?;
+    /// assert_eq!(page.path.as_str(), "about/index.html");
+    ///
+    /// let feed = Output::to("feed.xml").text("<rss />")?;
+    /// assert_eq!(feed.path.as_str(), "feed.xml");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn to(target: impl IntoOutputTarget) -> OutputTargetBuilder {
         OutputTargetBuilder {
             target: target.into_output_target(),
         }
     }
 
+    /// Starts an output builder for a pretty HTML route.
+    ///
+    /// The route may have leading or trailing slashes. It is always written as
+    /// an `index.html` file below `dist`:
+    ///
+    /// - `"/"` and `""` become `index.html`.
+    /// - `"/posts/hello/"` and `"posts/hello"` become
+    ///   `posts/hello/index.html`.
+    ///
+    /// Use this when a path has a dot in it but should still be treated as a
+    /// route, or when you want to make the route-vs-file distinction explicit.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # fn main() -> Result<(), hauchiwa::output::OutputPathError> {
+    /// use hauchiwa::Output;
+    ///
+    /// let output = Output::page("posts/hello").html("<article />")?;
+    /// assert_eq!(output.path.as_str(), "posts/hello/index.html");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn page(route: impl Into<Utf8PathBuf>) -> OutputTargetBuilder {
         OutputTargetBuilder {
             target: OutputTarget::page(route),
         }
     }
 
+    /// Starts an output builder for an exact file path below `dist`.
+    ///
+    /// Unlike [`Output::page`], this does not append `index.html` or apply
+    /// pretty URL handling. The path must be a safe relative path inside the
+    /// configured output directory.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # fn main() -> Result<(), hauchiwa::output::OutputPathError> {
+    /// use hauchiwa::Output;
+    ///
+    /// let output = Output::file("assets/site.webmanifest").text("{}")?;
+    /// assert_eq!(output.path.as_str(), "assets/site.webmanifest");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn file(path: impl Into<Utf8PathBuf>) -> OutputTargetBuilder {
         OutputTargetBuilder {
             target: OutputTarget::file(path),
