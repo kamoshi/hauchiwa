@@ -110,7 +110,7 @@ fn main() -> anyhow::Result<()> {
 * **Templating**: Render pages using `minijinja` (Jinja2 syntax) templates.
 * **CSS/Sass**: Integrate `grass` to compile and minify stylesheets.
 * **Images**: Generate optimized multi-format images via the `image` crate.
-* **JavaScript**: Bundle and minify JS/TS via `esbuild`.
+* **JavaScript**: Bundle and minify JS/TS via `esbuild` or `rolldown` (native Rust bundler).
 * **Svelte**: Compile components into separate SSR and hydration scripts.
 * **Search**: Static search indexing via `pagefind`.
 * **Sitemap**: Sitemap generation via `sitemap-rs`.
@@ -150,6 +150,7 @@ Default features (opt out if not needed):
 
 Opt-in features:
 
+- `rolldown`: Enables JavaScript/TypeScript bundling and minification natively in Rust using Rolldown (no external binaries required).
 - `pagefind`: Enables static search indexing.
 - `sitemap`: Enables `sitemap.xml` generation.
 - `minijinja`: Enables Jinja2-style template loading.

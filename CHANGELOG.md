@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [0.19.0] - 2026-05-30
+
+### Added
+- Native JavaScript/TypeScript bundling via `rolldown` behind the `rolldown`
+  feature flag (`load_rolldown()`)
+- External dependency support in the Rolldown loader using `.external(...)`,
+  which isolates and compiles packages into content-addressed files mapped in
+  the browser runtime HTML import map
+- Sequential `.pre_run(...)` hook in `GlobBundle` to coordinate external module
+  bundling and import map registration exactly once per build run, preventing
+  race conditions and redundant execution in parallel tasks
+
+### Changed
+- Refactored `load_rolldown()` builder to return `Result<Self, HauchiwaError>`
+  from `.entry()` and `.watch()` for instant pattern validation, making the
+  final `.register()` infallible and consistent with standard loaders
+
 ## [0.18.0] - 2026-04-08
 
 ### Added
