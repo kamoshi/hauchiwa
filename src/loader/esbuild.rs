@@ -150,18 +150,21 @@ where
         let minify = self.minify;
         let externals = self.externals;
 
+        let externals_clone = externals.clone();
         let task = GlobBundle::new(self.entry_globs, watch_globs, move |_, store, input| {
+            let data = compile_esbuild(&input.path, bundle, minify, &externals_clone)?;
+            let hash = Hash32::hash(&data);
+            let path = store.save(&data, "js").map_err(ScriptError::Build)?;
+
+            Ok((hash, input.path, super::Script { path }))
+        })
+        .pre_run(move |_, store| {
             for package in &externals {
                 let data = bundle_package(package, minify)?;
                 let path = store.save(&data, "js").map_err(ScriptError::Build)?;
                 store.register(package.as_str(), path.as_str());
             }
-
-            let data = compile_esbuild(&input.path, bundle, minify, &externals)?;
-            let hash = Hash32::hash(&data);
-            let path = store.save(&data, "js").map_err(ScriptError::Build)?;
-
-            Ok((hash, input.path, super::Script { path }))
+            Ok(())
         })
         .require(crate::preflight::Requirement::Binary("esbuild"));
 

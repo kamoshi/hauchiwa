@@ -25,11 +25,11 @@
 //! fn configure(config: &mut Blueprint<()>) -> anyhow::Result<Many<Script>> {
 //!     // Compile main.ts -> dist/hash/js/main.[hash].js
 //!     let app = config.load_rolldown()
-//!         .entry("src/client/main.ts")
-//!         .watch("src/client/**/*.ts") // Rebuild when any client file changes
+//!         .entry("src/client/main.ts")?
+//!         .watch("src/client/**/*.ts")? // Rebuild when any client file changes
 //!         .bundle(true)
 //!         .minify(true)
-//!         .register()?;
+//!         .register();
 //!
 //!     Ok(app)
 //! }
@@ -74,6 +74,7 @@ where
     watch_globs: Vec<Pattern>,
     bundle: bool,
     minify: bool,
+    externals: Vec<String>,
 }
 
 impl<'a, G> ScriptLoader<'a, G>
@@ -88,6 +89,7 @@ where
             watch_globs: Vec::new(),
             bundle: true,
             minify: true,
+            externals: Vec::new(),
         }
     }
 
@@ -122,6 +124,17 @@ where
         self
     }
 
+    /// Marks a package as external.
+    ///
+    /// The package is bundled separately as a content-addressed file and
+    /// registered in the import map. The main entry point is compiled with
+    /// the package marked as external so the browser resolves it via the
+    /// import map at runtime.
+    pub fn external(mut self, package: impl Into<String>) -> Self {
+        self.externals.push(package.into());
+        self
+    }
+
     /// Registers the task with the Blueprint.
     pub fn register(self) -> Many<super::Script> {
         let watch_globs = if self.watch_globs.is_empty() {
@@ -132,13 +145,23 @@ where
 
         let bundle = self.bundle;
         let minify = self.minify;
+        let externals = self.externals;
 
+        let externals_clone = externals.clone();
         let task = GlobBundle::new(self.entry_globs, watch_globs, move |_, store, input| {
-            let data = compile_rolldown(&input.path, bundle, minify)?;
+            let data = compile_rolldown(&input.path, bundle, minify, Some(externals_clone.clone()))?;
             let hash = Hash32::hash(&data);
             let path = store.save(&data, "js").map_err(ScriptError::Build)?;
 
             Ok((hash, input.path, super::Script { path }))
+        })
+        .pre_run(move |_, store| {
+            for package in &externals {
+                let data = bundle_package_rolldown(&store.cache_dir, package, minify)?;
+                let path = store.save(&data, "js").map_err(ScriptError::Build)?;
+                store.register(package.as_str(), path.as_str());
+            }
+            Ok(())
         });
 
         self.blueprint.add_task_fine(task)
@@ -156,11 +179,11 @@ where
     /// ```rust,no_run
     /// # let mut config = hauchiwa::Blueprint::<()>::new();
     /// config.load_rolldown()
-    ///     .entry("scripts/main.ts")
-    ///     .watch("scripts/**/*.ts")
+    ///     .entry("scripts/main.ts")?
+    ///     .watch("scripts/**/*.ts")?
     ///     .bundle(true)
     ///     .minify(true)
-    ///     .register()?;
+    ///     .register();
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     pub fn load_rolldown(&mut self) -> ScriptLoader<'_, G> {
@@ -168,20 +191,52 @@ where
     }
 }
 
-fn compile_rolldown(file: &Utf8Path, _bundle: bool, minify: bool) -> Result<Vec<u8>, ScriptError> {
+fn bundle_package_rolldown(cache_dir: &Utf8Path, package: &str, minify: bool) -> Result<Vec<u8>, ScriptError> {
+    let temp_dir = cache_dir.join("tmp");
+    std::fs::create_dir_all(&temp_dir)?;
+
+    let hash = Hash32::hash(package.as_bytes()).to_hex();
+    let temp_file_path = temp_dir.join(format!("rolldown_temp_{hash}.js"));
+
+    std::fs::write(&temp_file_path, format!("export * from '{package}';\n"))?;
+
+    let res = compile_rolldown(&temp_file_path, true, minify, None);
+
+    let _ = std::fs::remove_file(&temp_file_path);
+
+    res
+}
+
+fn compile_rolldown(
+    file: &Utf8Path,
+    _bundle: bool,
+    minify: bool,
+    externals: Option<Vec<String>>,
+) -> Result<Vec<u8>, ScriptError> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
 
     rt.block_on(async {
+        let external = externals.map(rolldown::IsExternal::from);
+
+        let file_str = file.as_str();
+        let import_path =
+            if file.is_absolute() || file_str.starts_with("./") || file_str.starts_with("../") {
+                file_str.to_string()
+            } else {
+                format!("./{file_str}")
+            };
+
         let options = BundlerOptions {
             // Define the entry point for the bundler
             input: Some(vec![InputItem {
-                name: Some(file.to_string()),
-                import: file.to_string(),
+                name: file.file_stem().map(String::from),
+                import: import_path,
             }]),
             minify: Some(RawMinifyOptions::Bool(minify)),
             code_splitting: Some(CodeSplittingMode::Bool(false)),
+            external,
 
             ..Default::default()
         };
@@ -189,6 +244,7 @@ fn compile_rolldown(file: &Utf8Path, _bundle: bool, minify: bool) -> Result<Vec<
         // Create the bundler and generate the output
         let mut bundler =
             rolldown::Bundler::new(options).map_err(|e| ScriptError::Rolldown(e.to_string()))?;
+
         let output = bundler
             .generate()
             .await

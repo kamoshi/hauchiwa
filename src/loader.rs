@@ -27,6 +27,9 @@ pub mod jinja;
 #[cfg(feature = "minijinja")]
 pub use jinja::TemplateEnv;
 
+#[cfg(feature = "rolldown")]
+pub mod rolldown;
+
 pub mod esbuild;
 
 pub mod svelte;
@@ -201,6 +204,9 @@ type GlobBundleCallback<G, R> = Box<
         + Sync,
 >;
 
+type PreRunCallback<G> =
+    Box<dyn Fn(&TaskContext<G>, &mut Store) -> anyhow::Result<()> + Send + Sync>;
+
 /// A task that finds files matching a glob pattern and processes them in parallel.
 ///
 /// This is the implementation behind helper methods like `load_frontmatter` and `load_images`.
@@ -213,6 +219,7 @@ where
     glob_entry: Vec<String>,
     glob_watch: Vec<Pattern>,
     callback: GlobBundleCallback<G, R>,
+    pre_run: Option<PreRunCallback<G>>,
     requirements: Vec<crate::preflight::Requirement>,
 }
 
@@ -235,8 +242,18 @@ where
             glob_entry,
             glob_watch,
             callback: Box::new(callback),
+            pre_run: None,
             requirements: Vec::new(),
         }
+    }
+
+    /// Declares a pre_run hook to run before path processing.
+    pub(crate) fn pre_run<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&TaskContext<G>, &mut Store) -> anyhow::Result<()> + Send + Sync + 'static,
+    {
+        self.pre_run = Some(Box::new(f));
+        self
     }
 
     /// Declares a preflight requirement for this task.
@@ -276,6 +293,10 @@ where
         _: Option<&Dynamic>,
         _: &HashSet<NodeIndex>,
     ) -> anyhow::Result<(Tracking, Map<Self::Output>)> {
+        if let Some(ref pre_run) = self.pre_run {
+            pre_run(context, runtime)?;
+        }
+
         let mut paths = Vec::new();
         for glob_entry in &self.glob_entry {
             for path in glob(glob_entry)? {

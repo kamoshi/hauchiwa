@@ -20,6 +20,7 @@ pagefind    = ["tokio", "dep:pagefind"]
 sitemap     = ["dep:sitemap-rs"]
 minijinja   = ["dep:minijinja"]
 logging     = ["dep:tracing-subscriber"]
+rolldown    = ["dep:rolldown"]
 
 [dependencies]
 camino                  = "1.2"
@@ -55,11 +56,10 @@ features = ["random"]
 version = "0.25"
 optional = true
 
-# Feature = "rolldown" (disabled: not yet published on crates.io)
-# [dependencies.rolldown]
-# git = "https://github.com/rolldown/rolldown"
-# rev = "edb8f69"
-# optional = true
+# Feature = "rolldown"
+[dependencies.rolldown]
+version = "1.0"
+optional = true
 
 # Feature = "sitemap"
 [dependencies.sitemap-rs]
