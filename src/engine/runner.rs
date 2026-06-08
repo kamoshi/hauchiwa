@@ -8,7 +8,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::channel;
 use std::time::{Duration, Instant};
 
-use indicatif::ProgressStyle;
 use petgraph::graph::NodeIndex;
 use tracing::Level;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
@@ -121,12 +120,7 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
 
     let root_span = tracing::span!(Level::INFO, "building_tasks");
     root_span.pb_set_length(total_tasks);
-    #[allow(clippy::unwrap_used)] // hardcoded template, cannot fail
-    let pb_style_root = ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
-        .unwrap()
-        .progress_chars("=>-");
-    root_span.pb_set_style(&pb_style_root);
+    root_span.pb_set_style(&site.progress.build);
     root_span.pb_set_message("Building tasks...");
     let _enter = root_span.enter();
 
@@ -134,7 +128,7 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
     let mut updated_nodes = HashSet::new();
 
     // regular task style with no progress
-    let pb_style = crate::utils::get_style_task()?;
+    let pb_style = site.progress.task.clone();
 
     rayon::scope(|s| -> anyhow::Result<()> {
         // We only need a channel for results and tasks are distributed by Rayon.
@@ -205,6 +199,7 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
                     env: globals,
                     importmap: &importmap,
                     span: span.clone(),
+                    progress: &site.progress,
                 };
 
                 let start_time = Instant::now();
@@ -296,6 +291,13 @@ pub(crate) fn run_tasks_parallel<G: Send + Sync>(
 
             if executed {
                 updated_nodes.insert(completed_index);
+                let task = &site.graph[completed_index];
+                tracing::info!(
+                    target: "task",
+                    name = task.name(),
+                    duration_ms = duration.as_millis() as u64,
+                    "Finished task"
+                );
             }
 
             // Unlock dependents

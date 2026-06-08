@@ -65,7 +65,7 @@ pub fn watch<G: Send + Sync>(
     for entry in &static_files {
         snapshot.insert_static_file(entry.dist_rel.clone(), entry.source_utf8.clone())?;
     }
-    crate::utils::copy_static_entries(&static_files)?;
+    crate::utils::copy_static_entries(&static_files, &site.progress.copy)?;
     tracing::info!("collected {} pages", snapshot.page_count());
     match prev_meta {
         Some(ref prev) => snapshot.commit_diff_meta(prev, out_dir)?,
@@ -210,7 +210,7 @@ pub fn watch<G: Send + Sync>(
                     if !static_manifest_ok {
                         continue;
                     }
-                    if let Err(e) = crate::utils::copy_static_entries(&static_files) {
+                    if let Err(e) = crate::utils::copy_static_entries(&static_files, &site.progress.copy) {
                         tracing::error!("failed to copy static files: {}", e);
                         continue;
                     }

@@ -39,7 +39,6 @@ anyhow                  = "1.0"
 thiserror               = "2.0"
 
 # CLI
-console                 = { version = "0.16", default-features = false }
 indicatif               = { version = "0.18", features = ["rayon"] }
 tracing                 = "0.1"
 tracing-indicatif       = "0.3"

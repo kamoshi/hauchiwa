@@ -26,6 +26,7 @@ pub use crate::core::{Environment, FileMetadata, ImportMap, Mode, Store, TaskCon
 pub use crate::engine::{Diagnostics, Many, One, Tracker};
 pub use crate::output::Output;
 pub use crate::preflight::Requirement;
+pub use crate::utils::ProgressStyles;
 
 pub mod prelude {
     pub use super::blueprint::{Blueprint, Website};
@@ -39,4 +40,4 @@ pub mod tracing {
 }
 
 #[cfg(feature = "logging")]
-pub use logging::init_logging;
+pub use logging::{CleanFields, LogFormat, init_logging, init_logging_with_format};

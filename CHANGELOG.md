@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [0.20.0] - 2026-06-08
+
+### Added
+- Configurable progress bar styling using the `ProgressStyles` struct and
+  `Blueprint::set_progress_styles()`, allowing customization of progress bars
+  for builds, tasks, task items, and static file copying
+- Custom humane logging format (`LogFormat::Humane`) and
+  `init_logging_with_format()` function to opt into clean, colored Cargo-style
+  CLI logs (e.g. `Finished <task> in <duration>ms`)
+- Structured task completion event logging in the runner thread, emitting events
+  under target `"task"` with `name` and `duration_ms` fields upon completion
+
+### Fixed
+- Fixed relative entry path resolution failures in the Rolldown loader by
+  canonicalizing the temporary script module path to an absolute path
+- Fixed compile error in the `load_minijinja()` builder API documentation
+  doctest
+
+### Removed
+- Direct dependency on the `console` crate
+
 ## [0.19.0] - 2026-05-30
 
 ### Added

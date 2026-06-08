@@ -201,12 +201,13 @@ where
     ///
     /// ```rust,no_run
     /// # let mut config = hauchiwa::Blueprint::<()>::new();
+    /// # fn example(config: &mut hauchiwa::Blueprint<()>) -> Result<(), hauchiwa::error::HauchiwaError> {
     /// let templates = config
     ///     .load_minijinja()
-    ///     .glob("templates/**/*.html")
+    ///     .glob("templates/**/*.html")?
     ///     .root("templates")
-    ///     .register()
-    ///     .unwrap();
+    ///     .register();
+    /// # Ok(()) }
     /// ```
     pub fn load_minijinja(&mut self) -> JinjaLoader<'_, G> {
         JinjaLoader::new(self)

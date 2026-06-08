@@ -217,12 +217,17 @@ fn compile_rolldown(
         .enable_all()
         .build()?;
 
+    let absolute_path = std::fs::canonicalize(file)
+        .ok()
+        .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok())
+        .unwrap_or_else(|| file.to_path_buf());
+
     rt.block_on(async {
         let external = externals.map(rolldown::IsExternal::from);
 
-        let file_str = file.as_str();
+        let file_str = absolute_path.as_str();
         let import_path =
-            if file.is_absolute() || file_str.starts_with("./") || file_str.starts_with("../") {
+            if absolute_path.is_absolute() || file_str.starts_with("./") || file_str.starts_with("../") {
                 file_str.to_string()
             } else {
                 format!("./{file_str}")

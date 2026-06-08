@@ -14,6 +14,7 @@ use crate::engine::{
 };
 use crate::error::HauchiwaError;
 use crate::loader::Input;
+use crate::utils::ProgressStyles;
 use crate::{Diagnostics, TaskContext};
 
 /// The blueprint for your static site.
@@ -37,6 +38,7 @@ pub struct Blueprint<G: Send + Sync = ()> {
     pub(crate) copied: Vec<(String, String)>,
     pub(crate) out_dir: Utf8PathBuf,
     pub(crate) cache_dir: Utf8PathBuf,
+    pub(crate) progress: ProgressStyles,
 }
 
 impl<G: Send + Sync + 'static> Blueprint<G> {
@@ -56,6 +58,15 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
     #[must_use]
     pub fn set_dir_cache(mut self, dir: impl Into<Utf8PathBuf>) -> Self {
         self.cache_dir = dir.into();
+        self
+    }
+
+    /// Overrides the progress bar styles used during builds.
+    ///
+    /// See [`ProgressStyles`] for the available fields and their defaults.
+    #[must_use]
+    pub fn set_progress_styles(mut self, styles: ProgressStyles) -> Self {
+        self.progress = styles;
         self
     }
 
@@ -79,6 +90,7 @@ impl<G: Send + Sync + 'static> Blueprint<G> {
             copied: self.copied,
             out_dir: self.out_dir,
             cache_dir: self.cache_dir,
+            progress: self.progress,
         }
     }
 
@@ -120,6 +132,7 @@ impl<G: Send + Sync> Default for Blueprint<G> {
             graph: Graph::default(),
             out_dir: Utf8PathBuf::from("dist"),
             cache_dir: Utf8PathBuf::from(".cache"),
+            progress: ProgressStyles::default(),
         }
     }
 }
@@ -394,6 +407,7 @@ pub struct Website<G: Send + Sync = ()> {
     pub(crate) copied: Vec<(String, String)>,
     pub(crate) out_dir: Utf8PathBuf,
     pub(crate) cache_dir: Utf8PathBuf,
+    pub(crate) progress: ProgressStyles,
 }
 
 impl<G> Website<G>
@@ -456,7 +470,7 @@ where
         for entry in &static_files {
             manifest.insert_static_file(entry.dist_rel.clone(), entry.source_utf8.clone())?;
         }
-        crate::utils::copy_static_entries(&static_files)?;
+        crate::utils::copy_static_entries(&static_files, &self.progress.copy)?;
 
         match prev_meta {
             Some(ref prev) => manifest

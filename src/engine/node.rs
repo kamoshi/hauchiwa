@@ -298,6 +298,7 @@ mod tests {
             env: &ENV,
             importmap: Box::leak(Box::new(ImportMap::new())),
             span: tracing::Span::none(),
+            progress: Box::leak(Box::new(crate::utils::ProgressStyles::default())),
         }
     }
 

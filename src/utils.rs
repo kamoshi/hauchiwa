@@ -1,12 +1,9 @@
 use std::collections::HashSet;
-use std::fmt::Display;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 use std::time::Instant;
 
 use camino::{Utf8Path, Utf8PathBuf};
-use console::Style;
 use indicatif::ProgressStyle;
 use rayon::prelude::*;
 use tracing::{Level, info, span};
@@ -15,28 +12,53 @@ use tracing_indicatif::span_ext::IndicatifSpanExt;
 use crate::core::Hash32;
 use crate::error::StepCopyStatic;
 
-const ANSI_BLUE: Style = Style::new().blue();
-
-#[allow(clippy::expect_used)] // hardcoded template literal - cannot fail
-static PROGRESS_STYLE: LazyLock<ProgressStyle> = LazyLock::new(|| {
-    ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos} {msg}")
-        .expect("Error setting progress bar template")
-        .progress_chars("#>-")
-});
-
-pub fn get_style_task() -> Result<ProgressStyle, indicatif::style::TemplateError> {
-    ProgressStyle::default_spinner().template("{spinner:.blue} {msg}")
+/// Configuration for progress bar styles displayed during builds.
+///
+/// These styles are only visible when an [`IndicatifLayer`] is registered
+/// with the `tracing` subscriber (e.g., via [`init_logging()`]). Without
+/// the layer, all progress bar operations are silent no-ops.
+///
+/// Each field has a sensible default. Override individual styles to
+/// customise the build output, or replace the entire struct via
+/// [`Blueprint::set_progress_styles`].
+///
+/// [`IndicatifLayer`]: tracing_indicatif::IndicatifLayer
+/// [`init_logging()`]: crate::init_logging
+/// [`Blueprint::set_progress_styles`]: crate::Blueprint::set_progress_styles
+pub struct ProgressStyles {
+    /// Style for the overall build progress bar.
+    pub build: ProgressStyle,
+    /// Style for individual task spinners.
+    pub task: ProgressStyle,
+    /// Style for tasks that process multiple items (e.g., glob loaders).
+    /// Overrides [`task`](Self::task) when the item count is known.
+    pub task_items: ProgressStyle,
+    /// Style for the static file copy progress bar.
+    pub copy: ProgressStyle,
 }
 
-pub fn get_style_task_progress() -> Result<ProgressStyle, indicatif::style::TemplateError> {
-    ProgressStyle::default_spinner().template("{spinner:.blue} {msg} {pos}/{len} ")
-}
-
-pub fn as_overhead(s: Instant) -> impl Display {
-    let e = Instant::now();
-    let f = format!("(+{}ms)", e.duration_since(s).as_millis());
-    ANSI_BLUE.apply_to(f)
+#[allow(clippy::expect_used)] // hardcoded template literals - cannot fail
+impl Default for ProgressStyles {
+    fn default() -> Self {
+        Self {
+            build: ProgressStyle::default_bar()
+                .template(
+                    "{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}",
+                )
+                .expect("hardcoded template")
+                .progress_chars("=>-"),
+            task: ProgressStyle::default_spinner()
+                .template("{spinner:.blue} {msg}")
+                .expect("hardcoded template"),
+            task_items: ProgressStyle::default_spinner()
+                .template("{spinner:.blue} {msg} {pos}/{len} ")
+                .expect("hardcoded template"),
+            copy: ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed}] [{bar:40.cyan/blue}] {pos} {msg}")
+                .expect("hardcoded template")
+                .progress_chars("#>-"),
+        }
+    }
 }
 
 /// Returns `true` if the `dst` file is considered identical to `src`.
@@ -154,6 +176,7 @@ pub(crate) fn collect_static(
 /// `dist`.
 pub(crate) fn copy_static_entries(
     files: &[StaticFileEntry],
+    style: &ProgressStyle,
 ) -> Result<Vec<(Utf8PathBuf, Utf8PathBuf)>, StepCopyStatic> {
     if files.is_empty() {
         return Ok(vec![]);
@@ -161,7 +184,7 @@ pub(crate) fn copy_static_entries(
 
     let span = span!(Level::INFO, "copy_static", indicatif.pb_show = true);
     span.pb_set_message("Copying static files...");
-    span.pb_set_style(&PROGRESS_STYLE);
+    span.pb_set_style(style);
     let _enter = span.enter();
 
     let s = Instant::now();
@@ -189,7 +212,7 @@ pub(crate) fn copy_static_entries(
         })
         .collect::<std::io::Result<_>>()?;
 
-    info!("Finished copying static files! {}", as_overhead(s));
+    info!(duration_ms = s.elapsed().as_millis() as u64, "Finished copying static files");
 
     Ok(entries)
 }

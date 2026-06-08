@@ -1,14 +1,13 @@
 use std::{net::SocketAddr, thread};
 
 use axum::Router;
-use console::style;
 use tower_http::services::ServeDir;
 use tracing::info;
 
 pub fn start(dist: String) -> thread::JoinHandle<Result<(), anyhow::Error>> {
     let port = 8080;
 
-    info!(url = %style(format!("http://localhost:{port}/")).yellow(), "starting a HTTP server");
+    info!(url = %format!("http://localhost:{port}/"), "starting a HTTP server");
 
     thread::spawn(move || {
         tokio::runtime::Builder::new_current_thread()

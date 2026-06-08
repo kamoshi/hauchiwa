@@ -161,8 +161,7 @@ where
         }
 
         // we can override the style to have progress
-        let style = crate::utils::get_style_task_progress()?;
-        context.span.pb_set_style(&style);
+        context.span.pb_set_style(&context.progress.task_items);
         context.span.pb_set_length(paths.len() as u64);
 
         let results: anyhow::Result<Vec<_>> = paths
@@ -306,8 +305,7 @@ where
         }
 
         // we can override the style to have progress
-        let style = crate::utils::get_style_task_progress()?;
-        context.span.pb_set_style(&style);
+        context.span.pb_set_style(&context.progress.task_items);
         context.span.pb_set_length(paths.len() as u64);
 
         let results: anyhow::Result<Vec<_>> = paths

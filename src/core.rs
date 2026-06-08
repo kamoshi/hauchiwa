@@ -222,6 +222,8 @@ pub struct TaskContext<'a, G: Send + Sync = ()> {
     pub importmap: &'a ImportMap,
     /// Tracing span assigned to this task.
     pub(crate) span: tracing::Span,
+    /// Progress bar styles configured for this build.
+    pub(crate) progress: &'a crate::utils::ProgressStyles,
 }
 
 /// A helper for managing side effects and imports within a task.
