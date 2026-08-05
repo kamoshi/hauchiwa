@@ -1,6 +1,6 @@
 [package]
 name        = "hauchiwa"
-version     = "0.20.0"
+version     = "0.21.0"
 edition     = "2024"
 authors     = ["Maciej Jur <maciej@kamoshi.org>"]
 keywords    = ["ssg"]
@@ -84,7 +84,7 @@ optional = true
 default-features = false
 
 [dependencies.tungstenite]
-version = "0.29"
+version = "0.30"
 optional = true
 
 # Feature = "server"
@@ -101,7 +101,7 @@ default-features = false
 features = ["rt"]
 
 [dependencies.tower-http]
-version = "0.6"
+version = "0.7"
 optional = true
 default-features = false
 features = ["fs"]
