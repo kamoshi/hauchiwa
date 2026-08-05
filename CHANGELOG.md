@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [0.21.0] - 2026-08-05
+
+### Changed
+- Updated direct server dependencies: `tungstenite` to `0.30` and `tower-http` to `0.7`
+- Refreshed the dependency lockfile, updating transitive crates across the workspace
+
 ## [0.20.0] - 2026-06-08
 
 ### Added
