@@ -5,19 +5,18 @@ mod http;
 mod watch;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::mpsc::channel;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use camino::Utf8PathBuf;
+use petgraph::Graph;
 use petgraph::graph::NodeIndex;
 use tracing::Level;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
-use petgraph::Graph;
-
-use camino::Utf8PathBuf;
-
 use crate::core::{Dynamic, Store};
 use crate::engine::{Map, Task, TrackerState};
+use crate::error::{BuildError, HauchiwaError};
 use crate::snapshot::Snapshot;
 use crate::{Environment, ImportMap, Output, TaskContext, Website};
 
@@ -27,7 +26,7 @@ pub(crate) use watch::watch;
 pub use diagnostics::Diagnostics;
 
 #[derive(Debug, Clone)]
-pub struct TaskExecution {
+pub struct TaskTiming {
     pub start: Instant,
     pub duration: Duration,
 }
@@ -45,280 +44,439 @@ pub(crate) struct NodeData {
     pub store_paths: Vec<Utf8PathBuf>,
 }
 
-pub(crate) fn run_once_parallel<G: Send + Sync>(
-    website: &mut Website<G>,
-    globals: &Environment<G>,
-) -> Result<(HashMap<NodeIndex, NodeData>, Snapshot, Diagnostics), crate::error::HauchiwaError> {
-    // We run toposort primarily to detect any cycles in the graph.
-    petgraph::algo::toposort(&website.graph, None)
-        .map_err(|_| crate::error::HauchiwaError::GraphCycle)?;
-
-    let mut cache = HashMap::new();
-    let pending = website.graph.node_indices().collect();
-    let dirty = HashSet::new();
-
-    let diagnostics = run_tasks_parallel(website, globals, &mut cache, &pending, &dirty)
-        .map_err(|e| crate::error::HauchiwaError::Build(crate::error::BuildError::Other(e)))?;
-
-    let manifest =
-        collect_manifest(&cache, &website.graph).map_err(crate::error::HauchiwaError::Build)?;
-    Ok((cache, manifest, diagnostics))
+struct SchedulerState {
+    // The most recently available result for each task.
+    cache: HashMap<NodeIndex, NodeData>,
+    // For each task selected for this run, the number of prerequisites that
+    // still need to complete during this run.
+    remaining_dependencies: HashMap<NodeIndex, usize>,
+    // The tasks whose executors actually ran during this invocation.
+    updated_nodes: HashSet<NodeIndex>,
+    // Timing information for diagnostics.
+    execution_times: HashMap<NodeIndex, TaskTiming>,
+    // The number of selected tasks that have successfully completed, including
+    // whole-node cache hits.
+    completed: usize,
+    // The first task error observed by the scheduler.
+    first_error: Option<anyhow::Error>,
 }
 
-/// This function executes the task graph using a thread pool. It performs a
-/// parallel topological sort of the graph, where tasks are executed as soon as
-/// their dependencies are met.
-///
-/// The algorithm works as follows:
-/// 1. A pool of worker threads is spawned.
-/// 2. Two channels are created: one for sending tasks to the workers and one
-///    for receiving results back.
-/// 3. The initial set of tasks (those with no dependencies) is sent to the
-///    workers.
-/// 4. The main thread enters a loop, waiting for results from the workers.
-/// 5. When a task completes, its result is cached. The dependency counts of
-///    all tasks that depend on the completed task are decremented.
-/// 6. If a task's dependency count reaches zero, it is sent to the workers.
-/// 7. The loop continues until all tasks have been completed.
-pub(crate) fn run_tasks_parallel<G: Send + Sync>(
+impl SchedulerState {
+    fn new(
+        cache: HashMap<NodeIndex, NodeData>,
+        remaining_dependencies: HashMap<NodeIndex, usize>,
+    ) -> Self {
+        Self {
+            cache,
+            remaining_dependencies,
+            updated_nodes: HashSet::new(),
+            execution_times: HashMap::new(),
+            completed: 0,
+            first_error: None,
+        }
+    }
+
+    /// Return cached results even on failure, so watch mode retains completed work.
+    fn finish(self, cache: &mut HashMap<NodeIndex, NodeData>) -> anyhow::Result<Diagnostics> {
+        *cache = self.cache;
+
+        if let Some(error) = self.first_error {
+            return Err(error);
+        }
+
+        anyhow::ensure!(
+            self.completed == self.remaining_dependencies.len(),
+            "Some selected tasks never completed ({}/{})",
+            self.completed,
+            self.remaining_dependencies.len(),
+        );
+
+        Ok(Diagnostics {
+            execution_times: self.execution_times,
+        })
+    }
+
+    fn find_roots(&self) -> Vec<NodeIndex> {
+        self.remaining_dependencies
+            .iter()
+            .filter_map(|(&node, &count)| (count == 0).then_some(node))
+            .collect()
+    }
+}
+
+// Count dependencies for each node that we intend to run.
+// A dependency only counts if it's also in the set of nodes to run.
+fn count_dependencies<G: Send + Sync>(
+    website: &Website<G>,
+    nodes_to_run: &HashSet<NodeIndex>,
+) -> HashMap<NodeIndex, usize> {
+    nodes_to_run
+        .iter()
+        .map(|&i| {
+            (
+                i,
+                website
+                    .graph
+                    .neighbors_directed(i, petgraph::Direction::Incoming)
+                    .filter(|dep| nodes_to_run.contains(dep))
+                    .count(),
+            )
+        })
+        .collect()
+}
+
+struct PreparedTask {
+    dependencies: Vec<Dynamic>,
+    dependency_imports: Vec<ImportMap>,
+    previous_data: Option<NodeData>,
+    updated_nodes: HashSet<NodeIndex>,
+}
+
+impl PreparedTask {
+    fn can_reuse<G: Send + Sync>(&self, task: &Task<G>) -> bool {
+        self.previous_data.as_ref().is_some_and(|previous| {
+            task.is_still_valid(&previous.tracking, &self.dependencies, &self.updated_nodes)
+        })
+    }
+}
+
+struct CompletedTask {
+    data: NodeData,
+    executed: bool,
+    timing: TaskTiming,
+}
+
+impl CompletedTask {
+    fn reused(data: NodeData, start: Instant) -> Self {
+        Self {
+            data,
+            executed: false,
+            timing: TaskTiming {
+                start,
+                duration: Duration::ZERO,
+            },
+        }
+    }
+
+    fn executed(data: NodeData, timing: TaskTiming) -> Self {
+        Self {
+            data,
+            executed: true,
+            timing,
+        }
+    }
+}
+
+impl SchedulerState {
+    /// Capture inputs while the caller holds the scheduler lock.
+    fn prepare_node<G: Send + Sync>(
+        &mut self,
+        website: &Website<G>,
+        node: NodeIndex,
+    ) -> Option<PreparedTask> {
+        if self.first_error.is_some() {
+            return None;
+        }
+
+        let mut dependencies = Vec::new();
+        let mut dependency_imports = Vec::new();
+        for dependency in website.graph[node].dependencies() {
+            let Some(data) = self.cache.get(&dependency) else {
+                self.first_error = Some(anyhow::anyhow!(
+                    "Task {node:?} is missing dependency {dependency:?}"
+                ));
+
+                return None;
+            };
+
+            dependencies.push(data.output.clone());
+            dependency_imports.push(data.importmap.clone());
+        }
+
+        Some(PreparedTask {
+            dependencies,
+            dependency_imports,
+            previous_data: self.cache.get(&node).cloned(),
+            updated_nodes: self.updated_nodes.clone(),
+        })
+    }
+
+    /// Record completion under the lock. None means no further work should be
+    /// released. An empty Vec means completion succeeded without ready
+    /// dependents.
+    fn complete_node<G: Send + Sync>(
+        &mut self,
+        website: &Website<G>,
+        node: NodeIndex,
+        completion: CompletedTask,
+    ) -> Option<Vec<NodeIndex>> {
+        self.cache.insert(node, completion.data);
+        self.execution_times.insert(node, completion.timing);
+        self.completed += 1;
+
+        if completion.executed {
+            self.updated_nodes.insert(node);
+        }
+
+        // Preserve successful results from jobs already running when another failed.
+        if self.first_error.is_some() {
+            return None;
+        }
+
+        let mut ready = Vec::new();
+        for downstream_node in website
+            .graph
+            .neighbors_directed(node, petgraph::Direction::Outgoing)
+        {
+            // Missing entries are dependents outside this incremental run.
+            let Some(count) = self.remaining_dependencies.get_mut(&downstream_node) else {
+                continue;
+            };
+
+            let Some(remaining) = count.checked_sub(1) else {
+                self.first_error = Some(anyhow::anyhow!(
+                    "Dependency count underflow for task {downstream_node:?}"
+                ));
+
+                return None;
+            };
+
+            *count = remaining;
+
+            if remaining == 0 {
+                ready.push(downstream_node);
+            }
+        }
+
+        Some(ready)
+    }
+}
+
+/// Validate or execute using captured inputs, without accessing the scheduler mutex.
+fn execute_or_reuse<G: Send + Sync>(
+    website: &Website<G>,
+    globals: &Environment<G>,
+    node: NodeIndex,
+    is_marked_dirty: bool,
+    prepared: PreparedTask,
+) -> anyhow::Result<CompletedTask> {
+    let start = Instant::now();
+
+    // Catch task panics without unwinding through the scheduler.
+    // No scheduler lock is held, and failed results are not published.
+    // Callback-owned shared state and filesystem writes are not rolled back.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let task = &website.graph[node];
+
+        if !is_marked_dirty
+            && prepared.can_reuse(task)
+            && let Some(previous) = prepared.previous_data.as_ref()
+        {
+            return Ok(CompletedTask::reused(previous.clone(), start));
+        }
+
+        let mut importmap = ImportMap::new();
+        for imports in prepared.dependency_imports {
+            importmap.merge(imports);
+        }
+
+        let span = tracing::span!(Level::INFO, "task", name = task.name());
+        span.pb_set_style(&website.progress.task);
+        span.pb_set_message(&format!("Running {}", task.name()));
+        let _enter = span.enter();
+
+        let context = TaskContext {
+            env: globals,
+            importmap: &importmap,
+            span: span.clone(),
+            progress: &website.progress,
+        };
+
+        let mut store = Store::with_dirs(website.out_dir.clone(), website.cache_dir.clone());
+
+        // Preserve the old runner's behavior for directly invalidated nodes.
+        let old_output = prepared
+            .previous_data
+            .as_ref()
+            .filter(|_| !is_marked_dirty)
+            .map(|data| &data.output);
+
+        let (tracking, output) = match task {
+            Task::C(task) => task.execute(&context, &mut store, &prepared.dependencies)?,
+            Task::F(task) => task.execute(
+                &context,
+                &mut store,
+                &prepared.dependencies,
+                old_output,
+                &prepared.updated_nodes,
+            )?,
+        };
+
+        let tracking = tracking.unwrap();
+        importmap.merge(store.imports);
+
+        Ok::<_, anyhow::Error>(CompletedTask::executed(
+            NodeData {
+                output,
+                tracking,
+                importmap,
+                store_paths: store.store_paths,
+            },
+            TaskTiming {
+                start,
+                duration: start.elapsed(),
+            },
+        ))
+    }));
+
+    result.map_err(|panic| {
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("unknown payload");
+
+        anyhow::anyhow!("Task panicked: {message}")
+    })?
+}
+
+fn spawn_node<'scope, G: Send + Sync>(
+    scope: &rayon::Scope<'scope>,
+    website: &'scope Website<G>,
+    globals: &'scope Environment<G>,
+    state: &'scope Mutex<SchedulerState>,
+    node: NodeIndex,
+    dirty: &'scope HashSet<NodeIndex>,
+) {
+    let parent_span = tracing::Span::current();
+
+    scope.spawn(move |scope| {
+        let _enter = parent_span.enter();
+
+        let prepared = {
+            let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+            guard.prepare_node(website, node)
+        };
+
+        let Some(prepared) = prepared else {
+            return;
+        };
+
+        let completion =
+            match execute_or_reuse(website, globals, node, dirty.contains(&node), prepared) {
+                Ok(completion) => completion,
+                Err(error) => {
+                    let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+                    guard.first_error.get_or_insert(error);
+                    return;
+                }
+            };
+
+        let executed = completion.executed;
+        let duration = completion.timing.duration;
+        let newly_ready = {
+            let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+            guard.complete_node(website, node, completion)
+        };
+        let Some(newly_ready) = newly_ready else {
+            return;
+        };
+
+        parent_span.pb_inc(1);
+        if executed {
+            tracing::info!(
+                target: "task",
+                name = website.graph[node].name(),
+                duration_ms = duration.as_millis() as u64,
+                "Finished task"
+            );
+        }
+
+        for next in newly_ready {
+            spawn_node(scope, website, globals, state, next, dirty);
+        }
+    });
+}
+
+fn run_inner<G: Send + Sync>(
+    website: &Website<G>,
+    globals: &Environment<G>,
+    state: &Mutex<SchedulerState>,
+    dirty: &HashSet<NodeIndex>,
+) {
+    let roots = state.lock().unwrap_or_else(|e| e.into_inner()).find_roots();
+
+    let parent_span = tracing::Span::current();
+    rayon::scope(|scope| {
+        let _enter = parent_span.enter();
+        for node in roots {
+            spawn_node(scope, website, globals, state, node, dirty);
+        }
+    });
+}
+
+/// The initial graph result, before static files are added or outputs committed.
+pub(crate) struct InitialRun {
+    pub cache: HashMap<NodeIndex, NodeData>,
+    pub snapshot: Snapshot,
+    pub diagnostics: Diagnostics,
+}
+
+/// Validate and execute the entire graph with a fresh task cache.
+pub(crate) fn run_initial<G: Send + Sync>(
+    website: &Website<G>,
+    globals: &Environment<G>,
+) -> Result<InitialRun, HauchiwaError> {
+    petgraph::algo::toposort(&website.graph, None).map_err(|_| HauchiwaError::GraphCycle)?;
+
+    let mut cache = HashMap::new();
+    let selected = website.graph.node_indices().collect();
+    let dirty = HashSet::new();
+
+    let diagnostics =
+        run_selected(website, globals, &mut cache, &selected, &dirty).map_err(BuildError::Other)?;
+    let snapshot = collect_manifest(&cache, &website.graph)?;
+
+    Ok(InitialRun {
+        cache,
+        snapshot,
+        diagnostics,
+    })
+}
+
+/// Executes selected tasks using completion-driven scheduling. Each completed
+/// task releases its ready dependents into the same Rayon scope. Dependencies
+/// outside the selected set are resolved from the retained cache.
+pub(crate) fn run_selected<G: Send + Sync>(
     site: &Website<G>,
     globals: &Environment<G>,
     cache: &mut HashMap<NodeIndex, NodeData>,
     nodes_to_run: &HashSet<NodeIndex>,
     explicitly_dirty: &HashSet<NodeIndex>,
 ) -> anyhow::Result<Diagnostics> {
-    // Build a map from a dependency to the nodes that depend on it for the entire graph.
-    let mut dependents: HashMap<NodeIndex, Vec<NodeIndex>> = HashMap::new();
-    for edge in site.graph.raw_edges() {
-        dependents
-            .entry(edge.source())
-            .or_default()
-            .push(edge.target());
-    }
-
-    // Count dependencies for each node that we intend to run.
-    // A dependency only counts if it's also in the set of nodes to run.
-    let mut dependency_counts: HashMap<NodeIndex, usize> = nodes_to_run
-        .iter()
-        .map(|&i| {
-            (
-                i,
-                site.graph
-                    .neighbors_directed(i, petgraph::Direction::Incoming)
-                    .filter(|dep| nodes_to_run.contains(dep))
-                    .count(),
-            )
-        })
-        .collect();
-
-    let total_tasks = nodes_to_run.len() as u64;
-    let mut completed_tasks = 0;
-
-    if total_tasks == 0 {
+    if nodes_to_run.is_empty() {
         return Ok(Diagnostics::default());
     }
 
     let root_span = tracing::span!(Level::INFO, "building_tasks");
-    root_span.pb_set_length(total_tasks);
+    root_span.pb_set_length(nodes_to_run.len() as u64);
     root_span.pb_set_style(&site.progress.build);
     root_span.pb_set_message("Building tasks...");
     let _enter = root_span.enter();
 
-    let mut execution_times = HashMap::new();
-    let mut updated_nodes = HashSet::new();
+    let remaining_dependencies = count_dependencies(site, nodes_to_run);
+    let state = Mutex::new(SchedulerState::new(
+        std::mem::take(cache),
+        remaining_dependencies,
+    ));
 
-    // regular task style with no progress
-    let pb_style = site.progress.task.clone();
+    run_inner(site, globals, &state, explicitly_dirty);
 
-    rayon::scope(|s| -> anyhow::Result<()> {
-        // We only need a channel for results and tasks are distributed by Rayon.
-        // (index, result, start, duration, ran_was_executed)
-        let (result_sender, result_receiver) =
-            channel::<(NodeIndex, anyhow::Result<NodeData>, Instant, Duration, bool)>();
-
-        // A helper closure to spawn a task
-        let spawn_task = |cache: &HashMap<NodeIndex, NodeData>,
-                          index: NodeIndex,
-                          updated_nodes: &HashSet<NodeIndex>| {
-            // Prepare dependencies
-            let mut dependencies = Vec::new();
-            let mut importmap = ImportMap::new();
-
-            for dep_index in site.graph[index].dependencies() {
-                #[allow(clippy::unwrap_used)]
-                // graph invariant: dependencies always in cache before this node runs
-                let node_data = cache.get(&dep_index).unwrap();
-                dependencies.push(node_data.output.clone());
-                importmap.merge(node_data.importmap.clone());
-            }
-
-            // Check if we can skip this task
-            let is_explicitly_dirty = explicitly_dirty.contains(&index);
-            let mut should_run = true;
-            let mut old_data = None;
-
-            if !is_explicitly_dirty && let Some(data) = cache.get(&index) {
-                old_data = Some(data.clone());
-                let task = &site.graph[index];
-                if task.is_valid(&data.tracking, &dependencies, updated_nodes) {
-                    should_run = false;
-                }
-            }
-
-            if !should_run {
-                // Task is skipped
-                let sender = result_sender.clone();
-                #[allow(clippy::unwrap_used)]
-                // old_data is Some when should_run is false (set above)
-                let output = old_data.unwrap();
-                #[allow(clippy::unwrap_used)] // receiver lives for the duration of the rayon scope
-                sender
-                    .send((index, Ok(output), Instant::now(), Duration::ZERO, false))
-                    .unwrap();
-                return;
-            }
-
-            let task = site.graph[index].clone();
-
-            // Clone variables for the thread
-            let sender = result_sender.clone();
-            let pb_style = pb_style.clone();
-
-            let old_output = old_data.map(|d| d.output);
-            let updated_nodes = updated_nodes.clone();
-
-            // Spawn on Rayon pool
-            s.spawn(move |_| {
-                // Tracing span
-                let span = tracing::span!(Level::INFO, "task", name = task.name());
-                span.pb_set_style(&pb_style);
-                span.pb_set_message(&format!("Running {}", task.name()));
-                let _enter = span.enter();
-
-                let context = TaskContext {
-                    env: globals,
-                    importmap: &importmap,
-                    span: span.clone(),
-                    progress: &site.progress,
-                };
-
-                let start_time = Instant::now();
-
-                // We use AssertUnwindSafe because we are confident that if the
-                // specific task logic panics, it won't corrupt the shared
-                // memory in a way that affects other threads (since we are
-                // using mostly cloned and/or immutable data).
-                let output = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let mut rt = Store::with_dirs(site.out_dir.clone(), site.cache_dir.clone());
-
-                    match task {
-                        Task::C(task) => task.execute(&context, &mut rt, &dependencies).map(
-                            |(tracking, output)| {
-                                let tracking = tracking.unwrap();
-                                let mut imports = importmap.clone();
-                                imports.merge(rt.imports);
-                                NodeData {
-                                    output,
-                                    tracking,
-                                    importmap: imports,
-                                    store_paths: rt.store_paths,
-                                }
-                            },
-                        ),
-                        Task::F(task) => task
-                            .execute(
-                                &context,
-                                &mut rt,
-                                &dependencies,
-                                old_output.as_ref(),
-                                &updated_nodes,
-                            )
-                            .map(|(tracking, output)| {
-                                let tracking = tracking.unwrap();
-                                let mut imports = importmap.clone();
-                                imports.merge(rt.imports);
-                                NodeData {
-                                    output,
-                                    tracking,
-                                    importmap: imports,
-                                    store_paths: rt.store_paths,
-                                }
-                            }),
-                    }
-                })) {
-                    Ok(result) => result,
-                    Err(panic) => {
-                        let msg = if let Some(s) = panic.downcast_ref::<&str>() {
-                            format!("Task panicked: {s}")
-                        } else if let Some(s) = panic.downcast_ref::<String>() {
-                            format!("Task panicked: {s}")
-                        } else {
-                            String::from("Task panicked with unknown payload")
-                        };
-
-                        Err(anyhow::anyhow!(msg))
-                    }
-                };
-
-                let elapsed = start_time.elapsed();
-
-                // Send result back to main thread
-                let _ = sender.send((index, output, start_time, elapsed, true));
-            });
-        };
-
-        // Seed initial tasks
-        for &node_index in nodes_to_run {
-            if dependency_counts.get(&node_index).cloned().unwrap_or(0) == 0 {
-                spawn_task(cache, node_index, &updated_nodes);
-            }
-        }
-
-        // Scheduler loop
-        // The main thread sits here while Rayon workers execute tasks.
-        while completed_tasks < total_tasks {
-            // Wait for any task to finish
-            #[allow(clippy::unwrap_used)]
-            // senders live in the rayon scope above; recv only fails if all senders dropped
-            let (completed_index, output, start, duration, executed) =
-                result_receiver.recv().unwrap();
-
-            // Update state
-            cache.insert(completed_index, output?);
-            execution_times.insert(completed_index, TaskExecution { start, duration });
-            completed_tasks += 1;
-            root_span.pb_inc(1);
-
-            if executed {
-                updated_nodes.insert(completed_index);
-                let task = &site.graph[completed_index];
-                tracing::info!(
-                    target: "task",
-                    name = task.name(),
-                    duration_ms = duration.as_millis() as u64,
-                    "Finished task"
-                );
-            }
-
-            // Unlock dependents
-            if let Some(dependents_of_completed) = dependents.get(&completed_index) {
-                for &index in dependents_of_completed {
-                    if let Some(count) = dependency_counts.get_mut(&index) {
-                        *count -= 1;
-                        if *count == 0 {
-                            // Dependency satisfied, spawn immediately
-                            spawn_task(cache, index, &updated_nodes);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    })?;
+    let state = state.into_inner().unwrap_or_else(|e| e.into_inner());
+    let diagnostics = state.finish(cache)?;
 
     tracing::info!("Build complete!");
-    Ok(Diagnostics { execution_times })
+    Ok(diagnostics)
 }
 
 pub(crate) fn collect_manifest<G: Send + Sync>(

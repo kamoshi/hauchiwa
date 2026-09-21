@@ -19,7 +19,7 @@
 //! 3. The server broadcasts the reload command to all connected clients,
 //!    triggering an immediate browser refresh.
 
-use crate::engine::{collect_manifest, run_once_parallel, run_tasks_parallel};
+use crate::engine::{collect_manifest, run_initial, run_selected};
 use crate::{Environment, Mode, Website};
 
 use std::collections::HashSet;
@@ -61,10 +61,14 @@ pub fn watch<G: Send + Sync>(
 
     let mut static_files = crate::utils::collect_static(&copied, out_dir)?;
 
-    let (mut cache, mut snapshot, _) = run_once_parallel(site, &globals)?;
+    let result = run_initial(site, &globals)?;
+    let mut cache = result.cache;
+    let mut snapshot = result.snapshot;
+
     for entry in &static_files {
         snapshot.insert_static_file(entry.dist_rel.clone(), entry.source_utf8.clone())?;
     }
+
     crate::utils::copy_static_entries(&static_files, &site.progress.copy)?;
     tracing::info!("collected {} pages", snapshot.page_count());
     match prev_meta {
@@ -165,19 +169,15 @@ pub fn watch<G: Send + Sync>(
                     }
 
                     if !to_rerun.is_empty() {
-                        let _diagnostics = match run_tasks_parallel(
-                            site,
-                            &globals,
-                            &mut cache,
-                            &to_rerun,
-                            &dirty_nodes,
-                        ) {
-                            Ok(res) => res,
-                            Err(e) => {
-                                tracing::error!("Error running tasks: {}", e);
-                                continue;
-                            }
-                        };
+                        let _diagnostics =
+                            match run_selected(site, &globals, &mut cache, &to_rerun, &dirty_nodes)
+                            {
+                                Ok(res) => res,
+                                Err(e) => {
+                                    tracing::error!("Error running tasks: {}", e);
+                                    continue;
+                                }
+                            };
                     }
 
                     if static_dirty {
@@ -210,7 +210,9 @@ pub fn watch<G: Send + Sync>(
                     if !static_manifest_ok {
                         continue;
                     }
-                    if let Err(e) = crate::utils::copy_static_entries(&static_files, &site.progress.copy) {
+                    if let Err(e) =
+                        crate::utils::copy_static_entries(&static_files, &site.progress.copy)
+                    {
                         tracing::error!("failed to copy static files: {}", e);
                         continue;
                     }

@@ -6,7 +6,7 @@ use std::fmt::{Display, Formatter, Write};
 use petgraph::graph::NodeIndex;
 
 use crate::Website;
-use crate::engine::TaskExecution;
+use crate::engine::TaskTiming;
 
 /// Build diagnostics and performance metrics.
 ///
@@ -15,7 +15,7 @@ use crate::engine::TaskExecution;
 #[derive(Debug, Default)]
 pub struct Diagnostics {
     /// A map of task node indices to their execution metrics.
-    pub execution_times: HashMap<NodeIndex, TaskExecution>,
+    pub execution_times: HashMap<NodeIndex, TaskTiming>,
 }
 
 impl Diagnostics {
@@ -189,7 +189,7 @@ struct TimelineStats {
 }
 
 impl TimelineStats {
-    fn from_tasks(tasks: &[(NodeIndex, &TaskExecution)]) -> Option<Self> {
+    fn from_tasks(tasks: &[(NodeIndex, &TaskTiming)]) -> Option<Self> {
         let first = tasks.first()?;
         let global_start = first.1.start;
 
@@ -233,7 +233,7 @@ impl Diagnostics {
         G: Send + Sync,
     {
         // 1. Prepare Data
-        let mut ran_tasks: Vec<(NodeIndex, &TaskExecution)> =
+        let mut ran_tasks: Vec<(NodeIndex, &TaskTiming)> =
             self.execution_times.iter().map(|(k, v)| (*k, v)).collect();
 
         if ran_tasks.is_empty() {
@@ -316,7 +316,7 @@ impl Diagnostics {
         buf: &mut String,
         layout: &WaterfallLayout,
         stats: &TimelineStats,
-        tasks: &[(NodeIndex, &TaskExecution)],
+        tasks: &[(NodeIndex, &TaskTiming)],
         site: &Website<G>,
     ) -> std::fmt::Result
     where

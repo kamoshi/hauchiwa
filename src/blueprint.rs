@@ -10,7 +10,7 @@ use petgraph::Graph;
 use crate::core::{Environment, Mode, Store};
 use crate::engine::{
     Dependencies, Many, NodeGather, NodeMap, NodeScatter, One, Task, TypedCoarse, TypedFine,
-    run_once_parallel,
+    run_initial,
 };
 use crate::error::HauchiwaError;
 use crate::loader::Input;
@@ -465,7 +465,8 @@ where
             crate::snapshot::SnapshotMeta::load(&self.cache_dir).map_err(BuildError::Io)?;
         let static_files = crate::utils::collect_static(&self.copied, &self.out_dir)?;
 
-        let (_, mut manifest, diagnostics) = run_once_parallel(self, &globals)?;
+        let result = run_initial(self, &globals)?;
+        let mut manifest = result.snapshot;
 
         for entry in &static_files {
             manifest.insert_static_file(entry.dist_rel.clone(), entry.source_utf8.clone())?;
@@ -483,7 +484,7 @@ where
             .save(&self.cache_dir)
             .map_err(BuildError::Io)?;
 
-        Ok(diagnostics)
+        Ok(result.diagnostics)
     }
 
     /// Starts the development server in watch mode.

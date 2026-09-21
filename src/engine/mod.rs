@@ -16,7 +16,7 @@ pub(crate) use fine::TypedFine;
 pub(crate) use node::{NodeGather, NodeMap, NodeScatter};
 #[cfg(feature = "live")]
 pub(crate) use runner::watch;
-pub(crate) use runner::{TaskExecution, collect_manifest, run_once_parallel, run_tasks_parallel};
+pub(crate) use runner::{TaskTiming, collect_manifest, run_initial, run_selected};
 pub(crate) use tracking::{TrackerPtr, TrackerState, Tracking};
 
 pub use coarse::One;
@@ -100,7 +100,7 @@ where
         }
     }
 
-    pub(crate) fn is_valid(
+    pub(crate) fn is_still_valid(
         &self,
         old_tracking: &[Option<TrackerState>],
         new_outputs: &[Dynamic],
