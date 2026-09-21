@@ -307,8 +307,8 @@ mod tests {
     }
 
     fn extract_state(tracking: Tracking) -> Option<TrackerState> {
-        // Tracking::unwrap returns Vec<Option<TrackerState>>
-        match tracking.unwrap().as_slice() {
+        // Extract the single tracked dependency.
+        match tracking.into_states().ok()?.as_slice() {
             [Some(state)] => Some(state.clone()),
             _ => None,
         }

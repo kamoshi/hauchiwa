@@ -5,7 +5,9 @@ mod http;
 mod watch;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
+
+use anyhow::Context;
 use std::time::{Duration, Instant};
 
 use camino::Utf8PathBuf;
@@ -42,6 +44,45 @@ pub(crate) struct NodeData {
     /// Dist-relative paths of hash assets produced by this node (e.g. `hash/abc123.png`).
     /// Retained across cache hits so the Snapshot always has a complete picture.
     pub store_paths: Vec<Utf8PathBuf>,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum SchedulerError {
+    #[error("Scheduler state mutex was poisoned")]
+    Poisoned,
+    #[error("Task {node:?} is missing dependency {dependency:?}")]
+    MissingDependency {
+        node: NodeIndex,
+        dependency: NodeIndex,
+    },
+    #[error("Dependency count underflow for task {node:?}")]
+    DependencyCountUnderflow { node: NodeIndex },
+    #[error("Some selected tasks never completed ({completed}/{selected})")]
+    Incomplete { completed: usize, selected: usize },
+    #[error("Scheduler panicked: {message}")]
+    Panicked { message: String },
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Task panicked: {message}")]
+struct TaskPanic {
+    message: String,
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("unknown payload")
+        .to_owned()
+}
+
+/// Poisoned bookkeeping must never be used to release more tasks.
+fn lock_state(
+    state: &Mutex<SchedulerState>,
+) -> Result<MutexGuard<'_, SchedulerState>, SchedulerError> {
+    state.lock().map_err(|_| SchedulerError::Poisoned)
 }
 
 struct SchedulerState {
@@ -84,12 +125,13 @@ impl SchedulerState {
             return Err(error);
         }
 
-        anyhow::ensure!(
-            self.completed == self.remaining_dependencies.len(),
-            "Some selected tasks never completed ({}/{})",
-            self.completed,
-            self.remaining_dependencies.len(),
-        );
+        if self.completed != self.remaining_dependencies.len() {
+            return Err(SchedulerError::Incomplete {
+                completed: self.completed,
+                selected: self.remaining_dependencies.len(),
+            }
+            .into());
+        }
 
         Ok(Diagnostics {
             execution_times: self.execution_times,
@@ -182,9 +224,8 @@ impl SchedulerState {
         let mut dependency_imports = Vec::new();
         for dependency in website.graph[node].dependencies() {
             let Some(data) = self.cache.get(&dependency) else {
-                self.first_error = Some(anyhow::anyhow!(
-                    "Task {node:?} is missing dependency {dependency:?}"
-                ));
+                self.first_error =
+                    Some(SchedulerError::MissingDependency { node, dependency }.into());
 
                 return None;
             };
@@ -234,9 +275,12 @@ impl SchedulerState {
             };
 
             let Some(remaining) = count.checked_sub(1) else {
-                self.first_error = Some(anyhow::anyhow!(
-                    "Dependency count underflow for task {downstream_node:?}"
-                ));
+                self.first_error = Some(
+                    SchedulerError::DependencyCountUnderflow {
+                        node: downstream_node,
+                    }
+                    .into(),
+                );
 
                 return None;
             };
@@ -312,7 +356,7 @@ fn execute_or_reuse<G: Send + Sync>(
             )?,
         };
 
-        let tracking = tracking.unwrap();
+        let tracking = tracking.into_states()?;
         importmap.merge(store.imports);
 
         Ok::<_, anyhow::Error>(CompletedTask::executed(
@@ -329,15 +373,14 @@ fn execute_or_reuse<G: Send + Sync>(
         ))
     }));
 
-    result.map_err(|panic| {
-        let message = panic
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| panic.downcast_ref::<&str>().copied())
-            .unwrap_or("unknown payload");
-
-        anyhow::anyhow!("Task panicked: {message}")
-    })?
+    result
+        .map_err(|panic| {
+            anyhow::Error::new(TaskPanic {
+                message: panic_message(panic.as_ref()),
+            })
+        })
+        .and_then(|result| result)
+        .with_context(|| format!("Task {:?} ({node:?}) failed", website.graph[node].name()))
 }
 
 fn spawn_node<'scope, G: Send + Sync>(
@@ -354,7 +397,10 @@ fn spawn_node<'scope, G: Send + Sync>(
         let _enter = parent_span.enter();
 
         let prepared = {
-            let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+            let Ok(mut guard) = lock_state(state) else {
+                // The boundary reports poisoning after all scoped jobs finish.
+                return;
+            };
             guard.prepare_node(website, node)
         };
 
@@ -366,7 +412,10 @@ fn spawn_node<'scope, G: Send + Sync>(
             match execute_or_reuse(website, globals, node, dirty.contains(&node), prepared) {
                 Ok(completion) => completion,
                 Err(error) => {
-                    let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+                    let Ok(mut guard) = lock_state(state) else {
+                        // The boundary reports poisoning after all scoped jobs finish.
+                        return;
+                    };
                     guard.first_error.get_or_insert(error);
                     return;
                 }
@@ -375,7 +424,10 @@ fn spawn_node<'scope, G: Send + Sync>(
         let executed = completion.executed;
         let duration = completion.timing.duration;
         let newly_ready = {
-            let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+            let Ok(mut guard) = lock_state(state) else {
+                // The boundary reports poisoning after all scoped jobs finish.
+                return;
+            };
             guard.complete_node(website, node, completion)
         };
         let Some(newly_ready) = newly_ready else {
@@ -403,8 +455,8 @@ fn run_inner<G: Send + Sync>(
     globals: &Environment<G>,
     state: &Mutex<SchedulerState>,
     dirty: &HashSet<NodeIndex>,
-) {
-    let roots = state.lock().unwrap_or_else(|e| e.into_inner()).find_roots();
+) -> Result<(), SchedulerError> {
+    let roots = lock_state(state)?.find_roots();
 
     let parent_span = tracing::Span::current();
     rayon::scope(|scope| {
@@ -413,6 +465,8 @@ fn run_inner<G: Send + Sync>(
             spawn_node(scope, website, globals, state, node, dirty);
         }
     });
+
+    Ok(())
 }
 
 /// The initial graph result, before static files are added or outputs committed.
@@ -470,9 +524,28 @@ pub(crate) fn run_selected<G: Send + Sync>(
         remaining_dependencies,
     ));
 
-    run_inner(site, globals, &state, explicitly_dirty);
+    // A bookkeeping panic is different from a user-task failure. Rayon waits
+    // for scoped jobs before propagating it. Catch it here so the caller gets
+    // an error and the borrowed cache is not accidentally lost during unwinding.
+    let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_inner(site, globals, &state, explicitly_dirty)
+    }));
 
-    let state = state.into_inner().unwrap_or_else(|e| e.into_inner());
+    let execution = execution
+        .map_err(|panic| SchedulerError::Panicked {
+            message: panic_message(panic.as_ref()),
+        })
+        .and_then(|result| result);
+
+    // Do not recover and reuse potentially inconsistent state after poisoning.
+    // The caller's cache remains empty and watch mode treats this as fatal.
+    let state = state.into_inner().map_err(|_| SchedulerError::Poisoned)?;
+
+    if let Err(error) = execution {
+        *cache = state.cache;
+        return Err(error.into());
+    }
+
     let diagnostics = state.finish(cache)?;
 
     tracing::info!("Build complete!");

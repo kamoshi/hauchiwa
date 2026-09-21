@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [0.22.0] - 2026-09-21
+
+### Changed
+- Build errors now identify the failing task, and watch-mode logs include the
+  full error chain
+
+### Fixed
+- Fixed a scheduler deadlock when running with a single Rayon worker
+- Task panics that unwind are reported as build errors instead of escaping the
+  build runner
+- Watch mode now stops on internal scheduler failures instead of attempting
+  further rebuilds with potentially inconsistent state
+
 ## [0.21.0] - 2026-08-05
 
 ### Changed

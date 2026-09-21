@@ -174,7 +174,12 @@ pub fn watch<G: Send + Sync>(
                             {
                                 Ok(res) => res,
                                 Err(e) => {
-                                    tracing::error!("Error running tasks: {}", e);
+                                    // Broken scheduler invariants cannot be repaired by
+                                    // retrying with a partially updated task cache.
+                                    if e.downcast_ref::<super::SchedulerError>().is_some() {
+                                        return Err(e);
+                                    }
+                                    tracing::error!("Error running tasks: {:#}", e);
                                     continue;
                                 }
                             };

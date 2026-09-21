@@ -30,17 +30,26 @@ pub struct Tracking {
     pub edges: Vec<Option<TrackerPtr>>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum TrackingError {
+    #[error("Tracking state still has multiple owners")]
+    SharedOwnership,
+    #[error("Tracking state mutex was poisoned")]
+    Poisoned,
+}
+
 impl Tracking {
-    pub(crate) fn unwrap(self) -> Vec<Option<TrackerState>> {
+    pub(crate) fn into_states(self) -> Result<Vec<Option<TrackerState>>, TrackingError> {
         self.edges
             .into_iter()
             .map(|edge| {
                 edge.map(|item| {
-                    // Arc refcount invariant: the task executor holds the only clone;
-                    // after the task returns, this is the sole owner.
-                    #[allow(clippy::unwrap_used)]
-                    Arc::try_unwrap(item.ptr).unwrap().into_inner().unwrap()
+                    let state =
+                        Arc::try_unwrap(item.ptr).map_err(|_| TrackingError::SharedOwnership)?;
+
+                    state.into_inner().map_err(|_| TrackingError::Poisoned)
                 })
+                .transpose()
             })
             .collect()
     }
