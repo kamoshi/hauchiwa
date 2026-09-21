@@ -222,6 +222,8 @@ impl SchedulerState {
 
         let mut dependencies = Vec::new();
         let mut dependency_imports = Vec::new();
+        let mut updated_nodes = HashSet::new();
+
         for dependency in website.graph[node].dependencies() {
             let Some(data) = self.cache.get(&dependency) else {
                 self.first_error =
@@ -232,13 +234,18 @@ impl SchedulerState {
 
             dependencies.push(data.output.clone());
             dependency_imports.push(data.importmap.clone());
+
+            // Validation and execution only inspect this task's dependencies.
+            if self.updated_nodes.contains(&dependency) {
+                updated_nodes.insert(dependency);
+            }
         }
 
         Some(PreparedTask {
             dependencies,
             dependency_imports,
             previous_data: self.cache.get(&node).cloned(),
-            updated_nodes: self.updated_nodes.clone(),
+            updated_nodes,
         })
     }
 
@@ -314,9 +321,9 @@ fn execute_or_reuse<G: Send + Sync>(
 
         if !is_marked_dirty
             && prepared.can_reuse(task)
-            && let Some(previous) = prepared.previous_data.as_ref()
+            && let Some(previous) = prepared.previous_data
         {
-            return Ok(CompletedTask::reused(previous.clone(), start));
+            return Ok(CompletedTask::reused(previous, start));
         }
 
         let mut importmap = ImportMap::new();
@@ -412,11 +419,16 @@ fn spawn_node<'scope, G: Send + Sync>(
             match execute_or_reuse(website, globals, node, dirty.contains(&node), prepared) {
                 Ok(completion) => completion,
                 Err(error) => {
-                    let Ok(mut guard) = lock_state(state) else {
-                        // The boundary reports poisoning after all scoped jobs finish.
+                    if let Ok(mut guard) = lock_state(state)
+                        && guard.first_error.is_none()
+                    {
+                        guard.first_error = Some(error);
                         return;
-                    };
-                    guard.first_error.get_or_insert(error);
+                    }
+
+                    // The caller reports the first error (or poisoned state).
+                    // Report other task failures without holding the mutex.
+                    tracing::error!(error = %format_args!("{error:#}"), "Task execution failed");
                     return;
                 }
             };

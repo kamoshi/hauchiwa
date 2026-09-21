@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [0.22.1] - 2026-09-21
+
+### Changed
+- Reduced scheduler bookkeeping and unnecessary copying of cached task results
+
+### Fixed
+- Fixed stale output in chained mappings when an upstream mapping changes due to
+  a secondary dependency
+- Additional concurrent task failures are now logged with their full error
+  chains instead of being silently discarded after the first failure
+
 ## [0.22.0] - 2026-09-21
 
 ### Changed

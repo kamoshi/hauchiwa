@@ -207,7 +207,7 @@ where
         #[allow(clippy::unwrap_used)] // type invariant enforced by the task graph builder
         let input_map = dependencies[0].downcast_ref::<Map<T>>().unwrap();
 
-        let mut forced_dirty = false;
+        let mut forced_dirty = input_map.dirty;
         for dep_idx in self.dep_secondary.dependencies() {
             if updated_nodes.contains(&dep_idx) {
                 forced_dirty = true;
