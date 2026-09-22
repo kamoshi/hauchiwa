@@ -2,7 +2,7 @@ mod highlight;
 
 use clap::{Parser, ValueEnum};
 use comrak::{Options, markdown_to_html_with_plugins, options::Plugins};
-use hauchiwa::{Blueprint, Output, output::OutputData};
+use hauchiwa::{Blueprint, Output};
 use hypertext::{Raw, prelude::*, rsx};
 use serde::Deserialize;
 
@@ -52,7 +52,7 @@ fn main() -> anyhow::Result<()> {
     config
         .task()
         .using((css, articles))
-        .merge(|_, (css, articles)| {
+        .merge(|ctx, (css, articles)| {
             let mut outputs = Vec::new();
 
             let css_href = css.get("assets/style.scss")?;
@@ -103,7 +103,8 @@ fn main() -> anyhow::Result<()> {
                 let page_title = &doc.matter.title;
                 let sidebar_raw = Raw::dangerously_create(sidebar_rendered.clone());
                 let menu_icon_raw = Raw::dangerously_create(MENU_ICON.to_string());
-                let script_raw = Raw::dangerously_create(SCRIPT.to_string());
+                let refresh = ctx.env.get_refresh_script().unwrap_or_default();
+                let script_raw = Raw::dangerously_create(format!("{SCRIPT}\n{refresh}"));
 
                 let prev_article = if i > 0 {
                     Some(sorted_articles[i - 1])
@@ -174,10 +175,7 @@ fn main() -> anyhow::Result<()> {
 
                 let full_html = page_html.render().into_inner();
 
-                outputs.push(Output {
-                    path: out_filename.into(),
-                    data: OutputData::Utf8(full_html),
-                });
+                outputs.push(Output::file(out_filename).html(full_html)?);
             }
 
             Ok(outputs)

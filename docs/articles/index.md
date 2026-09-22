@@ -55,7 +55,7 @@ By defining your build as a graph, you unlock two massive benefits:
    cores. For example, your CSS can compile at the exact same time your Markdown
    is being parsed.
 
-2. **True incrementalism**: When a file changes, Hauchiwa calculates the "dirty"
+2. **Incremental watch builds**: When a watched file changes, Hauchiwa calculates the "dirty"
    subgraph. It only rebuilds the tasks that depend on that specific change. If
    you change a CSS file, we don't re-render your HTML unless you explicitly
    wired them together.

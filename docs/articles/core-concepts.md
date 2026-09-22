@@ -1,6 +1,6 @@
 ---
 title: Core concepts
-order: 3
+order: 4
 ---
 
 # Core concepts
@@ -67,7 +67,8 @@ Graph. They ingest files and turn them into typed data structures.
 Common loaders include:
 * `load_documents`: For Markdown with Frontmatter.
 * `load_css`: For SCSS/CSS.
-* `load_esbuild`: For TypeScript/JavaScript bundling.
+* `load_esbuild`: For TypeScript/JavaScript bundling with an external binary.
+* `load_rolldown`: For native Rust bundling (requires `rolldown`).
 * `load_images`: For optimizing images.
 * `load_minijinja`: For Jinja2-style templates (requires `minijinja` feature).
 
@@ -105,20 +106,50 @@ it directly in a `for` loop:
 for (path, post) in pages { /* ... */ }
 ```
 
+## Documents and routes
+
+`load_documents::<Frontmatter>()` parses YAML frontmatter into `doc.matter` and
+keeps the unrendered body in `doc.text`. Choose a Markdown renderer in your own
+task, as shown in [Getting started](getting-started.html).
+
+Set `.base("content")` on the loader to strip that directory from public routes.
+The source path and Tracker key remain unchanged:
+
+| Source | `doc.meta.href` with `.base("content")` | Output file |
+| :--- | :--- | :--- |
+| `content/index.md` | `/` | `index.html` |
+| `content/about.md` | `/about/` | `about/index.html` |
+| `content/posts/hello/index.md` | `/posts/hello/` | `posts/hello/index.html` |
+
+`doc.meta.assets("*.png")` selects assets in the document's bundle directory.
+`doc.meta.resolve("../other.md")` resolves a path relative to that bundle.
+
 ## Output
 
-To get data *out* of the graph and back onto the FileSystem (e.g., writing HTML
-files), your tasks return `Output` values.
+Return `Output` or `Vec<Output>` from a task to write files into the configured
+output directory. Use the target builder to distinguish routes from exact files:
 
 ```rust
 use hauchiwa::Output;
 
-// Inside a task closure
-
-// Convenience constructors
-Ok(Output::html("about/index.html", "<h1>About</h1>"))
-Ok(Output::binary("feed.xml", bytes))
+let about = Output::to("/about/").html("<h1>About</h1>")?;
+let feed = Output::file("feed.xml").text("<feed></feed>")?;
+let icon = Output::file("favicon.ico").bytes(bytes)?;
+// Inside a document-rendering task:
+let page = Output::to(doc).html(rendered_html)?;
 ```
 
-`Output::html` sets the correct `Content-Type` and handles clean URL paths.
-Tasks returning `Vec<Output>` can emit multiple files in a single run.
+`Output::to` infers a page route for an empty path, a path starting or ending
+with `/`, or a path without an extension. Other paths are exact file targets.
+Use `Output::page("/about/")` or `Output::file("about.html")` to be explicit.
+For example, `Output::to("about.html")` writes `about.html`, while
+`Output::to("/about.html")` writes `about.html/index.html`.
+
+The `.html()`, `.text()`, and `.bytes()` methods return a `Result`, validating
+that the final path stays inside the output directory. They select the stored
+content representation; `Output` does not carry HTTP headers.
+
+The older `Output::html(path, html)`, `Output::binary(path, bytes)`, and
+`Output::mapper(source)` helpers remain available. `Output::html` transforms a
+source-style path into a pretty HTML path; it does not strip a content base.
+For loaded documents, prefer `Output::to(doc)` to use `doc.meta.href`.

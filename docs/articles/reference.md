@@ -1,6 +1,6 @@
 ---
 title: Reference
-order: 8
+order: 9
 ---
 
 # Reference
@@ -19,7 +19,7 @@ To keep your build times low, you can disable features you don't need in `Cargo.
 
 ```toml
 [dependencies]
-hauchiwa = { version = "0.18.0", default-features = false, features = ["grass"] }
+hauchiwa = { version = "0.22.1", default-features = false, features = ["grass"] }
 ```
 
 ### Available Features
@@ -27,12 +27,22 @@ hauchiwa = { version = "0.18.0", default-features = false, features = ["grass"] 
 | Feature     | Default | Description |
 | :---        | :---:   | :---        |
 | `grass`     | Yes     | Enables Sass/SCSS compilation via the `grass` crate. |
-| `image`     | Yes     | Enables image optimization (resize, convert) via the `image` crate. |
+| `image`     | Yes     | Enables image conversion (WebP, AVIF, PNG) via the `image` crate. |
 | `tokio`     | Yes     | Enables async runtime support (required for `server` and `pagefind`). |
 | `live`      | Yes     | Enables live reload functionality (WebSocket + file watching). |
 | `server`    | Yes     | Enables the development HTTP server (`axum`). |
+| `rolldown`  | No      | Enables native Rust JS/TS bundling via Rolldown. |
 | `pagefind`  | No      | Enables static search indexing via `pagefind`. |
 | `sitemap`   | No      | Enables sitemap generation via `sitemap-rs`. |
 | `minijinja` | No      | Enables Jinja2-style template loading via `minijinja`. |
 | `logging`   | No      | Enables `init_logging()`: ANSI tracing subscriber with progress bar integration. |
 
+`server` and `pagefind` enable `tokio` automatically. `server` alone does not
+provide `watch()`; enable `live` as well for the development loop.
+
+## External tools
+
+`load_esbuild()` and `load_svelte()` are available without optional Cargo
+features, but require `esbuild` and `deno`, respectively, on `PATH`. Hauchiwa
+checks registered binary requirements before starting a build or watch session.
+`load_rolldown()` needs the `rolldown` feature but no external bundler binary.

@@ -1,6 +1,6 @@
 ---
 title: Development
-order: 7
+order: 8
 ---
 
 # Development
@@ -13,8 +13,8 @@ whenever a watched file changes.
 
 ```rust
 match args.mode {
-    Mode::Build => website.build(data)?,
-    Mode::Watch => website.watch(data)?,
+    Mode::Build => { website.build(data)?; }
+    Mode::Watch => { website.watch(data)?; }
 }
 ```
 
@@ -26,16 +26,23 @@ Watch mode also starts a WebSocket server on a free port. Inject the live-reload
 script into your HTML to have the browser refresh automatically after each rebuild:
 
 ```rust
-config.task().merge(|ctx, deps| {
-    let refresh = ctx.env.get_refresh_script();  // Some(...) in watch mode, None otherwise
-    let script_tag = refresh.unwrap_or_default();
-    // include script_tag in your <head>
-    Ok(output)
+config.task().run(|ctx| {
+    let refresh = ctx.env.get_refresh_script()
+        .map(|js| format!("<script>{js}</script>"))
+        .unwrap_or_default();
+    Ok(Output::to("/").html(format!("<h1>Hello</h1>{refresh}"))?)
 });
 ```
 
-The `server` feature flag must be enabled for the HTTP development server.
-The `live` feature flag must be enabled for the WebSocket live-reload.
+`get_refresh_script()` returns JavaScript, so wrap it in a `<script>` element.
+The `live` feature enables `watch()`, file watching, and WebSocket live reload.
+With `server` also enabled, watch mode serves the output at
+`http://localhost:8080/`. `env.port` is the separate WebSocket port.
+
+Watch patterns come from loaders and `.glob()` tasks. For CSS, scripts, and
+Svelte, use `.watch()` patterns that include both entry files and imports:
+explicit watch patterns replace the default entry patterns. Static-copy sources
+are watched too. Rust source changes require restarting your generator.
 
 ## Logging
 
@@ -45,7 +52,7 @@ progress bars for parallel tasks:
 
 ```toml
 [dependencies]
-hauchiwa = { version = "*", features = ["logging"] }
+hauchiwa = { version = "0.22.1", features = ["logging"] }
 ```
 
 ```rust
@@ -63,6 +70,11 @@ fn main() -> anyhow::Result<()> {
 
 Without this feature, Hauchiwa emits `tracing` events but does not install a
 subscriber - you can bring your own if you have an existing logging setup.
+
+For Cargo-style messages, use
+`hauchiwa::init_logging_with_format(hauchiwa::LogFormat::Humane)?` instead.
+Both formats respect `RUST_LOG` (default: `info`). Progress bars can be customized
+with `Blueprint::set_progress_styles(hauchiwa::ProgressStyles { ..Default::default() })`.
 
 ## Diagnostics
 

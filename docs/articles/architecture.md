@@ -1,6 +1,6 @@
 ---
 title: How It Works
-order: 6
+order: 7
 ---
 
 # How It Works
@@ -19,8 +19,8 @@ When you call `website.build()`, Hauchiwa:
    tasks that now have all their dependencies satisfied are seeded onto the pool.
 4. The main thread waits for all tasks to finish, collecting results and timing data.
 
-This means independent tasks always run in parallel automatically - you get full
-CPU utilisation without writing any async code.
+Independent ready tasks can run concurrently on the Rayon thread pool; actual
+parallelism depends on available workers and the shape of your graph.
 
 ### Diamond dependencies
 
@@ -36,22 +36,37 @@ once and its result is shared:
 ```
 
 Task A is executed once. B and C run in parallel once A finishes. D runs after
-both B and C complete. Handles are reference-counted pointers to the cached result,
-so sharing is zero-copy.
+both B and C complete. Handles are typed graph-node identifiers. The executor keeps results in
+reference-counted storage and passes borrowed values to dependent callbacks.
 
 ## Task granularity
 
 Hauchiwa has two execution modes for tasks:
 
-- **`One<T>` (coarse-grained)**: the task runs once and produces a single value.
-  If any of its dependencies change, the whole task re-runs.
-- **`Many<T>` (fine-grained)**: the task runs once per item in a collection.
-  If only one item changes, only that item's subtask re-runs - the rest are served
-  from cache.
+- **`One<T>`**: a task produces a single value. When invalidated, its callback
+  re-runs as a whole. Reads from `Many<T>` dependencies are still tracked, so a
+  `.merge()` that only reads one key can skip unrelated changes.
+- **`Many<T>`**: a task produces a keyed collection. `.each().map()` can reuse
+  unchanged item results. `.spread()` runs one callback to produce the collection,
+  then hashes each value to detect which downstream items changed. File and
+  bundle loaders rescan and process their matched entries when invalidated;
+  unchanged provenance can still spare downstream mapping work.
 
 Use `One<T>` for aggregators (sitemaps, search indexes, import maps). Use `Many<T>`
 for per-file transforms (markdown -> HTML, image optimisation) where surgical
 invalidation matters.
+
+## Cache lifetime
+
+Every `build(data)` call and the initial build of `watch(data)` execute the
+whole graph. Task results and Tracker access records are retained in memory for
+subsequent rebuilds within that watch session; arbitrary Rust task results are
+not serialized between processes.
+
+Disk caches serve different purposes: image conversions can reuse cached encoded
+files, content-addressed assets are stored on disk, and snapshot metadata avoids
+rewriting unchanged output files. A cached output file does not mean the task
+that generates it is skipped on a new build.
 
 ## Content-Addressable Storage
 
@@ -60,7 +75,7 @@ using their BLAKE3 content hash as the filename:
 
 ```text
 .cache/hash/
-  a1b2c3d4e5...   (cached source)
+  a1b2c3d4e5...   (generated asset bytes)
 
 dist/hash/
   a1b2c3d4e5.css  (served to browser)
@@ -75,21 +90,26 @@ This gives two guarantees:
 
 ## Dist reconciliation
 
-After every build, Hauchiwa assembles a **Snapshot** - an in-memory record of
-every file that belongs in `dist/`, which task produced it, and a BLAKE3 hash of
-the content.
+After graph execution, Hauchiwa assembles a **Snapshot** containing generated
+outputs, content-addressed assets, and static copies. It tracks output ownership
+and content hashes for generated pages. Conflicting producers for the same output
+path are reported as build errors. Shared references to the same hashed asset
+are allowed.
 
-Two strategies are used depending on context:
+- **Full commit**: without previous snapshot metadata, walk the output directory,
+  remove files outside the snapshot, and write pages whose bytes differ on disk.
+- **Diff commit**: during watch rebuilds, compare against the previous in-memory
+  snapshot. Write new, changed, or missing pages and remove tracked files that
+  disappeared. No full output-directory walk is needed.
+- **Cold-start diff**: both `build()` and the initial watch build load persisted
+  metadata when available and use it for output reconciliation. This still runs
+  the whole task graph.
 
-- **Full commit** (first build or no previous snapshot): walks `dist/`, deletes
-  any file not in the snapshot, then writes all pages whose content differs from
-  what is already on disk.
-- **Diff commit** (watch mode rebuild): compares the new snapshot against the
-  previous one in memory. Only changed pages are written; files that disappeared
-  are deleted. No `dist/` walk needed.
+Metadata is saved to `{cache_dir}/snapshot/metadata.cbor` after a successful
+commit. It records output paths and page hashes, not task results. Diff commits
+only remove previously tracked files; unrelated files added to the output
+directory are not discovered by that path. Static files and hashed assets are
+materialized separately before page reconciliation.
 
-A slim version of the snapshot (content hashes only) is persisted to
-`{cache_dir}/snapshot/metadata.cbor` (default: `.cache/snapshot/metadata.cbor`)
-after each successful build, so the diff path is also taken on the first
-watch-mode rebuild after a cold `build`. The cache directory can be changed with
-`Blueprint::set_dir_cache()`.
+Use `Blueprint::set_dir_dist()` and `Blueprint::set_dir_cache()` to configure
+these directories. Treat the output directory as generated content.

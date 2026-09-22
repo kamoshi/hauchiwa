@@ -1,6 +1,6 @@
 ---
 title: Blueprint API
-order: 4
+order: 5
 ---
 
 # Blueprint API
@@ -76,7 +76,7 @@ config.task()
 
 ### 3. `spread()` (Scatter)
 
-Use `.spread()` to take a single input and **scatter** it into multiple outputs
+Use `.spread()` to take resolved dependencies and **scatter** them into multiple outputs
 (`Many<T>`).
 
 * **Input**: Defined by `.using()`.
@@ -93,6 +93,9 @@ config.task()
         ])
     });
 ```
+
+The returned keys identify items for downstream lookups. Values must implement
+`Hash + Send + Sync + 'static`; Hauchiwa hashes them to detect changed items.
 
 ### 4. `each().map()` (Map)
 
@@ -116,6 +119,10 @@ config.task()
         Ok(html)
     });
 ```
+
+Without `.using()`, the third callback argument is `()`. Mapped results must
+implement `Clone + Send + Sync + 'static`. Extra `Many<T>` dependencies are
+tracked through the items each callback reads.
 
 ### 5. `glob().map()`
 
@@ -146,9 +153,10 @@ provides two fields:
 | :--- | :--- | :--- |
 | `env.data` | `G` | Your user-defined global data (passed to `.build(data)` / `.watch(data)`). |
 | `env.mode` | `Mode` | `Mode::Build` or `Mode::Watch`. Useful to skip dev-only work in production. |
-| `env.port` | `Option<u16>` | Dev server port, `None` during a static build. |
+| `env.port` | `Option<u16>` | Live-reload WebSocket port, `None` during a static build. |
+| `env.generator` | `&'static str` | Generator name (`"hauchiwa"`). |
 
-`ctx.importmap.to_html()` serializes the accumulated import map as a
+`ctx.importmap.to_html()?` serializes the accumulated import map as a
 `<script type="importmap">` tag ready for inclusion in your HTML `<head>`.
 
 ## Static file copying
@@ -195,7 +203,7 @@ let data: Many<MyData> = config
     .task()
     .glob("data/*.json")?
     .map(|_ctx, _store, input| {
-        let content = std::fs::read(&input.path)?;
+        let content = input.read()?;
         let data: MyData = serde_json::from_slice(&content)
             .map_err(|e| anyhow::anyhow!("Failed to parse {}: {}", input.path, e))?;
         Ok(data)
@@ -204,7 +212,12 @@ let data: Many<MyData> = config
 
 The `input` argument provides:
 - `input.path` - the matched file path
-- `input.hash` - BLAKE3 hash of the file content (for use as a cache key)
+- `input.read()` - reads the source bytes
+
+The engine tracks source hashes internally; `input.hash` is not a public field.
+The `store: &mut Store` argument can save generated assets with
+`store.save(&bytes, "json")?` and register module URLs with `store.register()`.
+Returned asset URLs already start with `/hash/`; do not prepend another slash.
 
 The returned `Many<MyData>` handle can be wired into any downstream task just like
 a handle from a built-in loader.

@@ -17,13 +17,14 @@ cargo new generator
 cd generator
 ```
 
-Then, add `hauchiwa` and `serde` to your `Cargo.toml`:
+Then, add Hauchiwa, Serde, and a Markdown renderer to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-hauchiwa = "*"
+hauchiwa = "0.22.1"
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
+comrak = "0.50"
 ```
 
 ## Quick start
@@ -52,27 +53,21 @@ fn main() -> anyhow::Result<()> {
     // This scans for .md files in the "content" directory.
     // 'pages' is a Handle representing all future markdown files.
     let pages = config.load_documents::<Frontmatter>()
-        .glob("content/*.md")?
+        .glob("content/**/*.md")?
+        .base("content")
         .register();
 
     // 4. Define a Task (Processing)
     // We use .each().map() to process files one by one.
-    // This ensures that if you edit one file, only that file is rebuilt.
+    // During watch rebuilds, unchanged documents can reuse their rendered output.
     config.task()
         .each(pages)
         .map(|_ctx, doc, ()| {
-            // 'doc' is the single document being processed.
-            // We create a simple HTML string (in real apps, use a template engine).
-            let html = format!(
-                "<h1>{}</h1>\n{}", 
-                doc.matter.title, 
-                doc.content
-            );
+            // Hauchiwa parses frontmatter; Comrak renders the Markdown body.
+            let html = comrak::markdown_to_html(&doc.text, &comrak::Options::default());
 
-            // 5. Return Output
-            // We tell Hauchiwa to write this string to a file.
-            // .meta.path automatically handles clean URLs (e.g., /about/index.html).
-            Ok(Output::html(&doc.meta.path, html))
+            // 5. Write the page at its public route, derived from .base("content").
+            Ok(Output::to(doc).html(html)?)
         });
 
     // 6. Run the Website
@@ -101,8 +96,16 @@ Check the newly created `dist/` directory (the default output location). You wil
 
 You should see:
 ```html
-<h1>Hello Hauchiwa</h1>
-# Content
+<h1>Content</h1>
 ```
 
-Congratulations! You have just built your first static site generator.
+The YAML title is available as `doc.matter.title` for your page template. The
+body is available as `doc.text`; the document loader does not render Markdown.
+
+With `.base("content")`, `content/index.md` maps to `/`, and
+`content/about.md` maps to `/about/` (`dist/about/index.html`). Without `.base()`,
+the source directory remains part of the route. `doc.meta.path` always retains
+the original source path, while `doc.meta.href` holds the public route.
+
+Continue with [Building out your site](building-out-your-site.html) to add a
+shared template, navigation, CSS, and a live development preview.
