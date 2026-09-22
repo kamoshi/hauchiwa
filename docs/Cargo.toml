@@ -21,4 +21,4 @@ tree-sitter-toml-ng = "0.7"
 [dependencies.hauchiwa]
 path = ".."
 default-features = false
-features = ["grass", "live", "server"]
+features = ["grass", "live", "server", "logging"]

@@ -11,7 +11,10 @@ From this directory, run:
   <http://localhost:8080/> (equivalent to `cargo run --release -- watch`).
 
 Run these commands from `docs/` because source paths are relative to the working
-directory. The generator uses the `grass`, `live`, and `server` features; it does
-not require esbuild or Deno. Restart it after changing Rust source.
+directory. The generator uses the `grass`, `live`, `server`, and `logging`
+features; it does not require esbuild or Deno. Restart it after changing Rust source.
+
+Logging defaults to `info`. Set `RUST_LOG=debug` for more detail, for example
+`RUST_LOG=debug make build`.
 
 Generated files in `dist/`, `.cache/`, and `target/` are not documentation sources.

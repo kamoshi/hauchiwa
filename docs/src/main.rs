@@ -35,6 +35,7 @@ document.getElementById('menu-toggle').addEventListener('click', function() {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    hauchiwa::init_logging()?;
 
     let mut config = Blueprint::<()>::new();
 
