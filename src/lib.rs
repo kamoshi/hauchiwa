@@ -18,7 +18,7 @@ pub use gitscan as git;
 
 #[cfg(feature = "minijinja")]
 pub mod minijinja {
-    pub use ::minijinja::context;
+    pub use ::minijinja::{context, filters, functions, value, Environment, Error, Template, Value};
 }
 
 pub use crate::blueprint::{Blueprint, Website};

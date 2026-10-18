@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [0.23.0] - 2026-10-18
+
+### Changed
+- Updated the optional `minijinja` dependency to version 3 and enabled its
+  `serde` feature
+- Expanded `hauchiwa::minijinja` re-exports to expose common APIs, including
+  `Environment`, `Template`, `Value`, filters, and functions
+- Updated the optional `sitemap-rs` dependency to version 0.7
+
 ## [0.22.1] - 2026-09-21
 
 ### Changed

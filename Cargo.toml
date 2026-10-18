@@ -1,6 +1,6 @@
 [package]
 name        = "hauchiwa"
-version     = "0.22.1"
+version     = "0.23.0"
 edition     = "2024"
 authors     = ["Maciej Jur <maciej@kamoshi.org>"]
 keywords    = ["ssg"]
@@ -64,7 +64,7 @@ optional = true
 
 # Feature = "sitemap"
 [dependencies.sitemap-rs]
-version = "0.4.0"
+version = "0.7.0"
 optional = true
 
 # Feature = "pagefind"
@@ -108,8 +108,9 @@ features = ["fs"]
 
 # Feature = "minijinja"
 [dependencies.minijinja]
-version = "2"
+version = "3"
 optional = true
+features = ["serde"]
 
 # Feature = "logging"
 [dependencies.tracing-subscriber]

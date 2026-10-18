@@ -169,7 +169,7 @@ where
     pub fn filter<N, F, Rv, Args>(mut self, name: N, f: F) -> Self
     where
         N: Into<String>,
-        F: minijinja::filters::Filter<Rv, Args> + Send + Sync + Clone + 'static,
+        F: minijinja::functions::Function<Rv, Args> + Send + Sync + Clone + 'static,
         Rv: minijinja::value::FunctionResult,
         Args: for<'b> minijinja::value::FunctionArgs<'b>,
     {
